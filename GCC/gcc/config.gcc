@@ -990,6 +990,13 @@ case ${target} in
   esac
   tm_defines="$tm_defines DEFAULT_LIBC=LIBC_UCLIBC SINGLE_LIBC"
   ;;
+*-*-rune*)
+  extra_options="$extra_options gnu-user.opt"
+  gas=yes
+  gnu_ld=yes
+  default_use_cxa_atexit=yes
+  use_gcc_stdint=provide
+  ;;
 *-*-rdos*)
   use_gcc_stdint=wrap
   ;;
@@ -2029,6 +2036,12 @@ i[34567]86-*-lynxos*)
 	thread_file=lynx
 	gnu_ld=yes
 	gas=yes
+	;;
+i[34567]86-*-rune*)
+	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h glibc-stdint.h i386/i386elf.h rune.h"
+	;;
+x86_64-*-rune*)
+	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h glibc-stdint.h i386/i386elf.h i386/x86-64.h rune.h"
 	;;
 i[34567]86-*-nto-qnx*)
 	tm_file="${tm_file} i386/att.h tm-dwarf2.h elfos.h i386/unix.h i386/nto.h"
