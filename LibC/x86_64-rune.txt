@@ -1,0 +1,10 @@
+[binaries]
+c = '/home/ewogijk/opt/cross/gcc-x86_64-rune/bin/x86_64-rune-gcc'
+cpp = '/home/ewogijk/opt/cross/gcc-x86_64-rune/bin/x86_64-rune-g++'
+strip = '/home/ewogijk/opt/cross/gcc-x86_64-rune/bin/x86_64-rune-strip'
+
+[host_machine]
+system = 'rune'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'

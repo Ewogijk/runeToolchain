@@ -1,0 +1,3 @@
+/home/ewogijk/CLionProjects/runeToolChain/cmake-build-debug/CMakeFiles/runeToolChain.dir
+/home/ewogijk/CLionProjects/runeToolChain/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/ewogijk/CLionProjects/runeToolChain/cmake-build-debug/CMakeFiles/rebuild_cache.dir
