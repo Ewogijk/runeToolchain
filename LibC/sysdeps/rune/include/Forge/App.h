@@ -2,9 +2,9 @@
 #ifndef RUNE_APPMANAGEMENT_H
 #define RUNE_APPMANAGEMENT_H
 
-#include <rune/TypeDef.h>
+#include <Forge/TypeDef.h>
 
-namespace Rune {
+namespace Forge {
 
     //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
     //                                          System Call IDs

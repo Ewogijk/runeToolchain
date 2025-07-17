@@ -1,9 +1,9 @@
-#include <rune/Memory.h>
+#include <Forge/Memory.h>
 
-#include <rune/SystemCall.h>
+#include <Forge/SystemCall.h>
 
 
-namespace Rune {
+namespace Forge {
     size_t memory_get_page_size() {
         return (size_t) system_call0(MEMORY_GET_PAGE_SIZE);
     }

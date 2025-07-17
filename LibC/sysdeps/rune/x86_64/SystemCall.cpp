@@ -1,7 +1,7 @@
 
-#include <rune/SystemCall.h>
+#include <Forge/SystemCall.h>
 
-namespace Rune {
+namespace Forge {
     S64 system_call0(U16 ID) {
         S64 ret = -1;
         __asm__ __volatile__ ("syscall" : "=a" (ret) : "a" (ID) : "rcx", "r11", "memory");

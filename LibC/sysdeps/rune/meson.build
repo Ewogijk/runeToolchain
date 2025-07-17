@@ -82,14 +82,14 @@ if not no_headers
         follow_symlinks: true
     )
     install_headers(
-        'include/rune/App.h',
-        'include/rune/Memory.h',
-        'include/rune/SystemCall.h',
-        'include/rune/SystemCallPanic.h',
-        'include/rune/Threading.h',
-        'include/rune/TypeDef.h',
-        'include/rune/VFS.h',
-        subdir: 'rune',
+        'include/Forge/App.h',
+        'include/Forge/Memory.h',
+        'include/Forge/SystemCall.h',
+        'include/Forge/SystemCallPanic.h',
+        'include/Forge/Threading.h',
+        'include/Forge/TypeDef.h',
+        'include/Forge/VFS.h',
+        subdir: 'Forge',
         follow_symlinks: true
     )
 endif

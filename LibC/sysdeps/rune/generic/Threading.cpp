@@ -1,8 +1,8 @@
-#include <rune/Threading.h>
+#include <Forge/Threading.h>
 
-#include <rune/SystemCall.h>
+#include <Forge/SystemCall.h>
 
-namespace Rune {
+namespace Forge {
     int threading_mutex_create(const char* mutex_name) {
         return (int) system_call1(THREADING_MUTEX_CREATE, (uintptr_t) mutex_name);
     }
