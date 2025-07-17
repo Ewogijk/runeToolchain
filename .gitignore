@@ -1,3 +1,2 @@
-build/*
-linux-headers/*
-.idea/*
+.idea/
+cmake-build-debug/
