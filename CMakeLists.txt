@@ -16,9 +16,5 @@ include_directories(${PROJECT_SOURCE_DIR}/LibC/options/posix/include)
 include_directories(${PROJECT_SOURCE_DIR}/LibC/options/rtld/include)
 include_directories(${PROJECT_SOURCE_DIR}/LibC/subprojects/frigg/include)
 
-add_executable(runeToolChain LibC/sysdeps/rune/generic/entry.cpp
-        LibC/sysdeps/rune/generic/entry.cpp
-        LibC/options/ansi/generic/stdlib.cpp
-        LibC/sysdeps/rune/generic/sysdeps.cpp
-        LibC/options/rtld/generic/main.cpp)
+add_executable(runeToolChain LibC/sysdeps/rune/generic/entry.cpp)
 set_target_properties(runeToolChain PROPERTIES LINKER_LANGUAGE CXX)
