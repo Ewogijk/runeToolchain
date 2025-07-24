@@ -1,13 +1,18 @@
+#include "Forge/VFS.h"
+
 #include <mlibc/all-sysdeps.hpp>
 
 #include <poll.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <sys/shm.h>
 
-#include <Forge/App.h>
 #include <Forge/SystemCallPanic.h>
+#include <Forge/App.h>
+#include <Forge/Memory.h>
+#include <Forge/Threading.h>
 
 namespace [[gnu::visibility("hidden")]] mlibc {
 
@@ -16,7 +21,7 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
 
     [[noreturn]] void sys_exit(int status) {
-        forge_syscall_not_ported("sys_exit");
+    	Forge::app_exit(status);
     }
     [[noreturn, gnu::weak]] void sys_thread_exit() {
         forge_syscall_not_ported("sys_thread_exit");
@@ -58,14 +63,55 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     }
 
     int sys_write(int fd, const void *buf, size_t count, ssize_t *bytes_written) {
-        forge_syscall_not_ported("sys_write");
+    	if (fd < 1) // fd == 0 -> stdin -> cannot write
+    		return EBADFD;
+
+    	switch (fd) {
+    		case 1:
+    			Forge::app_write_stdout(static_cast<const char*>(buf));
+				*bytes_written = count;
+    			break;
+    		case 2:
+    			Forge::app_write_stderr(static_cast<const char*>(buf));
+    			*bytes_written = count;
+    			break;
+    		default: {
+    			S64 ret = Forge::vfs_write(fd, buf, count);
+    			if (ret < 0) {
+    				if (ret >= -3 || ret == -5 || ret == -6 || ret == -7)
+    					return EBADF;
+    				else if (ret == -8)
+    					return EIO;
+    				else // ret == -4
+    					return EFAULT;
+
+    			}
+    			*bytes_written = ret;
+    		}
+    	}
+    	return 0;
     }
     [[gnu::weak]] int sys_pread(int fd, void *buf, size_t n, off_t off, ssize_t *bytes_read) {
         forge_syscall_not_ported("sys_pread");
     }
 
     int sys_seek(int fd, off_t offset, int whence, off_t *new_offset) {
-        forge_syscall_not_ported("sys_seek");
+    	if (fd < 3)	// Cannot seek stdio streams
+    		return ESPIPE;
+    	if (whence < 0 || whence > SEEK_END) // SEEK_DATA and SEEK_HOLE not supported
+    		return EINVAL;
+
+    	Forge::SeekMode seek_mode;
+    	if (whence == SEEK_SET) seek_mode = Forge::SeekMode::BEGIN;
+    	else if (whence == SEEK_CUR) seek_mode = Forge::SeekMode::CURSOR;
+    	else seek_mode = Forge::SeekMode::END;
+
+    	const S64 ret = Forge::vfs_seek(fd, seek_mode, whence);
+    	if (ret < 0)
+    		return EBADF;
+
+    	*new_offset = ret;
+        return 0;
     }
     int sys_close(int fd) {
         forge_syscall_not_ported("sys_close");
@@ -86,7 +132,7 @@ namespace [[gnu::visibility("hidden")]] mlibc {
 // In contrast to the isatty() library function, the sysdep function uses return value
 // zero (and not one) to indicate that the file is a terminal.
     [[gnu::weak]] int sys_isatty(int fd) {
-        forge_syscall_not_ported("sys_isatty");
+    	return fd >= 0 && fd <= 2 ? 0 : 1;
     }
     [[gnu::weak]] int sys_rmdir(const char *path) {
         forge_syscall_not_ported("sys_rmdir");
@@ -107,7 +153,7 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     }
     [[gnu::weak]] int sys_sigaction(int, const struct sigaction *__restrict,
                                     struct sigaction *__restrict) {
-        forge_syscall_not_ported("sys_sigaction");
+    	return 0; //TODO Implement posix signals
     }
 
     [[gnu::weak]] int sys_fork(pid_t *child) {
@@ -180,18 +226,34 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     }
 
     int sys_tcb_set(void *pointer) {
-        forge_syscall_not_ported("sys_tcb_set");
-        //TODO implement me
+    	return Forge::threading_set_thread_control_block(pointer);
     }
 
     [[gnu::weak]] int sys_futex_tid() {
-        return 1; // TODO implement syscall to get current thread ID?
+        return Forge::threading_get_thread_ID();
     }
 
     int sys_anon_allocate(size_t size, void **pointer) {
-        forge_syscall_not_ported("sys_anon_allocate");
+    	const size_t page_size = Forge::memory_get_page_size();
+		const size_t num_pages = (size + page_size - 1) / page_size; // ceil() on page boundary
+    	void* mem = Forge::memory_allocate_page(
+    		nullptr,
+    		num_pages,
+    		Forge::PageProtection::WRITE
+    	);
+	    if (const auto ret = reinterpret_cast<uintptr_t>(mem); ret == Forge::MEM_MAP_BAD_ADDRESS
+	                                                           || ret == Forge::MEM_MAP_BAD_PAGE_PROTECTION
+	                                                           || ret == Forge::MEM_MAP_BAD_ALLOC) {
+			return ret;
+    	}
+    	*pointer = mem;
+    	return 0;
     }
+
     int sys_anon_free(void *pointer, size_t size) {
+    	const size_t page_size = Forge::memory_get_page_size();
+    	const size_t num_pages = (size + page_size - 1) / page_size; // ceil() on page boundary
+    	Forge::memory_free_page(pointer, num_pages);
         forge_syscall_not_ported("sys_anon_free");
     }
 

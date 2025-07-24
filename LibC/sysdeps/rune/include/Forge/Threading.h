@@ -1,4 +1,3 @@
-
 #ifndef RUNETOOLCHAIN_THREADING_H
 #define RUNETOOLCHAIN_THREADING_H
 
@@ -16,6 +15,24 @@ namespace Forge {
     static constexpr U16 THREADING_MUTEX_LOCK    = 301;
     static constexpr U16 THREADING_MUTEX_UNLOCK  = 302;
     static constexpr U16 THREADING_MUTEX_RELEASE = 303;
+	static constexpr U16 THREADING_GET_THREAD_ID = 304;
+	static constexpr U16 THREADING_GET_THREAD_CONTROL_BLOCK = 305;
+	static constexpr U16 THREADING_SET_THREAD_CONTROL_BLOCK = 306;
+
+
+	//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
+	//                                          Data Definitions
+	//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
+
+
+	/**
+	 * @brief Information about a thread for user space.
+	 */
+	struct ThreadControlBlock {
+		U16 thread_ID;
+		void* stack_addr;
+		size_t stack_size;
+	};
 
 
     //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
@@ -66,6 +83,31 @@ namespace Forge {
      *          -2: Failed to release the mutex.
      */
     int threading_mutex_release(U16 handle);
+
+
+	/**
+	 * @brief Get the ID of the currently running thread.
+	 * @return 0: Success.
+	 *          -1: The ID_out buffer is null or in kernel memory.
+	 */
+	int threading_get_thread_ID();
+
+
+	/**
+	 * @brief Get the thread control block of the currently running thread.
+	 * @param tcb_out      Thread control block buffer.
+	 * @return 0: Success.
+	 *          -1: The tcb_out buffer is null or in kernel memory.
+	 */
+	int threading_get_thread_control_block(ThreadControlBlock* tcb_out);
+
+	/**
+	 * @brief Set the current thread's thread control block.
+	 * @param tcb          A pointer to the thread control block.
+	 * @return 0: Success.
+	 *          -1: The tcb buffer is null or in kernel memory.
+	 */
+	int threading_set_thread_control_block(void* tcb);
 }
 
 #endif //RUNETOOLCHAIN_THREADING_H

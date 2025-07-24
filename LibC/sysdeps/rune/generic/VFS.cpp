@@ -67,13 +67,13 @@ namespace Forge {
     }
 
 
-    S64 vfs_write(U16 handle, void* buf, size_t buf_size) {
+    S64 vfs_write(U16 handle, const void* buf, size_t buf_size) {
         return system_call3(VFS_WRITE, handle, (uintptr_t) buf, buf_size);
     }
 
 
-    S64 vfs_seek(U16 handle, size_t byte_pos) {
-        return system_call2(VFS_SEEK, handle, byte_pos);
+	S64 vfs_seek(U64 handle, SeekMode seek_mode, int offset) {
+        return system_call3(VFS_SEEK, handle, static_cast<S64>(seek_mode), offset);
     }
 
 

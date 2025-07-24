@@ -53,6 +53,16 @@ namespace Forge {
     /**
      * @brief
      */
+    enum class SeekMode {
+		BEGIN = 0x1,
+		CURSOR = 0x2,
+		END = 0x3,
+	};
+
+
+    /**
+     * @brief
+     */
     struct VFSNodeInfo {
         char   node_path[128] = { };
         size_t size           = 0;
@@ -161,7 +171,7 @@ namespace Forge {
      *          -1: The node handle is zero.
      *          -2: No node with the requested handle was found.
      *          -3: The node is a directory.
-     *          -4: The user buffer buffer is null or intersects kernel memory.
+     *          -4: The user buffer is null or intersects kernel memory.
      *          -5: Read is not supported.
      *          -6: The node handle is invalid, because the node has already been closed.
      *          -7: An IO error happened.
@@ -185,21 +195,23 @@ namespace Forge {
      *          -7: The node handle is invalid, because the node has already been closed.
      *          -8: An IO error happened.
      */
-    S64 vfs_write(U16 handle, void* buf, size_t buf_size);
+    S64 vfs_write(U16 handle, const void* buf, size_t buf_size);
 
 
-    /**
-     * @brief Try to skip bytePos bytes from the beginning of the file with the requested handle.
-     * @param handle     Handle to a node.
-     * @param byte_pos    Amount of bytes to skip starting from the beginning of the file.
-     * @return >=0: The number of bytes skipped.
-     *          -1: The node handle is zero.
-     *          -2: No node with the requested handle was found.
-     *          -3: The node is a directory.
-     *          -4: The node handle is invalid, because the node has already been closed.
-     *          -5: An IO error occurred.
-     */
-    S64 vfs_seek(U16 handle, size_t byte_pos);
+	/**
+	 * @brief Try to skip 'offset' bytes in a file depending on the requested 'seek_mode'.
+	 * @param handle       Handle to a node.
+	 * @param seek_mode    Determines how the new file cursor position is calculated.
+	 * @param offset       Number of bytes to skip.
+	 * @return >=0: The number of bytes skipped.
+	 *          -1: The node handle is zero.
+	 *          -2: No node with the requested handle was found.
+	 *          -3: Invalid seek mode requested.
+	 *          -4: The node is a directory.
+	 *          -5: The node handle is invalid, because the node has already been closed.
+	 *          -6: An IO error occurred.
+	 */
+	S64 vfs_seek(U64 handle, SeekMode seek_mode, int offset);
 
 
     /**

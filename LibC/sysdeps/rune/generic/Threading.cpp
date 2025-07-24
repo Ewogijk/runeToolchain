@@ -21,4 +21,28 @@ namespace Forge {
     int threading_mutex_release(U16 handle) {
         return (int) system_call1(THREADING_MUTEX_UNLOCK, handle);
     }
+
+
+	int threading_get_thread_ID() {
+    	return static_cast<int>(system_call0(THREADING_GET_THREAD_ID));
+    }
+
+
+	int threading_get_thread_control_block(ThreadControlBlock* tcb_out) {
+	    return static_cast<int>(
+	    	system_call1(
+	    		THREADING_GET_THREAD_CONTROL_BLOCK,
+	    		reinterpret_cast<uintptr_t>(tcb_out)
+	    		)
+	    	);
+    }
+
+	int threading_set_thread_control_block(void* tcb) {
+    	return static_cast<int>(
+			system_call1(
+				THREADING_SET_THREAD_CONTROL_BLOCK,
+				reinterpret_cast<uintptr_t>(tcb)
+				)
+			);
+    }
 }

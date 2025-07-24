@@ -4,8 +4,13 @@
 
 
 namespace Forge {
+	// Cache the page size to minimize system calls
+	size_t page_size = 0;
+
     size_t memory_get_page_size() {
-        return (size_t) system_call0(MEMORY_GET_PAGE_SIZE);
+    	if (page_size == 0)
+    		page_size = static_cast<size_t>(system_call0(MEMORY_GET_PAGE_SIZE));
+        return page_size;
     }
 
 
