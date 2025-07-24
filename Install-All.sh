@@ -1,13 +1,14 @@
 TARGET=x86_64-rune
 
 help() {
-  echo Usage "./Install.sh [-h] <system-root> <jobs> <bootstrap>"
+  echo Usage "./Install-All.sh [-h] <system-root> <jobs>"
   echo
-  echo Build Binutils and GCC with "x86_64-rune" target and then mlibc and libstdc++-v3
+  echo Build Binutils and GCC with "x86_64-rune" target and then mlibc and libstdc++-v3.
+  echo Everthing will be installed in the given system root.
   echo
   echo Arguments:
-  echo "    system-root - The GCC installation directory."
-  echo "    jobs -        Number of parallel make jobs."
+  echo "    system-root - The installation directory."
+  echo "    jobs        - Number of parallel make jobs."
   echo Options:
   echo "    -h - Print this help text"
 }
@@ -29,7 +30,7 @@ SYSROOT=$1
 JOBS=$2
 
 echo
-echo Install Hosted GCC Configuration:
+echo Install rune Toolchain:
 echo -------------------------------------
 echo
 echo "Commandline Arguments:"
