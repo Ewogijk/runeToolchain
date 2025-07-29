@@ -6,21 +6,33 @@ sysdep_supported_options = {
 }
 
 rtld_sources += files(
+    'Ember/Enum.cpp',
+    'Ember/NodeDefinitions.cpp',
+    'Ember/PageProtection.cpp',
+    'Ember/StatusCode.cpp',
+    'Ember/SystemCallID.cpp',
+    'Ember/VirtualKey.cpp',
     'generic/App.cpp',
     'generic/entry.cpp',
     'generic/Memory.cpp',
     'generic/sysdeps.cpp',
-    'generic/SystemCallPanic.cpp',
+    'generic/Panic.cpp',
     'generic/Threading.cpp',
     'generic/VFS.cpp',
 )
 
 libc_sources += files(
+    'Ember/Enum.cpp',
+    'Ember/NodeDefinitions.cpp',
+    'Ember/PageProtection.cpp',
+    'Ember/StatusCode.cpp',
+    'Ember/SystemCallID.cpp',
+    'Ember/VirtualKey.cpp',
     'generic/App.cpp',
     'generic/entry.cpp',
     'generic/Memory.cpp',
     'generic/sysdeps.cpp',
-    'generic/SystemCallPanic.cpp',
+    'generic/Panic.cpp',
     'generic/Threading.cpp',
     'generic/VFS.cpp',
 )
@@ -85,11 +97,21 @@ if not no_headers
         'include/Forge/App.h',
         'include/Forge/Memory.h',
         'include/Forge/SystemCall.h',
-        'include/Forge/SystemCallPanic.h',
+        'include/Forge/Panic.h',
         'include/Forge/Threading.h',
-        'include/Forge/TypeDef.h',
         'include/Forge/VFS.h',
         subdir: 'Forge',
+        follow_symlinks: true
+    )
+    install_headers(
+        'include/Ember/Definitions.h',
+        'include/Ember/Enum.h',
+        'include/Ember/NodeDefinitions.h',
+        'include/Ember/PageProtection.h',
+        'include/Ember/StatusCode.h',
+        'include/Ember/SystemCallID.h',
+        'include/Ember/VirtualKey.h',
+        subdir: 'Ember',
         follow_symlinks: true
     )
 endif

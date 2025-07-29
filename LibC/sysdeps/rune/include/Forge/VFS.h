@@ -1,256 +1,163 @@
 
-#ifndef RUNETOOLCHAIN_VFS_H
-#define RUNETOOLCHAIN_VFS_H
+#ifndef FORGE_VFS_H
+#define FORGE_VFS_H
 
 
-#include <Forge/TypeDef.h>
+#include <Ember/NodeDefinitions.h>
+#include <Ember/StatusCode.h>
 
 
 namespace Forge {
-    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
-    //                                          System Call IDs
-    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
+
+	/**
+	 * @brief Search for a node at given path and return the node info for it.
+	 * @param node_path     Path to a node.
+	 * @param node_info_out Node info buffer.
+	 * @return OKAY:               The node was found and the node_info_out buffer contains the node info.<br>
+	 *          BAD_ARG:           An argument is null, intersects kernel memory, exceeds the string size limit or the
+	 *                             node path contains illegal characters.<br>
+	 *          NODE_NOT_FOUND:    The node does not exist.<br>
+	 *          IO_ERROR:          IO error.
+	 */
+    Ember::StatusCode vfs_get_node_info(const char* node_path, Ember::NodeInfo* node_info_out);
 
 
-    static constexpr U16 VFS_GET_NODE_INFO          = 100;
-    static constexpr U16 VFS_CREATE                 = 101;
-    static constexpr U16 VFS_OPEN                   = 102;
-    static constexpr U16 VFS_DELETE                 = 103;
-    static constexpr U16 VFS_CLOSE                  = 104;
-    static constexpr U16 VFS_READ                   = 105;
-    static constexpr U16 VFS_WRITE                  = 106;
-    static constexpr U16 VFS_SEEK                   = 107;
-    static constexpr U16 VFS_DIRECTORY_STREAM_OPEN  = 108;
-    static constexpr U16 VFS_DIRECTORY_STREAM_NEXT  = 109;
-    static constexpr U16 VFS_DIRECTORY_STREAM_CLOSE = 110;
+	/**
+	 * Note: Creating a node does not open it.
+	 *
+	 * @brief Try to create node at the requested path with the given node attributes.
+	 * @param node_path    Path to a VFS node.
+	 * @param node_attr    Initial attributes of the node.
+	 * @return OKAY:         The node has been created.<br>
+	 *          BAD_ARG:     An argument is null, intersects kernel memory, the node path exceeds the string size
+	 *                       limit, the node path contains an illegal character or an IO mode is invalid.<br>
+	 *          NODE_EXISTS: The node already exists.<br>
+	 *          IO_ERROR:    An IO error happened.
+	 */
+    Ember::StatusCode vfs_create(const char* node_path, U8 node_attr);
 
 
-    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
-    //                                          Data Definitions
-    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
-
-    /**
-     * @brief
-     */
-    enum class NodeIOMode {
-        READ   = 1,
-        WRITE  = 2,
-        APPEND = 3
-    };
-
-    /**
-     * @brief
-     */
-    enum class NodeAttribute {
-        READONLY  = 0x01,
-        HIDDEN    = 0x02,
-        SYSTEM    = 0x04,
-        DIRECTORY = 0x08,
-        FILE      = 0x10
-    };
+	/**
+	 * @brief Search for a node with the given path and try to open it in the requested node IO mode.
+	 *
+	 * An opened node must be closed, otherwise the resource will leak until the calling application exits.
+	 * @param node_path    Path to a VFS node.
+	 * @param io_mode      Node IO mode, 1: Read, 2: Write or 3: Append.
+	 * @return >0:              Node ID.<br>
+	 *          BAD_ARG:        An argument is null, intersects kernel memory, the node path exceeds the string size
+	 *                          limit, the node path contains an illegal character or an IO mode is invalid.<br>
+	 *          NODE_NOT_FOUND: The node path does not exist.<br>
+	 *          IO_ERROR:       An IO error happened.
+	 */
+    Ember::StatusCode vfs_open(const char* node_path, Ember::IOMode io_mode);
 
 
-    /**
-     * @brief
-     */
-    enum class SeekMode {
-		BEGIN = 0x1,
-		CURSOR = 0x2,
-		END = 0x3,
-	};
+	/**
+	 * Note: Deleting a node does not open it.
+	 *
+	 * @brief Try to delete the node at given path.
+	 * @param node_path    Path to a VFS node.
+	 * @return OKAY:            The node got deleted.<br>
+	 *          BAD_ARG:        The node path is null, intersects kernel memory or contains an illegal character.<br>
+	 *          NODE_IN_USE:    The node cannot be deleted because it is used by another application.<br>
+	 *          NODE_NOT_FOUND: The node was not found.<br>
+	 *          IO_ERROR:       An IO error happened.
+	 */
+    Ember::StatusCode vfs_delete(const char* node_path);
 
 
-    /**
-     * @brief
-     */
-    struct VFSNodeInfo {
-        char   node_path[128] = { };
-        size_t size           = 0;
-        U8     attributes     = 0;
+	/**
+	 * @brief Try to close the node identified by the given node ID.
+	 * @param ID           A node ID > 0.
+	 * @return OKAY:        The node has been closed.<br>
+	 *          BAD_ARG:    The node ID is 0.<br>
+	 *          UNKNOWN_ID: No node with the given ID was found.
+	 */
+    bool vfs_close(U16 ID);
 
 
-        [[nodiscard]] bool is_readonly() const;
+	/**
+	 * @brief Try to read u_buf_size bytes into uBuf from the node referenced by the ID.
+	 * @param ID           Node ID.
+	 * @param buf        Pointer to a byte buffer.
+	 * @param buf_size   Size of the buffer.
+	 * @return >=0:                The number of bytes copied to the buffer.<br>
+	 *          BAD_ARG:           The buffer is null or intersects kernel memory. Or the node ID is zero.<br>
+	 *          UNKNOWN_ID:        No node with the requested ID was found.<br>
+	 *          NODE_IS_DIRECTORY: The node is a directory.<br>
+	 *          NODE_CLOSED:       The node ID is invalid, because the node has already been closed.<br>
+	 *          IO_ERROR:          An IO error happened.<br>
+	 *          FAULT:             The bytes could not be copied to the user mode buffer.
+	 */
+    Ember::StatusCode vfs_read(U16 ID, void* buf, size_t buf_size);
 
 
-        [[nodiscard]] bool is_hidden() const;
-
-
-        [[nodiscard]] bool is_system_node() const;
-
-
-        [[nodiscard]] bool is_directory() const;
-
-
-        [[nodiscard]] bool is_file() const;
-    };
-
-
-    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
-    //                                          System Calls
-    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
-
-    /**
-     * @brief Search for a node at given path and return the node info for it.
-     * @param node_path     Path to a node.
-     * @param node_info_out Node info buffer.
-     * @return 0: The node was found and the node_info_out buffer contains the node info.
-     *          -1: The node path is null, the size exceeds the max allowed string size or intersects kernel memory.
-     *          -2: The node path contains illegal characters.
-     *          -3: The node info buffer is null or intersects kernel memory.
-     *          -4: The node does not exist.
-     *          -5: An intermediate node on the path is a file.
-     *          -6: IO error.
-     */
-    S64 vfs_get_node_info(const char* node_path, VFSNodeInfo* node_info_out);
-
-
-    /**
-     * @brief Try to create node at the requested path with the given node attributes.
-     * @param sysCallCtx A pointer to the VFS context.
-     * @param node_path   Path to a VFS node.
-     * @param node_attr   Initial attributes of the node.
-     * @return 0: The node has been created.
-     *          -1: The node path buffer is null or intersects kernel memory.
-     *          -2: The node attributes contain unknown attributes.
-     *          -3: The node path contains an illegal character.
-     *          -4: The node already exists.
-     *          -5: The Directory or File attributes are not set correctly.
-     *          -6: An IO error happened.
-     */
-    S64 vfs_create(const char* node_path, U8 node_attr);
-
-
-    /**
-     * @brief Search for a node with the given path and try to open it in the requested node IO mode.
-     *
-     * An opened node handle must be closed, otherwise the resource will leak until the calling application exits.
-     *
-     * @param path  Path to a VFS node.
-     * @param io_mode Node IO mode, 1: Read, 2: Write or 3: Append.
-     * @return >0: A handle to a file node.
-     *          -1: The node path buffer is null or intersects kernel memory.
-     *          -2: The requested node IO mode is unknown.
-     *          -3: The node path contains an illegal character.
-     *          -4: The node path does not exist.
-     *          -5: The kernel is out of node handles.
-     *          -6: An IO error happened.
-     */
-    S64 vfs_open(const char* path, NodeIOMode io_mode);
-
-
-    /**
-     * @brief Try to delete the node at given path.
-
-     * @param node_path   Path to a VFS node.
-     * @return 0: The node got deleted.
-     *          -1: The node path buffer is null or intersects kernel memory.
-     *          -2: The node path contains an illegal character.
-     *          -3: The node cannot be deleted because it is used by another application.
-     *          -4: The node was not found.
-     *          -5: An IO error happened.
-     */
-    S64 vfs_delete(const char* node_path);
-
-
-    /**
-     * @brief Try to close the node  identified by the given node handle.
-     * @param node_handle A node handle > 0.
-     * @return 0: The node has been closed.
-     *          -1: The node handle is 0.
-     *          -2: No node with the given node handle was found.
-     */
-    bool vfs_close(U16 node_handle);
-
-
-    /**
-     * @brief Try to read bufSize bytes into buf from the file referenced by the handle.
-     * @param handle  Handle to a node.
-     * @param buf     Pointer to a byte buffer.
-     * @param buf_size Size of the buffer.
-     * @return >=0: The number of bytes copied to the buffer.
-     *          -1: The node handle is zero.
-     *          -2: No node with the requested handle was found.
-     *          -3: The node is a directory.
-     *          -4: The user buffer is null or intersects kernel memory.
-     *          -5: Read is not supported.
-     *          -6: The node handle is invalid, because the node has already been closed.
-     *          -7: An IO error happened.
-     *          -8: The bytes could not be copied to the user mode buffer.
-     */
-    S64 vfs_read(U16 handle, void* buf, size_t buf_size);
-
-
-    /**
-     * @brief Try to write bufSize bytes in the buf to the file referenced by the handle.
-     * @param handle  Handle to a node.
-     * @param buf     Pointer to a byte buffer.
-     * @param buf_size Size of the buffer.
-     * @return >=0: The number of bytes written to the file.
-     *          -1: The node handle is zero.
-     *          -2: No node with the requested handle was found.
-     *          -3: The node is a directory.
-     *          -4: The user buffer could not be copied to the kernel buffer.
-     *          -5: Write is not supported.
-     *          -6: The node is in read mode.
-     *          -7: The node handle is invalid, because the node has already been closed.
-     *          -8: An IO error happened.
-     */
-    S64 vfs_write(U16 handle, const void* buf, size_t buf_size);
+	/**
+	 * @brief Try to write uBufSize bytes in the uBuf to the file referenced by the ID.
+	 * @param ID           Node ID.
+	 * @param buf        Pointer to a byte buffer.
+	 * @param buf_size   Size of the buffer.
+	 * @return >=0:                The number of bytes written to the file.<br>
+	 *          BAD_ARG:           The buffer is null or intersects kernel memory. Or the node ID is zero.<br>
+	 *          UNKNOWN_ID:        No node with the requested ID was found.<br>
+	 *          NODE_IS_DIRECTORY: The node is a directory.<br>
+	 *          NODE_CLOSED:       The node ID is invalid, because the node has already been closed.<br>
+	 *          ACCESS_DENIED:     The node is in read mode.<br>
+	 *          IO_ERROR:          An IO error happened.
+	 */
+    Ember::StatusCode vfs_write(U16 ID, const void* buf, size_t buf_size);
 
 
 	/**
 	 * @brief Try to skip 'offset' bytes in a file depending on the requested 'seek_mode'.
-	 * @param handle       Handle to a node.
+	 * @param ID           Node ID.
 	 * @param seek_mode    Determines how the new file cursor position is calculated.
 	 * @param offset       Number of bytes to skip.
-	 * @return >=0: The number of bytes skipped.
-	 *          -1: The node handle is zero.
-	 *          -2: No node with the requested handle was found.
-	 *          -3: Invalid seek mode requested.
-	 *          -4: The node is a directory.
-	 *          -5: The node handle is invalid, because the node has already been closed.
-	 *          -6: An IO error occurred.
+	 * @return >=0:                The number of bytes skipped.<br>
+	 *          BAD_ARG:           The node ID is zero, the seek mode is invalid or the offset is bad.<br>
+	 *          UNKNOWN_ID:        No node with the requested ID was found.<br>
+	 *          NODE_IS_DIRECTORY: The node is a directory.<br>
+	 *          NODE_CLOSED:       The node ID is invalid, because the node has already been closed.<br>
+	 *          IO_ERROR:          An IO error happened.
 	 */
-	S64 vfs_seek(U64 handle, SeekMode seek_mode, int offset);
+	Ember::StatusCode vfs_seek(U64 ID, Ember::SeekMode seek_mode, int offset);
 
 
-    /**
-     * @brief Try to open a stream over the content of a directory.
-     * @param dir_path     Path to a directory.
-     * @return >=0: A handle to the opened directory stream.
-     *          -1: The directory path buffer is null or intersects kernel memory.
-     *          -2: The directory path contains an illegal character.
-     *          -3: The kernel is out of directory stream handles.
-     *          -4: The node was not found.
-     *          -5: The node is not a directory.
-     *          -6: An IO error happened.
-     */
-    S64 vfs_directory_stream_open(const char* dir_path);
+	/**
+	 * @brief Try to open a stream over the content of a directory.
+	 * @param dir_path     Path to a directory.
+	 * @return >=0:             An ID to the opened directory stream.<br>
+	 *          BAD_ARGS:       The directory path buffer is null, intersects kernel memory or contains an illegal
+	 *                          character.<br>
+	 *          NODE_NOT_FOUND: The node was not found.<br>
+	 *          NODE_IS_FILE:   The node is a file<br>
+	 *          IO_ERROR:       An IO error happened.
+	 */
+    Ember::StatusCode vfs_directory_stream_open(const char* dir_path);
 
 
-    /**
-     * @brief Try to get the next directory node.
-     * @param dir_stream_handle Handle of a directory stream.
-     * @param node_info_ptr     A pointer to a VFSNodeInfo struct.
-     * @return 1: The directory contains at least one more node info.
-     *          0: The directory has no more node infos left.
-     *          -1: The handle is invalid.
-     *          -2: The node info buffer is null or intersects kernel memory.
-     *          -3: No directory stream with the requested handle exists.
-     *          -4: An IO error occurred while getting the next node info.
-     *          -5: The node info name could not be copied to the node info buffer.
-     */
-    S64 vfs_directory_stream_next(U16 dir_stream_handle, VFSNodeInfo* node_info_ptr);
+	/**
+	 * @brief Try to get the next directory node.
+	 * @param dir_stream_ID Directory stream ID.
+	 * @param node_info_ptr A pointer to a VFSNodeInfo struct.
+	 * @return DIRECTORY_STREAM_HAS_MORE: The directory contains at least one more node info.<br>
+	 *          DIRECTORY_STREAM_EOD:     The directory has no more node infos left.<br>
+	 *          BAD_ARG:                  The ID is invalid, the node info buffer is null or intersects kernel memory.<br>
+	 *          UNKNOWN_ID:               No directory stream with the requested ID exists.<br>
+	 *          IO_ERROR:                 An IO error occurred while getting the next node info.
+	 */
+    Ember::StatusCode vfs_directory_stream_next(U16 dir_stream_ID, Ember::NodeInfo* node_info_ptr);
 
 
-    /**
-     * @brief Try to close the directory stream with the given handle.
-     * @param dir_stream_handle Handle to a directory stream.
-     * @return 0: The directory stream is closed.
-     *          -1: The handle is zero.
-     *          -2: No directory stream with the requested handle exists.
-     */
-    S64 vfs_directory_stream_close(U16 dir_stream_handle);
+	/**
+	 * @brief Try to close the directory stream with the given ID.
+	 * @param dir_stream_ID Directory stream ID.
+	 * @return OKAY:     The directory stream is closed.
+	 *          BAD_ARG: The ID is zero.
+	 *
+	 *          UNKNOWN_ID:  No directory stream with the requested ID exists.
+	 */
+    Ember::StatusCode vfs_directory_stream_close(U16 dir_stream_ID);
 }
 
-#endif //RUNETOOLCHAIN_VFS_H
+#endif //FORGE_VFS_H

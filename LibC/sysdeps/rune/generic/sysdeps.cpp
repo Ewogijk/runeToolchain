@@ -9,7 +9,7 @@
 #include <sys/wait.h>
 #include <sys/shm.h>
 
-#include <Forge/SystemCallPanic.h>
+#include <Forge/Panic.h>
 #include <Forge/App.h>
 #include <Forge/Memory.h>
 #include <Forge/Threading.h>
@@ -76,13 +76,16 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     			*bytes_written = count;
     			break;
     		default: {
-    			S64 ret = Forge::vfs_write(fd, buf, count);
+    			const Ember::StatusCode ret = Forge::vfs_write(fd, buf, count);
     			if (ret < 0) {
-    				if (ret >= -3 || ret == -5 || ret == -6 || ret == -7)
+    				if (ret == Ember::Status::UNKNOWN_ID
+    					|| ret == Ember::Status::NODE_IS_DIRECTORY
+    					|| ret == Ember::Status::NODE_CLOSED
+    					|| ret == Ember::Status::ACCESS_DENIED)
     					return EBADF;
-    				else if (ret == -8)
+    				else if (ret == Ember::Status::IO_ERROR)
     					return EIO;
-    				else // ret == -4
+    				else // ret == Ember::Status::BAD_ARG
     					return EFAULT;
 
     			}
@@ -101,10 +104,10 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     	if (whence < 0 || whence > SEEK_END) // SEEK_DATA and SEEK_HOLE not supported
     		return EINVAL;
 
-    	Forge::SeekMode seek_mode;
-    	if (whence == SEEK_SET) seek_mode = Forge::SeekMode::BEGIN;
-    	else if (whence == SEEK_CUR) seek_mode = Forge::SeekMode::CURSOR;
-    	else seek_mode = Forge::SeekMode::END;
+    	Ember::SeekMode seek_mode;
+    	if (whence == SEEK_SET) seek_mode = Ember::SeekMode::BEGIN;
+    	else if (whence == SEEK_CUR) seek_mode = Ember::SeekMode::CURSOR;
+    	else seek_mode = Ember::SeekMode::END;
 
     	const S64 ret = Forge::vfs_seek(fd, seek_mode, whence);
     	if (ret < 0)
@@ -239,12 +242,12 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     	void* mem = Forge::memory_allocate_page(
     		nullptr,
     		num_pages,
-    		Forge::PageProtection::WRITE
+    		Ember::PageProtection::WRITE
     	);
-	    if (const auto ret = reinterpret_cast<uintptr_t>(mem); ret == Forge::MEM_MAP_BAD_ADDRESS
-	                                                           || ret == Forge::MEM_MAP_BAD_PAGE_PROTECTION
-	                                                           || ret == Forge::MEM_MAP_BAD_ALLOC) {
-			return ret;
+	    if (const auto ret = reinterpret_cast<uintptr_t>(mem); ret == Ember::Status::BAD_ARG) {
+			return EINVAL;
+    	} else if (ret == Ember::Status::FAULT) {
+    		return ENOMEM;
     	}
     	*pointer = mem;
     	return 0;
@@ -253,8 +256,12 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     int sys_anon_free(void *pointer, size_t size) {
     	const size_t page_size = Forge::memory_get_page_size();
     	const size_t num_pages = (size + page_size - 1) / page_size; // ceil() on page boundary
-    	Forge::memory_free_page(pointer, num_pages);
-        forge_syscall_not_ported("sys_anon_free");
+	    if (const auto ret = Forge::memory_free_page(pointer, num_pages); ret == Ember::Status::BAD_ARG) {
+    		return EINVAL;
+    	} else if (ret == Ember::Status::FAULT) {
+    		return ENOMEM;
+    	}
+    	return 0;
     }
 
     [[gnu::weak]] int sys_stat(fsfd_target fsfdt, int fd, const char *path, int flags,

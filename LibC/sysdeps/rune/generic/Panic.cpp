@@ -1,4 +1,4 @@
-#include <Forge/SystemCallPanic.h>
+#include <Forge/Panic.h>
 
 #include <Forge/App.h>
 
