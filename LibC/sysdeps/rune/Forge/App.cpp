@@ -13,12 +13,12 @@ namespace Forge {
     }
 
 
-    void app_write_stdout(const char* msg) {
-        system_call1(Ember::App::WRITE_STDOUT, reinterpret_cast<U64>(msg));
+    void app_write_stdout(const char* msg, U64 msg_size) {
+        system_call2(Ember::App::WRITE_STDOUT, reinterpret_cast<U64>(msg), reinterpret_cast<U64>(msg_size));
     }
 
-    void app_write_stderr(const char* msg) {
-        system_call1(Ember::App::WRITE_STDERR, reinterpret_cast<U64>(msg));
+    void app_write_stderr(const char* msg, U64 msg_size) {
+        system_call2(Ember::App::WRITE_STDERR, reinterpret_cast<U64>(msg), reinterpret_cast<U64>(msg_size));
     }
 
     int app_start(

@@ -17,8 +17,9 @@ namespace Forge {
 	/**
 	 * @brief Write the msg to the stdout stream of the running app.
 	 * @param msg          A pointer to a c string.
+	 * @param msg_size     The length of the c string.
 	 */
-    void app_write_stdout(const char* msg);
+    void app_write_stdout(const char* msg, size_t msg_size);
 
 
 	/**
@@ -27,8 +28,9 @@ namespace Forge {
 	 * If the stream supports colors the msg will be written in red.
 	 *
 	 * @param msg          A pointer to a c string.
+	 * @param msg_size     The length of the c string.
 	 */
-    void app_write_stderr(const char* msg);
+    void app_write_stderr(const char* msg, size_t msg_size);
 
 
 	/**

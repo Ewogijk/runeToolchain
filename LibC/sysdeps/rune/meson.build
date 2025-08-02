@@ -12,13 +12,14 @@ rtld_sources += files(
     'Ember/StatusCode.cpp',
     'Ember/SystemCallID.cpp',
     'Ember/VirtualKey.cpp',
-    'generic/App.cpp',
-    'generic/entry.cpp',
-    'generic/Memory.cpp',
-    'generic/sysdeps.cpp',
-    'generic/Panic.cpp',
-    'generic/Threading.cpp',
-    'generic/VFS.cpp',
+    'Forge/App.cpp',
+    'Forge/Memory.cpp',
+    'Forge/Panic.cpp',
+    'Forge/Threading.cpp',
+    'Forge/Utility.cpp',
+    'Forge/VFS.cpp',
+    'mlibc-integration/entry.cpp',
+    'mlibc-integration/sysdeps.cpp',
 )
 
 libc_sources += files(
@@ -28,13 +29,14 @@ libc_sources += files(
     'Ember/StatusCode.cpp',
     'Ember/SystemCallID.cpp',
     'Ember/VirtualKey.cpp',
-    'generic/App.cpp',
-    'generic/entry.cpp',
-    'generic/Memory.cpp',
-    'generic/sysdeps.cpp',
-    'generic/Panic.cpp',
-    'generic/Threading.cpp',
-    'generic/VFS.cpp',
+    'Forge/App.cpp',
+    'Forge/Memory.cpp',
+    'Forge/Panic.cpp',
+    'Forge/Threading.cpp',
+    'Forge/Utility.cpp',
+    'Forge/VFS.cpp',
+    'mlibc-integration/entry.cpp',
+    'mlibc-integration/sysdeps.cpp',
 )
 
 if host_machine.cpu_family() == 'x86_64'
