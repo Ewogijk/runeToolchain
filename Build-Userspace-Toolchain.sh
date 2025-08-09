@@ -1,7 +1,7 @@
 TARGET=x86_64-rune
 
 help() {
-  echo Usage "./Install-All.sh [-h] <system-root> <jobs>"
+  echo Usage "./Build-Userspace-Toolchain.sh [-h] <system-root> <jobs>"
   echo
   echo Build Binutils and GCC with "x86_64-rune" target and then mlibc and libstdc++-v3.
   echo Everthing will be installed in the given system root.
@@ -30,8 +30,8 @@ SYSROOT=$1
 JOBS=$2
 
 echo
-echo Install rune Toolchain:
-echo -------------------------------------
+echo Build Userspace Cross-Compiler:
+echo -------------------------------
 echo
 echo "Commandline Arguments:"
 echo "    System Root: $SYSROOT"
@@ -40,10 +40,10 @@ echo
 
 # Build LibC with system compiler
 # This needs to be done because GCC expects a libc during compilation
-mkdir -p build/LibC
+mkdir -p build-userspace/LibC
 cd LibC
 meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build/LibC
-cd ../build/LibC
+cd ../build-userspace/LibC
 meson compile
 meson install
 
@@ -55,7 +55,7 @@ make install
 
 # Build GCC
 cd .. && mkdir GCC && cd GCC
-../../GCC/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --enable-languages=c,c++
+../../GCC-Userspace/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --enable-languages=c,c++
 make all-gcc all-target-libgcc -j$JOBS
 make install-gcc install-target-libgcc
 PATH=${SYSROOT}/bin:$PATH # Needed for LibC compilation with cross compiler
@@ -66,7 +66,7 @@ rm -r LibC
 mkdir -p LibC
 cd ../LibC
 meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build/LibC
-cd ../build/LibC
+cd ../build-userspace/LibC
 meson compile
 meson install
 
@@ -77,4 +77,4 @@ make install-target-libstdc++-v3
 
 # Clean up
 cd ../..
-rm -r build
+rm -r build-userspace

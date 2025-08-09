@@ -1,7 +1,7 @@
 TARGET=x86_64-rune
 
 help() {
-  echo Usage "./Install-LibC.sh [-h] <system-root>"
+  echo Usage "./Update-LibC.sh [-h] <system-root>"
   echo
   echo Build mlibc and install it to the given system root.
   echo
@@ -28,21 +28,21 @@ SYSROOT=$1
 JOBS=$2
 
 echo
-echo Install mblic:
-echo -------------------------------------
+echo Update mlibc:
+echo -------------
 echo
 echo "Commandline Arguments:"
 echo "    System Root: $SYSROOT"
 echo
 
 # Build LibC with x86_64-rune cross compiler
-mkdir -p build/LibC
+mkdir -p build-userspace/LibC
 cd LibC
 meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build/LibC
-cd ../build/LibC
+cd ../build-userspace/LibC
 meson compile
 meson install
 
 # Clean up
 cd ../..
-rm -r build
+rm -r build-userspace
