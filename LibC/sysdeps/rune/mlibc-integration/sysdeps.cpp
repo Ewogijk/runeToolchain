@@ -153,11 +153,11 @@ namespace [[gnu::visibility("hidden")]] mlibc {
 
     [[gnu::weak]] int sys_sigprocmask(int how, const sigset_t *__restrict set,
                                       sigset_t *__restrict retrieve) {
-        Forge::syscall_not_ported("sys_sigprocmask");
+        return 0; //TODO Implement something like signals
     }
     [[gnu::weak]] int sys_sigaction(int, const struct sigaction *__restrict,
                                     struct sigaction *__restrict) {
-    	return 0; //TODO Implement posix signals
+    	return 0; //TODO Implement something like signals
     }
 
     [[gnu::weak]] int sys_fork(pid_t *child) {
@@ -171,7 +171,7 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     }
 
     [[gnu::weak]] pid_t sys_getpid() {
-        Forge::syscall_not_ported("sys_getpid");
+    	return Forge::app_get_ID();
     }
     [[gnu::weak]] int sys_kill(int, int) {
         Forge::syscall_not_ported("sys_kill");

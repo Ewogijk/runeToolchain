@@ -1,8 +1,7 @@
 #ifndef FORGE_APP_H
 #define FORGE_APP_H
 
-#include <Ember/StatusCode.h>
-#include <Ember/VirtualKey.h>
+#include <Ember/AppBits.h>
 
 namespace Forge {
 
@@ -31,6 +30,13 @@ namespace Forge {
 	 * @param msg_size     The length of the c string.
 	 */
     void app_write_stderr(const char* msg, size_t msg_size);
+
+
+	/**
+	 * @brief Get the ID of the currently running application.
+	 * @return The ID of the currently running application.
+	 */
+	Ember::ResourceID app_get_ID();
 
 
 	/**

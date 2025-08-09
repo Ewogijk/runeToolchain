@@ -21,6 +21,10 @@ namespace Forge {
         system_call2(Ember::App::WRITE_STDERR, reinterpret_cast<U64>(msg), reinterpret_cast<U64>(msg_size));
     }
 
+	Ember::ResourceID app_get_ID() {
+	    return system_call0(Ember::App::GET_ID);
+    }
+
     int app_start(
             const char* app_path,
             const char** argv,
