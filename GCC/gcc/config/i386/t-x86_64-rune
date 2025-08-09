@@ -1,3 +1,0 @@
-MULTILIB_OPTIONS += mno-red-zone mcmodel=large
-MULTILIB_DIRNAMES += no-red-zone mcmodel-large
-MULTILIB_REQUIRED = mno-red-zone/mcmodel=large
