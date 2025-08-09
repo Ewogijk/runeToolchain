@@ -6,12 +6,12 @@ sysdep_supported_options = {
 }
 
 rtld_sources += files(
+    'Ember/AppBits.cpp',
+    'Ember/Ember.cpp',
     'Ember/Enum.cpp',
-    'Ember/NodeDefinitions.cpp',
-    'Ember/PageProtection.cpp',
-    'Ember/StatusCode.cpp',
+    'Ember/MemoryBits.cpp',
     'Ember/SystemCallID.cpp',
-    'Ember/VirtualKey.cpp',
+    'Ember/VFSBits.cpp',
     'Forge/App.cpp',
     'Forge/Memory.cpp',
     'Forge/Panic.cpp',
@@ -23,12 +23,12 @@ rtld_sources += files(
 )
 
 libc_sources += files(
+    'Ember/AppBits.cpp',
+    'Ember/Ember.cpp',
     'Ember/Enum.cpp',
-    'Ember/NodeDefinitions.cpp',
-    'Ember/PageProtection.cpp',
-    'Ember/StatusCode.cpp',
+    'Ember/MemoryBits.cpp',
     'Ember/SystemCallID.cpp',
-    'Ember/VirtualKey.cpp',
+    'Ember/VFSBits.cpp',
     'Forge/App.cpp',
     'Forge/Memory.cpp',
     'Forge/Panic.cpp',
@@ -106,13 +106,12 @@ if not no_headers
         follow_symlinks: true
     )
     install_headers(
-        'include/Ember/Definitions.h',
+        'include/Ember/AppBits.h',
+        'include/Ember/Ember.h',
         'include/Ember/Enum.h',
-        'include/Ember/NodeDefinitions.h',
-        'include/Ember/PageProtection.h',
-        'include/Ember/StatusCode.h',
+        'include/Ember/MemoryBits.h',
         'include/Ember/SystemCallID.h',
-        'include/Ember/VirtualKey.h',
+        'include/Ember/VFSBits.h',
         subdir: 'Ember',
         follow_symlinks: true
     )

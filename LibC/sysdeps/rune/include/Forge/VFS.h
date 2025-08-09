@@ -3,8 +3,8 @@
 #define FORGE_VFS_H
 
 
-#include <Ember/NodeDefinitions.h>
-#include <Ember/StatusCode.h>
+#include <Ember/Ember.h>
+#include <Ember/VFSBits.h>
 
 
 namespace Forge {

@@ -2,7 +2,7 @@
 #define FORGE_MEMORY_H
 
 
-#include <Ember/PageProtection.h>
+#include <Ember/MemoryBits.h>
 
 namespace Forge {
 

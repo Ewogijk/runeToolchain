@@ -1,8 +1,7 @@
 #ifndef FORGE_THREADING_H
 #define FORGE_THREADING_H
 
-#include <Ember/Definitions.h>
-#include <Ember/StatusCode.h>
+#include <Ember/Ember.h>
 
 namespace Forge {
 
