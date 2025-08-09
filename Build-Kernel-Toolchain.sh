@@ -59,7 +59,7 @@ make install
 
 cd ..
 mkdir -p GCC && cd GCC
-../../GCC-Userspace/configure --target=$TARGET --prefix="${SYSROOT}" --disable-nls --enable-languages=c,c++ --without-headers
+../../GCC/configure --target=$TARGET --prefix="${SYSROOT}" --disable-nls --enable-languages=c,c++ --without-headers
 make -j$JOBS all-gcc
 make -j$JOBS all-target-libgcc CFLAGS_FOR_TARGET='-g -O2 -mcmodel=large -mno-red-zone'
 make install-gcc

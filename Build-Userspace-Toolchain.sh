@@ -42,7 +42,7 @@ echo
 # This needs to be done because GCC expects a libc during compilation
 mkdir -p build-userspace/LibC
 cd LibC
-meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build/LibC
+meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-userspace/LibC
 cd ../build-userspace/LibC
 meson compile
 meson install
@@ -55,7 +55,7 @@ make install
 
 # Build GCC
 cd .. && mkdir GCC && cd GCC
-../../GCC-Userspace/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --enable-languages=c,c++
+../../GCC/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --enable-languages=c,c++
 make all-gcc all-target-libgcc -j$JOBS
 make install-gcc install-target-libgcc
 PATH=${SYSROOT}/bin:$PATH # Needed for LibC compilation with cross compiler
