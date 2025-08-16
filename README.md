@@ -48,13 +48,14 @@ Now grab a coffee or two while you are waiting for everything to be built.
 
 ## Licensing
 
-The project is divided into subprojects, one directory for each subproject, and the Scripts/ with build scripts. Each 
-subproject has its own license, as well as the build scripts. For details check the corresponding license file in the
-subproject's directory.
+The project is divided into subprojects, one directory for each subproject, and the Scripts/ directory with build 
+scripts. Each subproject has its own license, as well as the build scripts.
 
-In summary, these are the licenses for each subproject:
+In summary, these are the licenses of each subproject:
 
 - GCC: GPL v3 or later
 - Binutils: GPL v3 or later
 - mlibc: MIT License
 - Build scripts: Apache 2.0
+
+For details check the corresponding license file in the subproject's directory.
