@@ -35,11 +35,11 @@ PATH environment variable, this is highly recommended. Now you are ready to use 
 
 Alternatively you can also build the toolchain yourself. To build the freestanding compiler run the following:
 
-    ./Build-Freestanding-Compiler.sh /path/to/your/systemroot num-make-jobs
+    ./Scripts/Build-Freestanding-Compiler.sh /path/to/your/systemroot num-make-jobs
 
 This helper script will compile Binutils and GCC for you. You can build the hosted compiler similarly:
 
-    ./Build-Hosted-Compiler.sh /path/to/your/systemroot num-make-jobs
+    ./Scripts/Build-Hosted-Compiler.sh /path/to/your/systemroot num-make-jobs
 
 This script will, additionally to Binutils and GCC, compile mlibc and libstdc++-v3. Ember and Forge are shipped as part
 of mlibc.
@@ -48,11 +48,13 @@ Now grab a coffee or two while you are waiting for everything to be built.
 
 ## Licensing
 
-The project contains three directories each contains a subproject which has a license of their own. Check out the
-COPYING/LICENSE file of the subprojects for details.
+The project is divided into subprojects, one directory for each subproject, and the Scripts/ with build scripts. Each 
+subproject has its own license, as well as the build scripts. For details check the corresponding license file in the
+subproject's directory.
 
-In short the subprojects are licensed as followed:
+In summary, these are the licenses for each subproject:
 
 - GCC: GPL v3 or later
 - Binutils: GPL v3 or later
 - mlibc: MIT License
+- Build scripts: Apache 2.0
