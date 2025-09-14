@@ -54,7 +54,7 @@ echo
 # Build LibC with x86_64-rune cross compiler
 mkdir -p build-userspace/LibC
 cd LibC
-meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build/LibC
+meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-userspace/LibC
 cd ../build-userspace/LibC
 meson compile
 meson install
