@@ -33,19 +33,6 @@ The list of features will be extended in the future as the kernel will be furthe
 Download the latest release and unzip it at a location of your choice. Optionally, you can add the compilers to your
 PATH environment variable, this is highly recommended. Now you are ready to use the toolchain.
 
-Alternatively you can also build the toolchain yourself. To build the freestanding compiler run the following:
-
-    ./Scripts/Build-Freestanding-Compiler.sh /path/to/your/systemroot num-make-jobs
-
-This helper script will compile Binutils and GCC for you. You can build the hosted compiler similarly:
-
-    ./Scripts/Build-Hosted-Compiler.sh /path/to/your/systemroot num-make-jobs
-
-This script will, additionally to Binutils and GCC, compile mlibc and libstdc++-v3. Ember and Forge are shipped as part
-of mlibc.
-
-Now grab a coffee or two while you are waiting for everything to be built.
-
 ## Licensing
 
 The project is divided into subprojects, one directory for each subproject, and the Scripts/ directory with build 
