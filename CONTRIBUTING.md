@@ -12,6 +12,7 @@ intend to make working on the project easier for everyone.
 - [Requesting Features](#requesting-features)
 - [Setting up your Local Development Environment](#setting-up-your-local-development-environment)
 - [Building the Toolchain](#building-the-toolchain)
+- [Pull Requests](#pull-requests)
 - [Styleguide](#styleguide)
     - [Commit Message Style](#commit-message-style)
     - [Code Style](#code-style)
@@ -49,6 +50,12 @@ your problem as detailed as possible to help us track down your issue:
 
 If you are missing the integration of a system call with Forge or the standard library, you are welcome to make a 
 feature request!
+
+For documentation and small code changes that are not publicly visible you do not need to create a feature request, just
+open a [Pull Request](#pull-requests). 
+
+If you want to change public API or Ember, please open a feature request to get feedback on your proposal first, before
+you start putting a lot of work in a PR that ends up not getting merged.
 
 ### Before Submitting
 
@@ -122,6 +129,17 @@ This script will, additionally to Binutils and GCC, compile mlibc and libstdc++-
 of mlibc.
 
 Now grab a coffee or two while you are waiting for everything to be built.
+
+
+## Pull Requests
+
+Pull requests are always greatly appreciated. When submitting consider the following:
+
+1. Fork the repo.
+2. When contributing code: Set up your [Local Development Environment](#setting-up-your-local-development-environment).
+3. Be sure to document your changes.
+4. Consider the [styleguide](#styleguide)
+5. Open a PR from your fork to `runeToolchain/main`.
 
 
 ## Styleguide
