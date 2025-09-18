@@ -2,86 +2,73 @@
 
 :tada: Welcome and thanks for taking the time to contribute to runeToolchain! :tada:
 
-Please take a moment to review this document before starting to contribute. It is mostly a collection of guidelines that
-intend to make working on the project easier for everyone.
+This document is a set of guidelines for contributing to runeOS, please take a moment to review it.
+These guidelines are not rules, so feel free to propose changes in a pull request.
 
 
 ### Table of Contents
 
-- [Reporting Bugs](#reporting-bugs)
-- [Requesting Features](#requesting-features)
-- [Setting up your Local Development Environment](#setting-up-your-local-development-environment)
-- [Building the Toolchain](#building-the-toolchain)
-- [Pull Requests](#pull-requests)
+- [Found a Bug?](#found-a-bug)
+- [Missing a Feature?](#missing-a-feature)
+- [Submitting Issues](#submitting-issues)
+- [Submitting a Pull Request](#submitting-a-pull-request)
+- [Building the Project](#building-the-project)
+  - [Getting the Dependencies](#getting-the-dependencies)
+  - [Building the Toolchain](#building-the-toolchain)
+  - [Navigating the Project](#navigating-the-project)
 - [Styleguide](#styleguide)
     - [Commit Message Style](#commit-message-style)
     - [Code Style](#code-style)
 
+## Found a Bug?
 
-## Reporting Bugs
-
-You have found a bug and want to report it? This section will introduce our guidelines for bug reports, by following
-them you help us to better understand your report and thus fixing your bug.
-
-### Before Submitting
-
-Please check the following guidelines before submitting, you may not need to create an issue if any of the following
-points apply.
-
-1. **Update to the latest release** - We may have already fixed your bug.
-2. **Check the [Issue Tracker](https://github.com/Ewogijk/runeToolchain/issues)** - To see if the issue has already been
-   reported. If it was and the issue is still open, comment on the existing issue rather than creating a new one.
-
-### Submitting a Bug Report
-
-To report a bug fill out the [Bug Report](https://github.com/Ewogijk/runeToolchain/issues/new/choose) template. Explain 
-your problem as detailed as possible to help us track down your issue:
-
-- **Use a clear and descriptive title**
-- **Describe the steps to reproduce** - Be as detailed as possible. Explain not only what but also how you did
-  something. Provide the arguments you used for functions and commands.
-- **Explain the behavior after performing the steps**
-- **Describe what behavior you expected**
-- **Specify your environment** - Which runeToolchain release are you using.
-- **Add screenshots or code snippets** if suitable
+When you find a bug in the source code, you can help us by [submitting an issue](#submitting-issues)
+or submit a [Pull Request](#submitting-a-pull-request) with the fix.
 
 
-## Requesting Features
+## Missing a Feature?
 
-If you are missing the integration of a system call with Forge or the standard library, you are welcome to make a 
-feature request!
+You can request the implementation of a new system call by 
+[submitting an issue](#submitting-issues).
 
-For documentation and small code changes that are not publicly visible you do not need to create a feature request, just
-open a [Pull Request](#pull-requests). 
 
-If you want to change public API or Ember, please open a feature request to get feedback on your proposal first, before
-you start putting a lot of work in a PR that ends up not getting merged.
+## Submitting Issues
 
-### Before Submitting
+Before submitting an issue please check the 
+[Issue Tracker](https://github.com/Ewogijk/runeToolchain/issues) to make sure that your issue has 
+not been reported yet. If your issue has already been reported, comment on the existing issue rather
+than creating a new one.
 
-Please check out the following guidelines before you submit your feature request to avoid creating duplicate requests:
+You can submit a new issue by choosing one of the 
+[Issue Templates](https://github.com/Ewogijk/runeToolchain/issues/new/choose) and filling out the 
+template.
 
-1. **Make sure your feature is not already implemented** - If your feature is already implemented, check if your
-   suggestion adds anything to the implementation. If yes, feel free to create an issue.
-2. **Check the [Issue Tracker](https://github.com/Ewogijk/runeToolchain/issues)** - Your feature might have already been 
-     requested. If that is the case, comment on the existing issue rather than creating a new one.
-3. Make sure that [runeOS](https://github.com/Ewogijk/runeOS) Kernel supports the system call you want to be integrated.
-    If not, make a feature request over there first.
+## Submitting a Pull Request
 
-### Submitting a Feature Request
+Before you submit your pull request (PR), please take a look at our guidelines, they help us to
+ensure high quality and speed up the review:
 
-To request a feature fill out the [Feature Request](https://github.com/Ewogijk/runeToolchain/issues/new/choose) 
-template. Explain what your feature does and why you think it is important:
+- Search for an open [PR](https://github.com/Ewogijk/runeToolchain/pulls) that might relate to your 
+    submission, so you don't work on an issue that someone already fixed.
+- Follow our [Commit message style](#commit-message-style)
+- Document your changes.
+- Follow our [Code Style](#code-style).
+- Send the Pull Request to `runeToolchain/main`.
 
-- **Use a clear and descriptive title**
-- **Describe the feature or enhancement** - What problem does it solve? How does your solution look like? Why is it
-  useful for the project?
+Your first time contributing? Check out
+[First Contributions](https://github.com/firstcontributions/first-contributions), it is great repo that guides you
+through your first contribution.
 
-## Setting up your Local Development Environment
+After you submit the PR, we will review it and provide feedback. If we ask you to make changes to
+your submission then make the required changes to your code and push them to your fork, your PR will
+be updated automatically.
 
-Simply fork the repo and then clone your fork. If you are new to GitHub check out the 
-[First Contributions](https://github.com/firstcontributions/first-contributions), it is a great repository to learn 
-about pull requests which includes forking repositories.
+Once your PR gets accepted, we will merge it. That's it!
+
+
+## Building the Project
+
+### Getting the Dependencies
 
 Building GCC and Binutils requires the following dependencies:
 ```shell
@@ -94,52 +81,38 @@ mlibc uses meson for building, so you will need to get it:
 pip install scons click meson
 ```
 
-Our code formatter is `clang-format`, unfortunately the apt package of it is outdated. Run the following to get the
-clang-format version compatible with the `.clang-format` config:
 
-```shell
-wget https://apt.llvm.org/llvm.sh
-chmod +x llvm.sh
-sudo ./llvm.sh 19
-sudo apt install clang-format-19
-```
+### Building the Toolchain
 
-The `Libc/sysdeps/rune` directory contains the relevant code, you can ignore the other directories. The Ember library is 
-defined by the runeOS Kernel, it is not developed in this repo. The main development here is the integration of system 
-calls with Forge and mlibc.
-
-
-## Building the Toolchain
-
-You will need to build the freestanding and hosted compiler, both will make up the toolchain. First start with the 
-freestanding compiler:
+You will need to build the freestanding and hosted compiler, both will make up the toolchain. First 
+start with the freestanding compiler:
 
 ```shell
 ./Scripts/Build-Freestanding-Compiler.sh /path/to/your/systemroot num-make-jobs
 ```
 
-This helper script will compile Binutils and GCC for you and install the binaries in your specified system root. 
-Similarly, build the hosted compiler: 
+This helper script will compile Binutils and GCC for you and install the binaries in your specified
+system root. Similarly, build the hosted compiler: 
 
 ```shell
 ./Scripts/Build-Hosted-Compiler.sh /path/to/your/systemroot num-make-jobs
 ```
 
-This script will, additionally to Binutils and GCC, compile mlibc and libstdc++-v3. Ember and Forge are shipped as part
-of mlibc.
+This script will, additionally to Binutils and GCC, compile mlibc and libstdc++-v3. Ember and 
+Forge are shipped as part of mlibc.
 
 Now grab a coffee or two while you are waiting for everything to be built.
 
 
-## Pull Requests
+### Navigating the Project
 
-Pull requests are always greatly appreciated. When submitting consider the following:
+The project consists of three subprojects, use this overview to help you navigate the sources:
 
-1. Fork the repo.
-2. When contributing code: Set up your [Local Development Environment](#setting-up-your-local-development-environment).
-3. Be sure to document your changes.
-4. Consider the [styleguide](#styleguide)
-5. Open a PR from your fork to `runeToolchain/main`.
+- `GCC/`: GCC 13.2.0 sources.
+- `Binutils/`: Binutils 2.42 sources.
+- `Scripts`: Build scripts.
+- `LibC/`: mlibc sources.
+  - `LibC/sysdeps/rune/`: This directory contains Ember, Forge and the integration with mlibc.
 
 
 ## Styleguide
@@ -164,14 +137,15 @@ This feature solves this problem by doing this and that...
 
 ```
 
+
 ### Code Style
 
-Our code formatter for C/C++ is `clang-format`, use it with the `.clang-format` config file in the project root
-directory.
+Our code formatter for C/C++ is `clang-format-19`, use it with the `.clang-format` config file in 
+the project root directory.
 
-The following command will recursively format all .h/.cpp files in `SRC_DIR` with clang-format:
+Format the `SRC_FILES` with the following command:
 ```shell
-find SRC_DIR -name '*.h' -or -name '*.cpp' | xargs clang-format-19 -i
+clang-format-19 -i SRC_FILES
 ```
 
 Naming conventions are not covered by clang-format, please adhere to the following guidelines:
@@ -179,4 +153,3 @@ Naming conventions are not covered by clang-format, please adhere to the followi
 - Public member variables/Parameters/Local variables: snake_case
 - Private member variables: _snake_case - Note the leading underscore e.g. _my_private_variable
 - Global constants/Macros: SCREAMING_SNAKE_CASE
-
