@@ -2,7 +2,7 @@
 
 :tada: Welcome and thanks for taking the time to contribute to runeToolchain! :tada:
 
-This document is a set of guidelines for contributing to runeOS, please take a moment to review it.
+This document is a set of guidelines for contributing to runeToolchain, please take a moment to review it.
 These guidelines are not rules, so feel free to propose changes in a pull request.
 
 
