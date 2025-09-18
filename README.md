@@ -30,19 +30,5 @@ The list of features will be extended in the future as the kernel will be furthe
 
 ## How can I use the toolchain?
 
-Download the latest release and unzip it at a location of your choice. Optionally, you can add the compilers to your
-PATH environment variable, this is highly recommended. Now you are ready to use the toolchain.
-
-## Licensing
-
-The project is divided into subprojects, one directory for each subproject, and the Scripts/ directory with build 
-scripts. Each subproject has its own license, as well as the build scripts.
-
-In summary, these are the licenses of each subproject:
-
-- GCC: GPL v3 or later
-- Binutils: GPL v3 or later
-- mlibc: MIT License
-- Build scripts: Apache 2.0
-
-For details check the corresponding license file in the subproject's directory.
+Download the latest release, unzip it at a location of your choice and add the compilers to your 
+`PATH` environment variable. That's it!
