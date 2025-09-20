@@ -17,7 +17,7 @@
 TARGET=x86_64-elf
 
 help() {
-  echo Usage "./Build-Kernel-Toolchain.sh [-h] <system-root> <jobs>"
+  echo Usage "./Build-Freestanding-Compiler.sh [-h] <system-root> <jobs>"
   echo
   echo Build Binutils and GCC with "x86_64-elf" target.
   echo Everthing will be installed in the given system root.
@@ -47,7 +47,7 @@ JOBS=$2
 
 
 echo
-echo Build Kernel Cross-Compiler:
+echo Build Frestanding Cross-Compiler:
 echo ----------------------------
 echo
 echo "Commandline Arguments:"
@@ -57,8 +57,8 @@ echo
 
 
 # Create the temp directory for sources and build files
-mkdir -p build-kernel
-cd build-kernel
+mkdir -p build-freestanding
+cd build-freestanding
 
 # --- Build Binutils ---
 # Add the installation directory so our binutils is recognized after installation
@@ -83,4 +83,4 @@ make install-target-libgcc
 
 # Clean up
 cd ../..
-rm -r build-kernel
+rm -r build-freestanding

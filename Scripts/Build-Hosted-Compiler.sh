@@ -17,7 +17,7 @@
 TARGET=x86_64-rune
 
 help() {
-  echo Usage "./Build-Userspace-Toolchain.sh [-h] <system-root> <jobs>"
+  echo Usage "./Build-Hosted-Compiler.sh [-h] <system-root> <jobs>"
   echo
   echo Build Binutils and GCC with "x86_64-rune" target and then mlibc and libstdc++-v3.
   echo Everthing will be installed in the given system root.
@@ -46,7 +46,7 @@ SYSROOT=$1
 JOBS=$2
 
 echo
-echo Build Userspace Cross-Compiler:
+echo Build Hosted Compiler:
 echo -------------------------------
 echo
 echo "Commandline Arguments:"
@@ -56,10 +56,10 @@ echo
 
 # Build LibC with system compiler
 # This needs to be done because GCC expects a libc during compilation
-mkdir -p build-userspace/LibC
+mkdir -p build-hosted/LibC
 cd LibC
-meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-userspace/LibC
-cd ../build-userspace/LibC
+meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-hosted/LibC
+cd ../build-hosted/LibC
 meson compile
 meson install
 
@@ -81,8 +81,8 @@ cd ..
 rm -r LibC
 mkdir -p LibC
 cd ../LibC
-meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build/LibC
-cd ../build-userspace/LibC
+meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-hosted/LibC
+cd ../build-hosted/LibC
 meson compile
 meson install
 
@@ -93,4 +93,4 @@ make install-target-libstdc++-v3
 
 # Clean up
 cd ../..
-rm -r build-userspace
+rm -r build-hosted
