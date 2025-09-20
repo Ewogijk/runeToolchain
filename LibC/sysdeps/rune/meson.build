@@ -5,6 +5,9 @@ sysdep_supported_options = {
     'bsd': true,
 }
 
+add_project_arguments('-mincoming-stack-boundary=3', language : 'c')
+add_project_arguments('-mincoming-stack-boundary=3', language : 'cpp')
+
 rtld_sources += files(
     'Ember/AppBits.cpp',
     'Ember/Ember.cpp',
