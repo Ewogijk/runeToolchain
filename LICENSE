@@ -1,5 +1,3 @@
-# Licensing
-
 The project is divided into subprojects, one directory for each subproject, and the Scripts/ directory with build
 scripts. Each subproject has its own license, as well as the build scripts.
 
