@@ -2,8 +2,9 @@
 
 #include <mlibc/all-sysdeps.hpp>
 
-#include <poll.h>
-#include <errno.h>
+#include <abi-bits/errno.h>
+#include <abi-bits/fcntl.h>
+
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -24,7 +25,8 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     [[noreturn]] void sys_exit(int status) {
     	Forge::app_exit(status);
     }
-    [[noreturn, gnu::weak]] void sys_thread_exit() {
+    [[noreturn, gnu::weak]] void sys_thread_exit()
+	{
         Forge::syscall_not_ported("sys_thread_exit");
     }
 
@@ -45,8 +47,55 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     }
 
     int sys_open(const char *pathname, int flags, mode_t mode, int *fd) {
-        Forge::syscall_not_ported("sys_open");
+    	const int file_access_mode = flags & 0x3;
+		if (file_access_mode > 2) {
+			return EINVAL;
+		}
+    	if (flags & O_CREAT) {
+			const auto st_code = Forge::vfs_create(pathname, Ember::NodeAttribute::FILE);
+    		if (st_code != Ember::Status::OKAY && st_code != Ember::Status::NODE_EXISTS) {
+    			switch (st_code) {
+    				// TODO BAD_ARG feels to general, should we differentiate between more errors?
+    				case Ember::Status::BAD_ARG:
+    					return EINVAL;
+    				case Ember::Status::IO_ERROR:
+    					// Linux does not have a generic IO error (maybe we should not either?)
+    					// -> Just return ENXIO to indicate that no device with this file exists
+    					return ENXIO;
+    				default:
+    					return ENXIO;
+    			}
+    		}
+    	}
+
+    	Ember::IOMode io_mode;
+    	if (file_access_mode == 0) {
+    		io_mode = Ember::IOMode::READ;
+    	} else {
+    		// We do not support O_WRONLY which means that O_WRONLY==O_RDWR for us
+    		io_mode = Ember::IOMode::WRITE;
+    	}
+    	// Append always allows reading and writing therefore the value defined by file_access_mode
+    	// can be overwritten
+    	if (flags & O_APPEND) io_mode = Ember::IOMode::APPEND;
+
+    	const auto st_code = Forge::vfs_open(pathname, io_mode);
+    	if (st_code < Ember::Status::OKAY) {
+    		switch (st_code) {
+    			case Ember::Status::BAD_ARG:
+    				return EINVAL;
+    			case Ember::Status::NODE_NOT_FOUND:
+    				return ENOENT;
+    			case Ember::Status::IO_ERROR:
+    				return ENXIO;
+    			default:
+    				return ENXIO;
+    		}
+    	}
+    	*fd = st_code;
+        return 0;
     }
+
     [[gnu::weak]] int sys_flock(int fd, int options) {
         Forge::syscall_not_ported("sys_flock");
     }
@@ -60,7 +109,20 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     }
 
     int sys_read(int fd, void *buf, size_t count, ssize_t *bytes_read) {
-        Forge::syscall_not_ported("sys_read");
+    	auto st = Forge::vfs_read(fd, buf, count);
+    	if (st < Ember::Status::OKAY) {
+			switch (st) {
+				case Ember::Status::BAD_ARG:
+				case Ember::Status::UNKNOWN_ID:
+				case Ember::Status::NODE_CLOSED: return EBADF;
+				case Ember::Status::NODE_IS_DIRECTORY: return EISDIR;
+				case Ember::Status::IO_ERROR: return EIO;
+				case Ember::Status::FAULT: return EFAULT;
+				default: return -1;
+			}
+    	}
+        *bytes_read = st;
+    	return 0;
     }
 
     int sys_write(int fd, const void *buf, size_t count, ssize_t *bytes_written) {
@@ -118,7 +180,8 @@ namespace [[gnu::visibility("hidden")]] mlibc {
         return 0;
     }
     int sys_close(int fd) {
-        Forge::syscall_not_ported("sys_close");
+    	// We treat BAD_ARG and UNKNOWN_ID both as EBADF
+        return Forge::vfs_close(fd) == Ember::Status::OKAY ? 0 : EBADF;
     }
 
     int sys_clock_get(int clock, time_t *secs, long *nanos) {
