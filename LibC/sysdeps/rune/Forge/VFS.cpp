@@ -26,7 +26,7 @@ namespace Forge {
     }
 
 
-    bool vfs_close(U16 node_handle) {
+    Ember::StatusCode vfs_close(U16 node_handle) {
         return system_call1(Ember::VFS::CLOSE, node_handle);
     }
 

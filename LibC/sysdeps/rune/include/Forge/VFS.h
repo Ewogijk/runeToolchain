@@ -73,7 +73,7 @@ namespace Forge {
 	 *          BAD_ARG:    The node ID is 0.<br>
 	 *          UNKNOWN_ID: No node with the given ID was found.
 	 */
-    bool vfs_close(U16 ID);
+    Ember::StatusCode vfs_close(U16 ID);
 
 
 	/**
