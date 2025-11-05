@@ -10,6 +10,10 @@ namespace Forge {
         return system_call2(Ember::VFS::GET_NODE_INFO, reinterpret_cast<uintptr_t>(node_path), reinterpret_cast<uintptr_t>(node_info_out));
     }
 
+	Ember::StatusCode vfs_get_node_info_by_ID(U16 node_ID, Ember::NodeInfo* node_info_out) {
+    	return system_call2(Ember::VFS::GET_NODE_INFO_BY_ID, node_ID, reinterpret_cast<uintptr_t>(node_info_out));
+    }
+
 
     Ember::StatusCode vfs_create(const char* node_path, U8 node_attr) {
         return system_call2(Ember::VFS::CREATE, (uintptr_t) node_path, node_attr);
