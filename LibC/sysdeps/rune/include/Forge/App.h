@@ -59,9 +59,9 @@ namespace Forge {
 	 * @param argv          Pointer to the command line arguments, a null terminated array of c strings.
 	 * @param working_dir   The working directory of the app that will be started, either absolute or relative to the
 	 *                       working directory of the calling app.
-	 * @param stdin_target  stdin stream target.
-	 * @param stdout_target stdout stream target.
-	 * @param stderr_target stderr stream target.
+	 * @param stdin_config  stdin stream target.
+	 * @param stdout_config stdout stream target.
+	 * @param stderr_config stderr stream target.
 	 * @return >0:              The app has been started, the returned value is the assigned ID.<br>
 	 *          BAD_ARG:        One of the arguments is null, intersects kernel memory, exceeds the string size
 	 *                          limit or the number of arguments in argv exceeds the argument count limit.<br>
@@ -72,9 +72,9 @@ namespace Forge {
             const char* app_path,
             const char* argv[],
             const char* working_dir,
-            const char* stdin_target,
-            const char* stdout_target,
-            const char* stderr_target
+            const Ember::StdIOConfig& stdin_config,
+            const Ember::StdIOConfig& stdout_config,
+            const Ember::StdIOConfig& stderr_config
     );
 
 
