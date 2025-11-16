@@ -1,5 +1,11 @@
 #include "Forge/VFS.h"
 
+#include <dirent.h>
+
+#include <frg/hash_map.hpp>
+#include <frg/hash.hpp>
+
+#include <mlibc/allocator.hpp>
 #include <mlibc/all-sysdeps.hpp>
 
 #include <abi-bits/errno.h>
@@ -16,7 +22,22 @@
 #include <Forge/Memory.h>
 #include <Forge/Threading.h>
 
+namespace frg FRG_VISIBILITY {
+	template<>
+	class hash<U16> {
+	public:
+		unsigned int operator() (U16 v) const {
+			return v;
+		}
+	};
+}
+
 namespace [[gnu::visibility("hidden")]] mlibc {
+
+	using NodeToDirStreamIDTT = frg::hash_map<U16, U16, frg::hash<U16>, MemoryAllocator>;
+
+	/// TODO doc me
+	NodeToDirStreamIDTT NODE_ID_TO_DIR_STREAM_ID(frg::hash<U16>(), getAllocator());
 
     //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
     //                                          ansi sysdeps
@@ -24,6 +45,7 @@ namespace [[gnu::visibility("hidden")]] mlibc {
 
     [[noreturn]] void sys_exit(int status) {
     	Forge::app_exit(status);
+    	while (true);
     }
     [[noreturn, gnu::weak]] void sys_thread_exit()
 	{
@@ -105,7 +127,41 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     }
     [[gnu::weak]] int sys_read_entries(int handle, void *buffer, size_t max_size,
                                        size_t *bytes_read) {
-        Forge::syscall_not_ported("sys_read_entries");
+    	NodeToDirStreamIDTT::iterator maybe_dir_stream_ID = NODE_ID_TO_DIR_STREAM_ID.find(handle);
+    	if (maybe_dir_stream_ID == NODE_ID_TO_DIR_STREAM_ID.end()) {
+    		// Open directory stream
+			Ember::NodeInfo node_info;
+			auto st = Forge::vfs_get_node_info_by_ID(handle, &node_info);
+			if (st < Ember::Status::OKAY) return st;
+
+    		st = Forge::vfs_directory_stream_open(node_info.node_path);
+    		if (st < Ember::Status::OKAY) return st;
+    		NODE_ID_TO_DIR_STREAM_ID.insert(handle, st);
+    		maybe_dir_stream_ID = NODE_ID_TO_DIR_STREAM_ID.find(handle);
+    	}
+
+    	// Read NodeInfo
+    	const U16 dir_stream_ID = maybe_dir_stream_ID->get<1>();
+    	Ember::NodeInfo node_info;
+    	Ember::StatusCode st = Forge::vfs_directory_stream_next(dir_stream_ID, &node_info);
+    	if (st < Ember::Status::OKAY) return st; // Error
+		if (st == Ember::Status::DIRECTORY_STREAM_EOD) {
+			// No more nodes left
+			*bytes_read = 0;
+			return 0;
+		}
+
+    	// Convert NodeInfo -> dirent
+    	__ensure(max_size > sizeof(dirent));
+    	auto ent = new (buffer) struct dirent;
+    	memset(ent, 0, sizeof(struct dirent));
+    	ent->d_ino = 0;
+    	memcpy(ent->d_name, node_info.node_path, Ember::STRING_SIZE_LIMIT);
+    	ent->d_off = 0; // This is the position in the stream e.g. entry 5 -> Not supported
+    	ent->d_reclen = sizeof(dirent);
+    	ent->d_type = node_info.is_file() ? DT_REG : DT_DIR;
+    	*bytes_read = sizeof(dirent);
+    	return 0;
     }
 
     int sys_read(int fd, void *buf, size_t count, ssize_t *bytes_read) {
@@ -180,6 +236,11 @@ namespace [[gnu::visibility("hidden")]] mlibc {
         return 0;
     }
     int sys_close(int fd) {
+    	// Close associated directory stream
+    	NodeToDirStreamIDTT::iterator maybe_dir_stream_ID = NODE_ID_TO_DIR_STREAM_ID.find(fd);
+    	if (maybe_dir_stream_ID != NODE_ID_TO_DIR_STREAM_ID.end())
+    		Forge::vfs_directory_stream_close(maybe_dir_stream_ID->get<1>());
+
     	// We treat BAD_ARG and UNKNOWN_ID both as EBADF
         return Forge::vfs_close(fd) == Ember::Status::OKAY ? 0 : EBADF;
     }
@@ -237,7 +298,8 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     	return Forge::app_get_ID();
     }
     [[gnu::weak]] int sys_kill(int, int) {
-        Forge::syscall_not_ported("sys_kill");
+        //TODO Implement something like signals
+    	Forge::app_exit(-1);
     }
 
     //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
@@ -308,11 +370,9 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     		num_pages,
     		Ember::PageProtection::WRITE
     	);
-	    if (const auto ret = reinterpret_cast<uintptr_t>(mem); ret == Ember::Status::BAD_ARG) {
-			return EINVAL;
-    	} else if (ret == Ember::Status::FAULT) {
-    		return ENOMEM;
-    	}
+    	const auto ret = reinterpret_cast<uintptr_t>(mem);
+	    if (ret == Ember::Status::BAD_ARG) return EINVAL;
+    	if (ret == Ember::Status::FAULT) return ENOMEM;
     	*pointer = mem;
     	return 0;
     }
@@ -320,17 +380,55 @@ namespace [[gnu::visibility("hidden")]] mlibc {
     int sys_anon_free(void *pointer, size_t size) {
     	const size_t page_size = Forge::memory_get_page_size();
     	const size_t num_pages = (size + page_size - 1) / page_size; // ceil() on page boundary
-	    if (const auto ret = Forge::memory_free_page(pointer, num_pages); ret == Ember::Status::BAD_ARG) {
-    		return EINVAL;
-    	} else if (ret == Ember::Status::FAULT) {
-    		return ENOMEM;
-    	}
+    	const auto ret = Forge::memory_free_page(pointer, num_pages);
+	    if (ret == Ember::Status::BAD_ARG) return EINVAL;
+    	if (ret == Ember::Status::FAULT) return ENOMEM;
     	return 0;
     }
 
     [[gnu::weak]] int sys_stat(fsfd_target fsfdt, int fd, const char *path, int flags,
                                struct stat *statbuf) {
-        Forge::syscall_not_ported("sys_stat");
+    	Ember::NodeInfo node_info;
+    	if (fsfdt == fsfd_target::path) {
+    		const auto st = Forge::vfs_get_node_info(path, &node_info);
+    		if (st < Ember::Status::OKAY) {
+    			// BAD_ARG can have multiple reasons, which we cannot differentiate between
+    			// -> We just report a memory error
+    			// Linux does not have an IO_ERROR equivalent -> Just report memory error
+    			return st == Ember::Status::NODE_NOT_FOUND ? ENOTDIR : EFAULT;
+    		}
+    	} else {
+    		const auto st = Forge::vfs_get_node_info_by_ID(fd, &node_info);
+    		if (st < Ember::Status::OKAY) {
+    			// BAD_ARG can have multiple reasons, which we cannot differentiate between
+    			// -> We just report a memory error
+    			return st == Ember::Status::NODE_NOT_FOUND ? ENOTDIR : EFAULT;
+    		}
+    	}
+
+    	statbuf->st_dev = 0;
+    	statbuf->st_ino = 0;
+    	statbuf->st_nlink = 0;
+    	statbuf->st_mode = node_info.is_file() ? S_IFREG : S_IFDIR;
+    	statbuf->st_uid = 0;
+    	statbuf->st_gid = 0;
+    	statbuf->st_rdev = 0;
+    	statbuf->st_size = (off_t) node_info.size;
+
+    	// Node are not associated with their containing device, so the blksize and blocks info is
+    	// missing, but a sector size of 512 bytes is a reasonable default
+    	constexpr size_t def_block_size = 512;
+    	statbuf->st_blksize = def_block_size;
+    	statbuf->st_blocks = (blkcnt_t) (node_info.size / def_block_size);
+
+    	// Access, modification and creation times are not supported atm
+    	statbuf->st_atim.tv_nsec = 0;
+    	statbuf->st_atim.tv_sec = 0;
+    	statbuf->st_mtim.tv_nsec = 0;
+    	statbuf->st_mtim.tv_sec = 0;
+    	statbuf->st_ctim.tv_nsec = 0;
+    	statbuf->st_ctim.tv_sec = 0;
+    	return 0;
     }
     // mlibc assumes that anonymous memory returned by sys_vm_map() is zeroed by the kernel / whatever is behind the sysdeps
     int sys_vm_map(void *hint, size_t size, int prot, int flags, int fd, off_t offset, void **window) {
@@ -552,7 +650,55 @@ namespace [[gnu::visibility("hidden")]] mlibc {
         Forge::syscall_not_ported("sys_fallocate");
     }
     [[gnu::weak]] int sys_openat(int dirfd, const char *path, int flags, mode_t mode, int *fd) {
-        Forge::syscall_not_ported("sys_openat");
+    	if (dirfd != AT_FDCWD) return EINVAL;
+
+    	const int file_access_mode = flags & 0x3;
+    	if (file_access_mode > 2) {
+    		return EINVAL;
+    	}
+    	if (flags & O_CREAT) {
+    		const auto st_code = Forge::vfs_create(path, Ember::NodeAttribute::FILE);
+    		if (st_code != Ember::Status::OKAY && st_code != Ember::Status::NODE_EXISTS) {
+    			switch (st_code) {
+    				// TODO BAD_ARG feels to general, should we differentiate between more errors?
+    				case Ember::Status::BAD_ARG:
+    					return EINVAL;
+    				case Ember::Status::IO_ERROR:
+    					// Linux does not have a generic IO error (maybe we should not either?)
+    					// -> Just return ENXIO to indicate that no device with this file exists
+    					return ENXIO;
+    				default:
+    					return ENXIO;
+    			}
+    		}
+    	}
+
+    	Ember::IOMode io_mode;
+    	if (file_access_mode == 0) {
+    		io_mode = Ember::IOMode::READ;
+    	} else {
+    		// We do not support O_WRONLY which means that O_WRONLY==O_RDWR for us
+    		io_mode = Ember::IOMode::WRITE;
+    	}
+    	// Append always allows reading and writing therefore the value defined by file_access_mode
+    	// can be overwritten
+    	if (flags & O_APPEND) io_mode = Ember::IOMode::APPEND;
+
+    	const auto st_code = Forge::vfs_open(path, io_mode);
+    	if (st_code < Ember::Status::OKAY) {
+    		switch (st_code) {
+    			case Ember::Status::BAD_ARG:
+    				return EINVAL;
+    			case Ember::Status::NODE_NOT_FOUND:
+    				return ENOENT;
+    			case Ember::Status::IO_ERROR:
+    				return ENXIO;
+    			default:
+    				return ENXIO;
+    		}
+    	}
+    	*fd = st_code;
+    	return 0;
     }
     [[gnu::weak]] int sys_socket(int family, int type, int protocol, int *fd) {
         Forge::syscall_not_ported("sys_socket");
@@ -685,6 +831,11 @@ namespace [[gnu::visibility("hidden")]] mlibc {
         Forge::syscall_not_ported("sys_symlinkat");
     }
     [[gnu::weak]] int sys_fcntl(int fd, int request, va_list args, int *result) {
+    	if (request == F_GETFD || request == F_SETFD) {
+    		// Flags on node IDs are not supported
+			*result = 0;
+    		return 0;
+    	}
         Forge::syscall_not_ported("sys_fcntl");
     }
     [[gnu::weak]] int sys_ttyname(int fd, char *buf, size_t size) {
