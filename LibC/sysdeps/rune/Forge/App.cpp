@@ -29,19 +29,19 @@ namespace Forge {
             const char* app_path,
             const char** argv,
             const char* working_dir,
-            const char* stdin_target,
-            const char* stdout_target,
-            const char* stderr_target
+            const Ember::StdIOConfig& stdin_config,
+            const Ember::StdIOConfig& stdout_config,
+            const Ember::StdIOConfig& stderr_config
     ) {
-        return static_cast<int>(system_call6(
+        return system_call6(
 	        Ember::App::START,
 	        reinterpret_cast<uintptr_t>(app_path),
 	        reinterpret_cast<uintptr_t>(argv),
 	        reinterpret_cast<uintptr_t>(working_dir),
-	        reinterpret_cast<uintptr_t>(stdin_target),
-	        reinterpret_cast<uintptr_t>(stdout_target),
-	        reinterpret_cast<uintptr_t>(stderr_target)
-        ));
+	        reinterpret_cast<uintptr_t>(&stdin_config),
+	        reinterpret_cast<uintptr_t>(&stdout_config),
+	        reinterpret_cast<uintptr_t>(&stderr_config)
+        );
     }
 
 
