@@ -813,7 +813,7 @@ namespace [[gnu::visibility("hidden")]] mlibc {
         Forge::syscall_not_ported("sys_chroot");
     }
     [[gnu::weak]] int sys_mkdir(const char *path, mode_t mode) {
-        Forge::syscall_not_ported("sys_mkdir");
+    	return Forge::vfs_create(path, Ember::NodeAttribute::DIRECTORY);
     }
     [[gnu::weak]] int sys_mkdirat(int dirfd, const char *path, mode_t mode) {
         Forge::syscall_not_ported("sys_mkdirat");
