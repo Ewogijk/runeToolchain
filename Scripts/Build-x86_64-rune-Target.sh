@@ -1,3 +1,5 @@
+#!/bin/bash
+
 #
 #  Copyright 2025 Ewogijk
 #
@@ -14,10 +16,12 @@
 #  limitations under the License.
 #
 
+set -euo pipefail
+
 TARGET=x86_64-rune
 
 help() {
-  echo Usage "./Build-Hosted-Compiler.sh [-h] <system-root> <jobs>"
+  echo Usage "./Build-x86_64-rune-Target.sh [-h] <system-root> <jobs>"
   echo
   echo Build Binutils and GCC with "x86_64-rune" target and then mlibc and libstdc++-v3.
   echo Everthing will be installed in the given system root.
@@ -46,7 +50,7 @@ SYSROOT=$1
 JOBS=$2
 
 echo
-echo Build Hosted Compiler:
+echo Build GCC for x86_64-rune Target:
 echo -------------------------------
 echo
 echo "Commandline Arguments:"
@@ -56,10 +60,10 @@ echo
 
 # Build LibC with system compiler
 # This needs to be done because GCC expects a libc during compilation
-mkdir -p build-hosted/LibC
+mkdir -p build-x86_64-rune/LibC
 cd LibC
-meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-hosted/LibC
-cd ../build-hosted/LibC
+meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-x86_64-rune/LibC
+cd ../build-x86_64-rune/LibC
 meson compile
 meson install
 
@@ -81,8 +85,8 @@ cd ..
 rm -r LibC
 mkdir -p LibC
 cd ../LibC
-meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-hosted/LibC
-cd ../build-hosted/LibC
+meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-x86_64-rune/LibC
+cd ../build-x86_64-rune/LibC
 meson compile
 meson install
 
@@ -93,4 +97,4 @@ make install-target-libstdc++-v3
 
 # Clean up
 cd ../..
-rm -r build-hosted
+rm -r build-x86_64-rune
