@@ -84,18 +84,18 @@ pip install scons click meson
 
 ### Building the Toolchain
 
-You will need to build the freestanding and hosted compiler, both will make up the toolchain. First 
-start with the freestanding compiler:
+The runeToolchain consists two GCC builds one for the x86_64-elf target, the other for the 
+x86_64-rune target. First build GCC for `x86_64-elf`:
 
 ```shell
-./Scripts/Build-Freestanding-Compiler.sh /path/to/your/systemroot num-make-jobs
+./Scripts/Build-x86_64-elf-Target.sh /path/to/your/systemroot num-make-jobs
 ```
 
 This helper script will compile Binutils and GCC for you and install the binaries in your specified
-system root. Similarly, build the hosted compiler: 
+system root. Similarly, build GCC for `x86_64-rune`:
 
 ```shell
-./Scripts/Build-Hosted-Compiler.sh /path/to/your/systemroot num-make-jobs
+./Scripts/Build-x86_64-rune-Target.sh /path/to/your/systemroot num-make-jobs
 ```
 
 This script will, additionally to Binutils and GCC, compile mlibc and libstdc++-v3. Ember and 
