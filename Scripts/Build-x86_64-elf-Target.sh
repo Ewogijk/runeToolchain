@@ -1,3 +1,5 @@
+#!/bin/bash
+
 #
 #  Copyright 2025 Ewogijk
 #
@@ -14,10 +16,12 @@
 #  limitations under the License.
 #
 
+set -euo pipefail
+
 TARGET=x86_64-elf
 
 help() {
-  echo Usage "./Build-Freestanding-Compiler.sh [-h] <system-root> <jobs>"
+  echo Usage "./Build-x86_64-elf-Target.sh [-h] <system-root> <jobs>"
   echo
   echo Build Binutils and GCC with "x86_64-elf" target.
   echo Everthing will be installed in the given system root.
@@ -47,7 +51,7 @@ JOBS=$2
 
 
 echo
-echo Build Frestanding Cross-Compiler:
+echo Build GCC for x86_64-elf Target:
 echo ----------------------------
 echo
 echo "Commandline Arguments:"
@@ -57,8 +61,8 @@ echo
 
 
 # Create the temp directory for sources and build files
-mkdir -p build-freestanding
-cd build-freestanding
+mkdir -p build-x86_64-elf
+cd build-x86_64-elf
 
 # --- Build Binutils ---
 # Add the installation directory so our binutils is recognized after installation
@@ -83,4 +87,4 @@ make install-target-libgcc
 
 # Clean up
 cd ../..
-rm -r build-freestanding
+rm -r build-x86_64-elf
