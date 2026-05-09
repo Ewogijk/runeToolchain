@@ -19,6 +19,19 @@ void __switch_errorT()(string file = __FILE__, size_t line = __LINE__) @trusted
         assert(0, "No appropriate switch clause found");
 }
 
+/*
+ * Make sure template __switch_errorT is always instantiated when building
+ * druntime. This works around https://issues.dlang.org/show_bug.cgi?id=20802.
+ * When druntime and phobos are compiled with -release, the instance for
+ * __switch_errorT is not needed. An application compiled with -release
+ * could need the instance for __switch_errorT, but the compiler would
+ * not generate code for it, because it assumes, that it was already
+ * generated for druntime. Always including the instance in a compiled
+ * druntime allows to use an application without -release with druntime
+ * with -release.
+ */
+private alias dummy__switch_errorT = __switch_errorT!();
+
 /**
  * Thrown on a range error.
  */
@@ -262,6 +275,49 @@ unittest
     }
 }
 
+/**
+ * When an unmapped pointer is accessed this may be thrown via a signal handler.
+ */
+class InvalidPointerError : Error
+{
+    @safe pure nothrow @nogc this(string file, size_t line)
+    {
+        this(file, line, cast(Throwable)null);
+    }
+
+    @safe pure nothrow @nogc this(string file = __FILE__, size_t line = __LINE__, Throwable next = null)
+    {
+        this("Invalid pointer access", file, line, next);
+    }
+
+    @safe pure nothrow @nogc this(string msg, string file = __FILE__, size_t line = __LINE__, Throwable next = null)
+    {
+        super(msg, file, line, next);
+    }
+}
+
+/**
+ * Thrown when a null dereference may occur.
+ *
+ * Depends upon null dereference check, or a signal handler to throw.
+ */
+class NullPointerError : InvalidPointerError
+{
+    @safe pure nothrow @nogc this(string file, size_t line)
+    {
+        this(file, line, cast(Throwable)null);
+    }
+
+    @safe pure nothrow @nogc this(string file = __FILE__, size_t line = __LINE__, Throwable next = null)
+    {
+        this("Null pointer dereference", file, line, next);
+    }
+
+    @safe pure nothrow @nogc this(string msg, string file = __FILE__, size_t line = __LINE__, Throwable next = null)
+    {
+        super(msg, file, line, next);
+    }
+}
 
 /**
  * Thrown on finalize error.
@@ -515,7 +571,12 @@ unittest
 //       behavior should occur within the handler itself.  This delegate
 //       is __gshared for now based on the assumption that it will only
 //       set by the main thread during program initialization.
-private __gshared AssertHandler _assertHandler = null;
+private __gshared
+{
+    AssertHandler _assertHandler = null;
+    FilterThreadThrowableHandler _filterThreadThrowableHandler = null;
+    NullDerefHandler _nullDerefHandler = null;
+}
 
 
 /**
@@ -535,6 +596,39 @@ alias AssertHandler = void function(string file, size_t line, string msg) nothro
     _assertHandler = handler;
 }
 
+/**
+Gets/sets the Throwable filter function for threads. null means no handler is called.
+*/
+alias FilterThreadThrowableHandler = void function(ref Throwable) @system nothrow;
+
+/// ditto
+@property FilterThreadThrowableHandler filterThreadThrowableHandler() @trusted nothrow @nogc
+{
+    return _filterThreadThrowableHandler;
+}
+
+/// ditto
+@property void filterThreadThrowableHandler(FilterThreadThrowableHandler handler) @trusted nothrow @nogc
+{
+    _filterThreadThrowableHandler = handler;
+}
+
+/**
+Gets/sets null dereference handler. null means the default handler is used.
+*/
+alias NullDerefHandler = void function(string file, size_t line) nothrow;
+
+/// ditto
+@property NullDerefHandler nullDerefHandler() @trusted nothrow @nogc
+{
+    return _nullDerefHandler;
+}
+
+/// ditto
+@property void nullDerefHandler(NullDerefHandler handler) @trusted nothrow @nogc
+{
+    _nullDerefHandler = handler;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Overridable Callbacks
@@ -575,6 +669,21 @@ extern (C) void onAssertErrorMsg( string file, size_t line, string msg ) nothrow
     _assertHandler( file, line, msg );
 }
 
+/**
+ * A callback for null dereference errors in D.
+ * The user-supplied dereference handler will be called if one has been supplied,
+ * otherwise an $(LREF NullPointerError) will be thrown.
+ *
+ * Params:
+ *  file = The name of the file that signaled this error.
+ *  line = The line number on which this error occured.
+ */
+extern(C) void onNullPointerError(string file = __FILE__, size_t line = __LINE__) nothrow
+{
+    if (_nullDerefHandler is null)
+        throw staticError!NullPointerError(file, line);
+    _nullDerefHandler(file, line);
+}
 
 /**
  * A callback for unittest errors in D.  The user-supplied unittest handler
@@ -697,17 +806,17 @@ else
      * Throws:
      *  $(LREF OutOfMemoryError).
      */
-    extern (C) noreturn onOutOfMemoryError(void* pretend_sideffect = null) @trusted pure nothrow @nogc /* dmd @@@BUG11461@@@ */
+    extern (C) noreturn onOutOfMemoryError(void* pretend_sideffect = null, string file = __FILE__, size_t line = __LINE__) @trusted pure nothrow @nogc /* dmd @@@BUG11461@@@ */
     {
         // NOTE: Since an out of memory condition exists, no allocation must occur
         //       while generating this object.
-        throw staticError!OutOfMemoryError();
+        throw staticError!OutOfMemoryError(file, line);
     }
 
-    extern (C) noreturn onOutOfMemoryErrorNoGC() @trusted nothrow @nogc
+    extern (C) noreturn onOutOfMemoryErrorNoGC(string file = __FILE__, size_t line = __LINE__) @trusted nothrow @nogc
     {
         // suppress stacktrace until they are @nogc
-        throw staticError!OutOfMemoryError(false);
+        throw staticError!OutOfMemoryError(false, file, line);
     }
 }
 
@@ -718,11 +827,11 @@ else
  * Throws:
  *  $(LREF InvalidMemoryOperationError).
  */
-extern (C) noreturn onInvalidMemoryOperationError(void* pretend_sideffect = null) @trusted pure nothrow @nogc /* dmd @@@BUG11461@@@ */
+extern (C) noreturn onInvalidMemoryOperationError(void* pretend_sideffect = null, string file = __FILE__, size_t line = __LINE__) @trusted pure nothrow @nogc /* dmd @@@BUG11461@@@ */
 {
     // The same restriction applies as for onOutOfMemoryError. The GC is in an
     // undefined state, thus no allocation must occur while generating this object.
-    throw staticError!InvalidMemoryOperationError();
+    throw staticError!InvalidMemoryOperationError(file, line);
 }
 
 
@@ -850,6 +959,12 @@ extern (C)
     void _d_arraybounds_index(string file, uint line, size_t index, size_t length)
     {
         onArrayIndexError(index, length, file, line);
+    }
+
+    void _d_nullpointerp(immutable(char*) file, uint line)
+    {
+        import core.stdc.string : strlen;
+        onNullPointerError(file[0 .. strlen(file)], line);
     }
 }
 

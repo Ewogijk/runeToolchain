@@ -6,7 +6,7 @@
  *                                                                          *
  *                          C Implementation File                           *
  *                                                                          *
- *          Copyright (C) 1992-2023, Free Software Foundation, Inc.         *
+ *          Copyright (C) 1992-2026, Free Software Foundation, Inc.         *
  *                                                                          *
  * GNAT is free software;  you can  redistribute it  and/or modify it under *
  * terms of the  GNU General Public License as published  by the Free Soft- *
@@ -47,6 +47,7 @@
 #ifdef __vxworks
 #include "vxWorks.h"
 #include "version.h" /* for _WRS_VXWORKS_MAJOR */
+#include <string.h> /* for strncmp */
 #endif
 
 #ifdef __ANDROID__
@@ -88,6 +89,14 @@ extern struct Exception_Data numeric_error;
 extern struct Exception_Data program_error;
 extern struct Exception_Data storage_error;
 
+/* Exception IDs for CHERI Ada exceptions (see Interfaces.CHERI.Exceptions) */
+#ifdef __CHERI__
+extern Exception_Id capability_bound_error_id;
+extern Exception_Id capability_permission_error_id;
+extern Exception_Id capability_sealed_error_id;
+extern Exception_Id capability_tag_error_id;
+#endif
+
 /* For the Cert run time we use the regular raise exception routine because
    __gnat_raise_from_signal_handler is not available.  */
 #ifdef CERT
@@ -122,6 +131,7 @@ int   __gl_leap_seconds_support          = 0;
 int   __gl_canonical_streams             = 0;
 char *__gl_bind_env_addr                 = NULL;
 int   __gl_xdr_stream                    = 0;
+int   __gl_interrupts_default_to_system  = 0;
 
 /* This value is not used anymore, but kept for bootstrapping purpose.  */
 int   __gl_zero_cost_exceptions          = 0;
@@ -148,20 +158,25 @@ int __gnat_inside_elab_final_code = 0;
 char __gnat_get_interrupt_state (int);
 
 /* This routine is called from the runtime as needed to determine the state
-   of an interrupt, as set by an Interrupt_State pragma appearing anywhere
-   in the current partition.  The input argument is the interrupt number,
-   and the result is one of the following:
+   of an interrupt, as set by an Interrupt_State pragma or an
+   Interrupts_System_By_Default pragma appearing anywhere in the current
+   partition.  The input argument is the interrupt number, and the result
+   is one of the following:
 
-       'n'   this interrupt not set by any Interrupt_State pragma
-       'u'   Interrupt_State pragma set state to User
-       'r'   Interrupt_State pragma set state to Runtime
-       's'   Interrupt_State pragma set state to System  */
+       'u'   if Interrupt_State pragma set to User;
+       'r'   if Interrupt_State pragma set to Runtime;
+       's'   if Interrupt_State pragma set to System or
+             Interrupts_System_By_Default in effect; otherwise
+       'n'   (there is no Interrupt_State pragma and no request for a default).
+
+   See pragma Interrupt_State documentation for a description
+   of the effect and meaning of states User, Runtime, and System.  */
 
 char
 __gnat_get_interrupt_state (int intrup)
 {
   if (intrup >= __gl_num_interrupt_states)
-    return 'n';
+    return (__gl_interrupts_default_to_system ? 's' : 'n');
   else
     return __gl_interrupt_states [intrup];
 }
@@ -248,7 +263,7 @@ __gnat_error_handler (int sig,
   switch (sig)
     {
     case SIGSEGV:
-      /* FIXME: we need to detect the case of a *real* SIGSEGV.  */
+      /* ??? we need to detect the case of a *real* SIGSEGV.  */
       exception = &storage_error;
       msg = "stack overflow or erroneous memory access";
       break;
@@ -340,7 +355,7 @@ __gnat_error_handler (int sig, siginfo_t *si ATTRIBUTE_UNUSED, void *ucontext)
   switch (sig)
     {
     case SIGSEGV:
-      /* FIXME: we need to detect the case of a *real* SIGSEGV.  */
+      /* ??? we need to detect the case of a *real* SIGSEGV.  */
       exception = &storage_error;
       msg = "stack overflow or erroneous memory access";
       break;
@@ -492,17 +507,18 @@ __gnat_adjust_context_for_raise (int signo ATTRIBUTE_UNUSED, void *ucontext)
 
 #if defined (__i386__)
   unsigned long *pc = (unsigned long *)mcontext->gregs[REG_EIP];
-  /* The pattern is "orl $0x0,(%esp)" for a probe in 32-bit mode.  */
-  if (signo == SIGSEGV && pc && *pc == 0x00240c83)
+  /* The pattern is "or{l,b} $0x0,(%esp)" for a probe in 32-bit mode.  */
+  if (signo == SIGSEGV && pc && (*pc == 0x00240c83 || *pc == 0x00240c80))
     mcontext->gregs[REG_ESP] += 4096 + 4 * sizeof (unsigned long);
 #elif defined (__x86_64__)
   unsigned long long *pc = (unsigned long long *)mcontext->gregs[REG_RIP];
   if (signo == SIGSEGV && pc
       /* The pattern is "orq $0x0,(%rsp)" for a probe in 64-bit mode.  */
       && ((*pc & 0xffffffffffLL) == 0x00240c8348LL
-	  /* The pattern may also be "orl $0x0,(%esp)" for a probe in
-	     x32 mode.  */
-	  || (*pc & 0xffffffffLL) == 0x00240c83LL))
+	  /* The pattern is "orl $0x0,(%rsp)" for a probe in x32 mode.  */
+	  || (*pc & 0xffffffffLL) == 0x00240c83LL
+	  /* The pattern may also be "orb $0x0,(%rsp)" in both modes.  */
+	  || (*pc & 0xffffffffLL) == 0x00240c80LL))
     mcontext->gregs[REG_RSP] += 4096 + 4 * sizeof (unsigned long);
 #elif defined (__ia64__)
   /* ??? The IA-64 unwinder doesn't compensate for signals.  */
@@ -1673,9 +1689,15 @@ __gnat_is_vms_v7 (void)
 #include <unistd.h>
 
 static void
+#ifdef __CHERI__
+__gnat_error_handler (int sig,
+		      siginfo_t *si,
+		      void *ucontext ATTRIBUTE_UNUSED)
+#else
 __gnat_error_handler (int sig,
 		      siginfo_t *si ATTRIBUTE_UNUSED,
 		      void *ucontext ATTRIBUTE_UNUSED)
+#endif /* __CHERI__ */
 {
   struct Exception_Data *exception;
   const char *msg;
@@ -1701,6 +1723,67 @@ __gnat_error_handler (int sig,
       exception = &storage_error;
       msg = "SIGBUS: possible stack overflow";
       break;
+
+#ifdef __CHERI__
+    case SIGPROT:
+      switch (si->si_code)
+        {
+        case PROT_CHERI_TAG:
+          exception = capability_tag_error_id;
+          msg = "Capability tag fault";
+          break;
+
+        case PROT_CHERI_SEALED:
+          exception = capability_sealed_error_id;
+          msg = "Capability sealed fault";
+          break;
+
+        case PROT_CHERI_UNALIGNED_BASE:
+          exception = &storage_error;
+          msg = "SIGPROT: unaligned base address";
+          break;
+
+        case PROT_CHERI_BOUNDS:
+          exception = capability_bound_error_id;
+          msg = "Capability bounds fault";
+          break;
+
+        case PROT_CHERI_IMPRECISE:
+          exception = capability_bound_error_id;
+          msg = "Imprecise capability bounds fault";
+          break;
+
+        case PROT_CHERI_TYPE:
+          exception = capability_permission_error_id;
+          msg = "Capability type mismatch fault";
+          break;
+
+        case PROT_CHERI_PERM:
+          exception = capability_permission_error_id;
+          msg = "Capability permission fault";
+          break;
+
+        case PROT_CHERI_STORELOCAL:
+          exception = capability_permission_error_id;
+          msg = "Capability store-local fault";
+          break;
+
+        case PROT_CHERI_CINVOKE:
+          exception = capability_permission_error_id;
+          msg = "CInvoke fault";
+          break;
+
+        case PROT_CHERI_SYSREG:
+          exception = capability_permission_error_id;
+          msg = "Capability system register fault";
+          break;
+
+        default:
+          exception = &program_error;
+          msg = "SIGPROT: unhandled signal code";
+        }
+      break;
+#endif /* __CHERI__ */
 
     default:
       exception = &program_error;
@@ -1728,6 +1811,10 @@ __gnat_install_handler (void)
   (void) sigaction (SIGFPE,  &act, NULL);
   (void) sigaction (SIGSEGV, &act, NULL);
   (void) sigaction (SIGBUS,  &act, NULL);
+
+#ifdef __CHERI__
+  (void) sigaction (SIGPROT, &act, NULL);
+#endif
 
   __gnat_handler_installed = 1;
 }
@@ -2776,10 +2863,16 @@ __gnat_install_handler ()
 void
 __gnat_adjust_context_for_raise (int signo ATTRIBUTE_UNUSED, void *ucontext)
 {
+#if defined(__arm__)
   mcontext_t *mcontext = &((ucontext_t *) ucontext)->uc_mcontext;
 
   /* ARM Bump has to be an even number because of odd/even architecture.  */
   ((mcontext_t *) mcontext)->arm_pc += 2;
+#endif
+
+  /* Other ports, based on dwarf2 unwinding, typically leverage
+     kernel CFI coordinated with libgcc's explicit support for signal
+     frames.  */
 }
 
 static void
@@ -2819,7 +2912,6 @@ static void
 __gnat_error_handler (int sig, siginfo_t *si, void *ucontext)
 {
   __gnat_adjust_context_for_raise (sig, ucontext);
-
   __gnat_sigtramp (sig, (void *) si, (void *) ucontext,
 		   (__sigtramphandler_t *)&__gnat_map_signal);
 }

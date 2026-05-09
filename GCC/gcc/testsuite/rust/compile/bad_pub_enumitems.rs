@@ -1,3 +1,6 @@
+#![feature(no_core)]
+#![no_core]
+
 pub enum E
 {
   pub A { a: i32 }, // { dg-error "visibility qualifier" }
@@ -18,7 +21,7 @@ enum E1
 enum E2
 {
   pub A (u8, i32, u64), // { dg-error "visibility qualifier" }
-  B { a: u8, a: u8 }  // { dg-error "duplicate field" }}
+  B { a: u8, a: u8 }  // { dg-error "field .a. is already declared" }}
 }
 
 fn main ()
@@ -41,7 +44,7 @@ fn main ()
 
   enum E2
     {
-      Alpha { a: u8, a: u8 },  // { dg-error "duplicate field" }}
+      Alpha { a: u8, a: u8 },  // { dg-error "field .a. is already declared" }}
       pub Beta (u8, i32, u64) // { dg-error "visibility qualifier" }
     }
 }

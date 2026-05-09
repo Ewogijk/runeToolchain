@@ -497,6 +497,10 @@ s-version: Makefile
 zgoarch.go: s-zgoarch; @true
 s-zgoarch: Makefile goarch.sh
 	rm -f zgoarch.go.tmp
+	if ! $(SHELL) $(srcdir)/goarch.sh $(GOARCH) family >/dev/null 2>/dev/null;  then \
+	  $(SHELL) $(srcdir)/goarch.sh $(GOARCH) family; \
+	  exit 1; \
+	fi
 	echo "package goarch" > zgoarch.go.tmp
 	echo >> zgoarch.go.tmp
 	echo 'const GOARCH = "'$(GOARCH)'"' >> zgoarch.go.tmp
@@ -833,7 +837,8 @@ libgo_go_objs = \
 	$(golangorg_x_sys_cpu_gccgo_x86_lo)
 
 libgo_ldflags = \
-	-version-info $(libtool_VERSION) $(PTHREAD_CFLAGS) $(AM_LDFLAGS)
+	-version-info $(libtool_VERSION) $(PTHREAD_CFLAGS) $(AM_LDFLAGS) \
+	$(OSLDFLAGS)
 
 libgo_libadd = \
 	$(libgo_go_objs) ../libbacktrace/libbacktrace.la \

@@ -1,5 +1,5 @@
 /* Dead and redundant store elimination
-   Copyright (C) 2004-2023 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -18,7 +18,6 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #include "config.h"
-#define INCLUDE_MEMORY
 #include "system.h"
 #include "coretypes.h"
 #include "backend.h"
@@ -48,6 +47,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-ssa-loop-niter.h"
 #include "cfgloop.h"
 #include "tree-data-ref.h"
+#include "internal-fn.h"
+#include "tree-ssa.h"
 
 /* This file implements dead store elimination.
 
@@ -157,23 +158,37 @@ initialize_ao_ref_for_dse (gimple *stmt, ao_ref *write, bool may_def_ok = false)
       switch (gimple_call_internal_fn (stmt))
 	{
 	case IFN_LEN_STORE:
-	  ao_ref_init_from_ptr_and_size
-	      (write, gimple_call_arg (stmt, 0),
-	       int_const_binop (MINUS_EXPR,
-				gimple_call_arg (stmt, 2),
-				gimple_call_arg (stmt, 4)));
-	  return true;
 	case IFN_MASK_STORE:
-	  /* We cannot initialize a must-def ao_ref (in all cases) but we
-	     can provide a may-def variant.  */
-	  if (may_def_ok)
-	    {
-	      ao_ref_init_from_ptr_and_size
-		  (write, gimple_call_arg (stmt, 0),
-		   TYPE_SIZE_UNIT (TREE_TYPE (gimple_call_arg (stmt, 3))));
-	      return true;
-	    }
-	  break;
+	case IFN_MASK_LEN_STORE:
+	  {
+	    internal_fn ifn = gimple_call_internal_fn (stmt);
+	    int stored_value_index = internal_fn_stored_value_index (ifn);
+	    int len_index = internal_fn_len_index (ifn);
+	    if (ifn == IFN_LEN_STORE)
+	      {
+		tree len = gimple_call_arg (stmt, len_index);
+		tree bias = gimple_call_arg (stmt, len_index + 1);
+		if (tree_fits_uhwi_p (len))
+		  {
+		    ao_ref_init_from_ptr_and_size (write,
+						   gimple_call_arg (stmt, 0),
+						   int_const_binop (MINUS_EXPR,
+								    len, bias));
+		    return true;
+		  }
+	      }
+	    /* We cannot initialize a must-def ao_ref (in all cases) but we
+	       can provide a may-def variant.  */
+	    if (may_def_ok)
+	      {
+		ao_ref_init_from_ptr_and_range (
+		  write, gimple_call_arg (stmt, 0), true, 0, -1,
+		  tree_to_poly_int64 (TYPE_SIZE (
+		    TREE_TYPE (gimple_call_arg (stmt, stored_value_index)))));
+		return true;
+	      }
+	    break;
+	  }
 	default:;
 	}
     }
@@ -388,11 +403,11 @@ setup_live_bytes_from_ref (ao_ref *ref, sbitmap live_bytes)
   return false;
 }
 
-/* Compute the number of elements that we can trim from the head and
-   tail of ORIG resulting in a bitmap that is a superset of LIVE.
+/* Compute the number of stored bytes that we can trim from the head and
+   tail of REF.  LIVE is the bitmap of stores to REF that are still live.
 
-   Store the number of elements trimmed from the head and tail in
-   TRIM_HEAD and TRIM_TAIL.
+   Store the number of bytes trimmed from the head and tail in TRIM_HEAD
+   and TRIM_TAIL respectively.
 
    STMT is the statement being trimmed and is used for debugging dump
    output only.  */
@@ -401,10 +416,19 @@ static void
 compute_trims (ao_ref *ref, sbitmap live, int *trim_head, int *trim_tail,
 	       gimple *stmt)
 {
-  /* We use sbitmaps biased such that ref->offset is bit zero and the bitmap
-     extends through ref->size.  So we know that in the original bitmap
-     bits 0..ref->size were true.  We don't actually need the bitmap, just
-     the REF to compute the trims.  */
+  *trim_head = 0;
+  *trim_tail = 0;
+
+  /* We use bitmaps biased such that ref->offset is contained in bit zero and
+     the bitmap extends through ref->max_size, so we know that in the original
+     bitmap bits 0 .. ref->max_size were true.  But we need to check that this
+     covers the bytes of REF exactly.  */
+  const unsigned int offset_align = known_alignment (ref->offset);
+  const unsigned int size_align = known_alignment (ref->size);
+  if ((offset_align > 0 && offset_align < BITS_PER_UNIT)
+      || (size_align > 0 && size_align < BITS_PER_UNIT)
+      || !known_eq (ref->size, ref->max_size))
+    return;
 
   /* Now identify how much, if any of the tail we can chop off.  */
   HOST_WIDE_INT const_size;
@@ -429,8 +453,6 @@ compute_trims (ao_ref *ref, sbitmap live, int *trim_head, int *trim_tail,
 			       last_orig) <= 0)
 	*trim_tail = 0;
     }
-  else
-    *trim_tail = 0;
 
   /* Identify how much, if any of the head we can chop off.  */
   int first_orig = 0;
@@ -488,8 +510,7 @@ compute_trims (ao_ref *ref, sbitmap live, int *trim_head, int *trim_tail,
 	}
     }
 
-  if ((*trim_head || *trim_tail)
-      && dump_file && (dump_flags & TDF_DETAILS))
+  if ((*trim_head || *trim_tail) && dump_file && (dump_flags & TDF_DETAILS))
     {
       fprintf (dump_file, "  Trimming statement (head = %d, tail = %d): ",
 	       *trim_head, *trim_tail);
@@ -498,12 +519,12 @@ compute_trims (ao_ref *ref, sbitmap live, int *trim_head, int *trim_tail,
     }
 }
 
-/* STMT initializes an object from COMPLEX_CST where one or more of the
-   bytes written may be dead stores.  REF is a representation of the
-   memory written.  LIVE is the bitmap of stores that are actually live.
+/* STMT initializes an object from COMPLEX_CST where one or more of the bytes
+   written may be dead stores.  REF is a representation of the memory written.
+   LIVE is the bitmap of stores to REF that are still live.
 
-   Attempt to rewrite STMT so that only the real or imaginary part of
-   the object is actually stored.  */
+   Attempt to rewrite STMT so that only the real or the imaginary part of the
+   object is actually stored.  */
 
 static void
 maybe_trim_complex_store (ao_ref *ref, sbitmap live, gimple *stmt)
@@ -539,25 +560,25 @@ maybe_trim_complex_store (ao_ref *ref, sbitmap live, gimple *stmt)
 }
 
 /* STMT initializes an object using a CONSTRUCTOR where one or more of the
-   bytes written are dead stores.  ORIG is the bitmap of bytes stored by
-   STMT.  LIVE is the bitmap of stores that are actually live.
+   bytes written are dead stores.  REF is a representation of the memory
+   written.  LIVE is the bitmap of stores to REF that are still live.
 
-   Attempt to rewrite STMT so that only the real or imaginary part of
-   the object is actually stored.
+   Attempt to rewrite STMT so that it writes fewer memory locations.
 
    The most common case for getting here is a CONSTRUCTOR with no elements
    being used to zero initialize an object.  We do not try to handle other
    cases as those would force us to fully cover the object with the
-   CONSTRUCTOR node except for the components that are dead.  */
+   CONSTRUCTOR node except for the components that are dead.
+   Also handles integer stores of 0 which can happen with memset/memcpy optimizations.  */
 
 static void
-maybe_trim_constructor_store (ao_ref *ref, sbitmap live, gimple *stmt)
+maybe_trim_constructor_store (ao_ref *ref, sbitmap live, gimple *stmt, bool was_integer_cst)
 {
   tree ctor = gimple_assign_rhs1 (stmt);
 
   /* This is the only case we currently handle.  It actually seems to
      catch most cases of actual interest.  */
-  gcc_assert (CONSTRUCTOR_NELTS (ctor) == 0);
+  gcc_assert (was_integer_cst ? integer_zerop (ctor) : CONSTRUCTOR_NELTS (ctor) == 0);
 
   int head_trim = 0;
   int tail_trim = 0;
@@ -569,6 +590,8 @@ maybe_trim_constructor_store (ao_ref *ref, sbitmap live, gimple *stmt)
     {
       /* We want &lhs for the MEM_REF expression.  */
       tree lhs_addr = build_fold_addr_expr (gimple_assign_lhs (stmt));
+
+      STRIP_USELESS_TYPE_CONVERSION (lhs_addr);
 
       if (! is_gimple_min_invariant (lhs_addr))
 	return;
@@ -640,6 +663,7 @@ increment_start_addr (gimple *stmt, tree *where, int increment)
 					      *where,
 					      build_int_cst (ptr_type_node,
 							     increment)));
+  STRIP_USELESS_TYPE_CONVERSION (*where);
 }
 
 /* STMT is builtin call that writes bytes in bitmap ORIG, some bytes are dead
@@ -765,9 +789,9 @@ maybe_trim_memstar_call (ao_ref *ref, sbitmap live, gimple *stmt)
     }
 }
 
-/* STMT is a memory write where one or more bytes written are dead
-   stores.  ORIG is the bitmap of bytes stored by STMT.  LIVE is the
-   bitmap of stores that are actually live.
+/* STMT is a memory write where one or more bytes written are dead stores.
+   REF is a representation of the memory written.  LIVE is the bitmap of
+   stores to REF that are still live.
 
    Attempt to rewrite STMT so that it writes fewer memory locations.  Right
    now we only support trimming at the start or end of the memory region.
@@ -783,10 +807,15 @@ maybe_trim_partially_dead_store (ao_ref *ref, sbitmap live, gimple *stmt)
       switch (gimple_assign_rhs_code (stmt))
 	{
 	case CONSTRUCTOR:
-	  maybe_trim_constructor_store (ref, live, stmt);
+	  maybe_trim_constructor_store (ref, live, stmt, false);
 	  break;
 	case COMPLEX_CST:
 	  maybe_trim_complex_store (ref, live, stmt);
+	  break;
+	case INTEGER_CST:
+	  if (integer_zerop (gimple_assign_rhs1 (stmt))
+	      && type_has_mode_precision_p (TREE_TYPE (gimple_assign_lhs (stmt))))
+	    maybe_trim_constructor_store (ref, live, stmt, true);
 	  break;
 	default:
 	  break;
@@ -815,7 +844,7 @@ live_bytes_read (ao_ref *use_ref, ao_ref *ref, sbitmap live)
 	return true;
 
       /* Now check if any of the remaining bits in use_ref are set in LIVE.  */
-      return bitmap_bit_in_range_p (live, start, (start + size - 1));
+      return bitmap_any_bit_in_range_p (live, start, (start + size - 1));
     }
   return true;
 }
@@ -951,14 +980,13 @@ static hash_map<gimple *, data_reference_p> *dse_stmt_to_dr_map;
    if only clobber statements influenced the classification result.
    Returns the classification.  */
 
-dse_store_status
+static dse_store_status
 dse_classify_store (ao_ref *ref, gimple *stmt,
 		    bool byte_tracking_enabled, sbitmap live_bytes,
-		    bool *by_clobber_p, tree stop_at_vuse)
+		    bool *by_clobber_p, tree stop_at_vuse, int &cnt,
+		    bitmap visited)
 {
   gimple *temp;
-  int cnt = 0;
-  auto_bitmap visited;
   std::unique_ptr<data_reference, void(*)(data_reference_p)>
     dra (nullptr, free_data_ref);
 
@@ -999,8 +1027,11 @@ dse_classify_store (ao_ref *ref, gimple *stmt,
 	  if (defvar == stop_at_vuse)
 	    return DSE_STORE_LIVE;
 
-	  FOR_EACH_IMM_USE_STMT (use_stmt, ui, defvar)
+	  use_operand_p usep;
+	  FOR_EACH_IMM_USE_FAST (usep, ui, defvar)
 	    {
+	      use_stmt = USE_STMT (usep);
+
 	      /* Limit stmt walking.  */
 	      if (++cnt > param_dse_max_alias_queries_per_store)
 		{
@@ -1012,31 +1043,43 @@ dse_classify_store (ao_ref *ref, gimple *stmt,
 		 have to be careful with loops and with memory references
 		 containing operands that are also operands of PHI nodes.
 		 See gcc.c-torture/execute/20051110-*.c.  */
-	      if (gimple_code (use_stmt) == GIMPLE_PHI)
+	      if (gphi *phi = dyn_cast <gphi *> (use_stmt))
 		{
 		  /* Look through single-argument PHIs.  */
-		  if (gimple_phi_num_args (use_stmt) == 1)
-		    worklist.safe_push (gimple_phi_result (use_stmt));
-
-		  /* If we already visited this PHI ignore it for further
-		     processing.  */
-		  else if (!bitmap_bit_p (visited,
-					  SSA_NAME_VERSION
-					    (PHI_RESULT (use_stmt))))
+		  if (gimple_phi_num_args (phi) == 1)
+		    worklist.safe_push (gimple_phi_result (phi));
+		  else
 		    {
 		      /* If we visit this PHI by following a backedge then we
 			 have to make sure ref->ref only refers to SSA names
 			 that are invariant with respect to the loop
-			 represented by this PHI node.  */
-		      if (dominated_by_p (CDI_DOMINATORS, gimple_bb (stmt),
-					  gimple_bb (use_stmt))
-			  && !for_each_index (ref->ref ? &ref->ref : &ref->base,
-					      check_name, gimple_bb (use_stmt)))
-			return DSE_STORE_LIVE;
-		      defs.safe_push (use_stmt);
-		      if (!first_phi_def)
-			first_phi_def = as_a <gphi *> (use_stmt);
-		      last_phi_def = as_a <gphi *> (use_stmt);
+			 represented by this PHI node.  We handle irreducible
+			 regions by relying on backedge marking and identifying
+			 the head of the (sub-)region.  */
+		      edge e = gimple_phi_arg_edge
+				 (phi, PHI_ARG_INDEX_FROM_USE (usep));
+		      if (e->flags & EDGE_DFS_BACK)
+			{
+			  basic_block rgn_head
+			    = nearest_common_dominator (CDI_DOMINATORS,
+							gimple_bb (phi),
+							e->src);
+			  if (!for_each_index (ref->ref
+					       ? &ref->ref : &ref->base,
+					       check_name, rgn_head))
+			    return DSE_STORE_LIVE;
+			}
+		      /* If we already visited this PHI ignore it for further
+			 processing.  But note we have to check each incoming
+			 edge above.  */
+		      if (!bitmap_bit_p (visited,
+					 SSA_NAME_VERSION (PHI_RESULT (phi))))
+			{
+			  defs.safe_push (phi);
+			  if (!first_phi_def)
+			    first_phi_def = phi;;
+			  last_phi_def = phi;
+			}
 		    }
 		}
 	      /* If the statement is a use the store is not dead.  */
@@ -1118,7 +1161,26 @@ dse_classify_store (ao_ref *ref, gimple *stmt,
       if (defs.is_empty ())
 	{
 	  if (ref_may_alias_global_p (ref, false))
-	    return DSE_STORE_LIVE;
+	    {
+	      basic_block def_bb = gimple_bb (SSA_NAME_DEF_STMT (defvar));
+	      /* Assume that BUILT_IN_UNREACHABLE and BUILT_IN_UNREACHABLE_TRAP
+		 do not need to keep (global) memory side-effects live.
+		 We do not have virtual operands on BUILT_IN_UNREACHABLE
+		 but we can do poor mans reachability when the last
+		 definition we want to elide is in the block that ends
+		 in such a call.  */
+	      if (EDGE_COUNT (def_bb->succs) == 0)
+		if (gcall *last = dyn_cast <gcall *> (*gsi_last_bb (def_bb)))
+		  if (gimple_call_builtin_p (last, BUILT_IN_UNREACHABLE)
+		      || gimple_call_builtin_p (last,
+						BUILT_IN_UNREACHABLE_TRAP))
+		    {
+		      if (by_clobber_p)
+			*by_clobber_p = false;
+		      return DSE_STORE_DEAD;
+		    }
+	      return DSE_STORE_LIVE;
+	    }
 
 	  if (by_clobber_p)
 	    *by_clobber_p = false;
@@ -1199,6 +1261,19 @@ dse_classify_store (ao_ref *ref, gimple *stmt,
       /* If all defs kill the ref we are done.  */
       if (defs.is_empty ())
 	return DSE_STORE_DEAD;
+      /* If more than one def survives we have to analyze multiple
+	 paths.  We can handle this by recursing, sharing 'visited'
+	 to avoid redundant work and limiting it by shared 'cnt'.
+	 For now do not bother with byte-tracking in this case.  */
+      while (defs.length () > 1)
+	{
+	  if (dse_classify_store (ref, defs.last (), false, NULL,
+				  by_clobber_p, stop_at_vuse, cnt,
+				  visited) != DSE_STORE_DEAD)
+	    break;
+	  byte_tracking_enabled = false;
+	  defs.pop ();
+	}
       /* If more than one def survives fail.  */
       if (defs.length () > 1)
 	{
@@ -1224,6 +1299,17 @@ dse_classify_store (ao_ref *ref, gimple *stmt,
     }
   /* Continue walking until there are no more live bytes.  */
   while (1);
+}
+
+dse_store_status
+dse_classify_store (ao_ref *ref, gimple *stmt,
+		    bool byte_tracking_enabled, sbitmap live_bytes,
+		    bool *by_clobber_p, tree stop_at_vuse)
+{
+  int cnt = 0;
+  auto_bitmap visited;
+  return dse_classify_store (ref, stmt, byte_tracking_enabled, live_bytes,
+			     by_clobber_p, stop_at_vuse, cnt, visited);
 }
 
 
@@ -1320,8 +1406,10 @@ dse_optimize_call (gimple_stmt_iterator *gsi, sbitmap live_bytes)
   if (!node)
     return false;
 
-  if (stmt_could_throw_p (cfun, stmt)
-      && !cfun->can_delete_dead_exceptions)
+  if ((stmt_could_throw_p (cfun, stmt)
+       && !cfun->can_delete_dead_exceptions)
+      || ((gimple_call_flags (stmt) & ECF_NORETURN)
+	  && gimple_call_ctrl_altering_p (stmt)))
     return false;
 
   /* If return value is used the call is not dead.  */
@@ -1415,7 +1503,8 @@ dse_optimize_stmt (function *fun, gimple_stmt_iterator *gsi, sbitmap live_bytes)
 
   /* We know we have virtual definitions.  We can handle assignments and
      some builtin calls.  */
-  if (gimple_call_builtin_p (stmt, BUILT_IN_NORMAL))
+  if (gimple_call_builtin_p (stmt, BUILT_IN_NORMAL)
+      && !gimple_call_ctrl_altering_p (stmt))
     {
       tree fndecl = gimple_call_fndecl (stmt);
       switch (DECL_FUNCTION_CODE (fndecl))
@@ -1483,6 +1572,7 @@ dse_optimize_stmt (function *fun, gimple_stmt_iterator *gsi, sbitmap live_bytes)
 	{
 	case IFN_LEN_STORE:
 	case IFN_MASK_STORE:
+	case IFN_MASK_LEN_STORE:
 	  {
 	    enum dse_store_status store_status;
 	    store_status = dse_classify_store (&ref, stmt, false, live_bytes);
@@ -1618,7 +1708,11 @@ pass_dse::execute (function *fun)
 
   /* Dead store elimination is fundamentally a reverse program order walk.  */
   int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun) - NUM_FIXED_BLOCKS);
-  int n = pre_and_rev_post_order_compute_fn (fun, NULL, rpo, false);
+  auto_bitmap exit_bbs;
+  bitmap_set_bit (exit_bbs, EXIT_BLOCK);
+  edge entry = single_succ_edge (ENTRY_BLOCK_PTR_FOR_FN (fun));
+  int n = rev_post_order_and_mark_dfs_back_seme (fun, entry,
+						 exit_bbs, false, rpo, NULL);
   for (int i = n; i != 0; --i)
     {
       basic_block bb = BASIC_BLOCK_FOR_FN (fun, rpo[i-1]);

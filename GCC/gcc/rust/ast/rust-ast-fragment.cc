@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -55,6 +55,12 @@ Fragment::create_error ()
   return Fragment (FragmentKind::Error, {}, {});
 }
 
+Fragment
+Fragment::create_empty ()
+{
+  return Fragment (FragmentKind::Complete, {}, {});
+}
+
 Fragment::Fragment (std::vector<AST::SingleASTNode> nodes,
 		    std::vector<std::unique_ptr<AST::Token>> tokens)
   : kind (FragmentKind::Complete), nodes (std::move (nodes)),
@@ -101,27 +107,40 @@ Fragment::should_expand () const
 bool
 Fragment::is_expression_fragment () const
 {
-  return is_single_fragment_of_kind (SingleASTNode::NodeType::EXPRESSION);
+  return is_single_fragment_of_kind (SingleASTNode::Kind::Expr);
 }
 
 bool
 Fragment::is_type_fragment () const
 {
-  return is_single_fragment_of_kind (SingleASTNode::NodeType::TYPE);
+  return is_single_fragment_of_kind (SingleASTNode::Kind::Type);
+}
+
+bool
+Fragment::is_pattern_fragment () const
+{
+  return is_single_fragment_of_kind (SingleASTNode::Kind::Pattern);
 }
 
 std::unique_ptr<Expr>
 Fragment::take_expression_fragment ()
 {
-  assert_single_fragment (SingleASTNode::NodeType::EXPRESSION);
+  assert_single_fragment (SingleASTNode::Kind::Expr);
   return nodes[0].take_expr ();
 }
 
 std::unique_ptr<Type>
 Fragment::take_type_fragment ()
 {
-  assert_single_fragment (SingleASTNode::NodeType::TYPE);
+  assert_single_fragment (SingleASTNode::Kind::Type);
   return nodes[0].take_type ();
+}
+
+std::unique_ptr<Pattern>
+Fragment::take_pattern_fragment ()
+{
+  assert_single_fragment (SingleASTNode::Kind::Pattern);
+  return nodes[0].take_pattern ();
 }
 
 void
@@ -138,23 +157,22 @@ Fragment::is_single_fragment () const
 }
 
 bool
-Fragment::is_single_fragment_of_kind (SingleASTNode::NodeType expected) const
+Fragment::is_single_fragment_of_kind (SingleASTNode::Kind expected) const
 {
   return is_single_fragment () && nodes[0].get_kind () == expected;
 }
 
 void
-Fragment::assert_single_fragment (SingleASTNode::NodeType expected) const
+Fragment::assert_single_fragment (SingleASTNode::Kind expected) const
 {
-  static const std::map<SingleASTNode::NodeType, const char *> str_map = {
-    {SingleASTNode::NodeType::IMPL, "impl"},
-    {SingleASTNode::NodeType::ITEM, "item"},
-    {SingleASTNode::NodeType::TYPE, "type"},
-    {SingleASTNode::NodeType::EXPRESSION, "expr"},
-    {SingleASTNode::NodeType::STMT, "stmt"},
-    {SingleASTNode::NodeType::EXTERN, "extern"},
-    {SingleASTNode::NodeType::TRAIT, "trait"},
-    {SingleASTNode::NodeType::TRAIT_IMPL, "trait impl"},
+  static const std::map<SingleASTNode::Kind, const char *> str_map = {
+    {SingleASTNode::Kind::Assoc, "associated item"},
+    {SingleASTNode::Kind::Item, "item"},
+    {SingleASTNode::Kind::Type, "type"},
+    {SingleASTNode::Kind::Expr, "expr"},
+    {SingleASTNode::Kind::Stmt, "stmt"},
+    {SingleASTNode::Kind::Extern, "extern"},
+    {SingleASTNode::Kind::Pattern, "pattern"},
   };
 
   auto actual = nodes[0].get_kind ();
@@ -162,14 +180,14 @@ Fragment::assert_single_fragment (SingleASTNode::NodeType expected) const
 
   if (!is_single_fragment ())
     {
-      rust_error_at (Location (), "fragment is not single");
+      rust_error_at (UNDEF_LOCATION, "fragment is not single");
       fail = true;
     }
 
   if (actual != expected)
     {
       rust_error_at (
-	Location (),
+	UNDEF_LOCATION,
 	"invalid fragment operation: expected %qs node, got %qs node",
 	str_map.find (expected)->second,
 	str_map.find (nodes[0].get_kind ())->second);

@@ -1,5 +1,5 @@
 /* Optimize and expand sanitizer functions.
-   Copyright (C) 2014-2023 Free Software Foundation, Inc.
+   Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Contributed by Marek Polacek <polacek@redhat.com>
 
 This file is part of GCC.
@@ -814,7 +814,7 @@ sanopt_optimize_walker (basic_block bb, class sanopt_ctx *ctx)
       if (!is_gimple_call (stmt))
 	{
 	  /* Handle asm volatile or asm with "memory" clobber
-	     the same as potentionally freeing call.  */
+	     the same as potentially freeing call.  */
 	  gasm *asm_stmt = dyn_cast <gasm *> (stmt);
 	  if (asm_stmt
 	      && asan_check_optimize
@@ -1012,8 +1012,7 @@ sanitize_asan_mark_unpoison (void)
   /* 2) Propagate the information to all reachable blocks.  */
   while (!bitmap_empty_p (worklist))
     {
-      unsigned i = bitmap_first_set_bit (worklist);
-      bitmap_clear_bit (worklist, i);
+      unsigned i = bitmap_clear_first_set_bit (worklist);
       basic_block bb = BASIC_BLOCK_FOR_FN (cfun, i);
       gcc_assert (bb);
 
@@ -1109,8 +1108,7 @@ sanitize_asan_mark_poison (void)
   /* 2) Propagate the information to all definitions blocks.  */
   while (!bitmap_empty_p (worklist))
     {
-      unsigned i = bitmap_first_set_bit (worklist);
-      bitmap_clear_bit (worklist, i);
+      unsigned i = bitmap_clear_first_set_bit (worklist);
       basic_block bb = BASIC_BLOCK_FOR_FN (cfun, i);
       gcc_assert (bb);
 
@@ -1322,13 +1320,17 @@ pass_sanopt::execute (function *fun)
 	  }
     }
 
+  if (asan_num_accesses || contains_asan_mark || asan_sanitize_stack_p ()
+      || hwasan_sanitize_stack_p ())
+    asan_maybe_insert_dynamic_shadow_at_function_entry (fun);
+
   if (contains_asan_mark)
     {
       sanitize_asan_mark_unpoison ();
       sanitize_asan_mark_poison ();
     }
 
-  if (asan_sanitize_stack_p () || hwasan_sanitize_stack_p ())
+  if (asan_sanitize_stack_p () || hwassist_sanitize_stack_p ())
     sanitize_rewrite_addressable_params (fun);
 
   bool use_calls = param_asan_instrumentation_with_call_threshold < INT_MAX

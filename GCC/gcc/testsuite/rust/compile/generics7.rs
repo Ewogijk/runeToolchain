@@ -1,3 +1,10 @@
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
+
 struct Foo<A> {
     a: A,
 }
@@ -19,10 +26,9 @@ impl<T> Foo<T> {
         self.a
     }
 }
-
+// E0592
 fn main() {
     let a = Foo { a: 123 };
     a.bar();
-    // { dg-error "multiple candidates found for method .bar." "" { target *-*-* } .-1 }
-    // { dg-error "failed to type resolve expression" "" { target *-*-* } .-2 }
+    // { dg-error "duplicate definitions with name .bar." "" { target *-*-* } .-1 }
 }

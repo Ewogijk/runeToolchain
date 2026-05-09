@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 2015-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 2015-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -37,6 +37,7 @@ package Contracts is
    --  The following are valid pragmas:
    --
    --    Abstract_State
+   --    Always_Terminates
    --    Async_Readers
    --    Async_Writers
    --    Attach_Handler
@@ -45,6 +46,7 @@ package Contracts is
    --    Depends
    --    Effective_Reads
    --    Effective_Writes
+   --    Exceptional_Cases
    --    Extensions_Visible
    --    Global
    --    Initial_Condition
@@ -54,10 +56,13 @@ package Contracts is
    --    Part_Of
    --    Postcondition
    --    Precondition
+   --    Program_Exit
    --    Refined_Depends
    --    Refined_Global
    --    Refined_Post
    --    Refined_States
+   --    Side_Effects
+   --    Subprogram_Variant
    --    Test_Case
    --    Volatile_Function
 
@@ -79,11 +84,14 @@ package Contracts is
    --  subprogram body Body_Id as if they appeared at the end of a declarative
    --  region. Pragmas in question are:
    --
+   --    Always_Terminates  (stand alone subprogram body)
    --    Contract_Cases     (stand alone subprogram body)
    --    Depends            (stand alone subprogram body)
+   --    Exceptional_Cases  (stand alone subprogram body)
    --    Global             (stand alone subprogram body)
    --    Postcondition      (stand alone subprogram body)
    --    Precondition       (stand alone subprogram body)
+   --    Program_Exit       (stand alone subprogram body)
    --    Refined_Depends
    --    Refined_Global
    --    Refined_Post
@@ -97,11 +105,14 @@ package Contracts is
    --  subprogram Subp_Id as if they appeared at the end of a declarative
    --  region. The pragmas in question are:
    --
+   --    Always_Terminates
    --    Contract_Cases
    --    Depends
+   --    Exceptional_Cases
    --    Global
    --    Postcondition
    --    Precondition
+   --    Program_Exit
    --    Subprogram_Variant
    --    Test_Case
    --
@@ -135,6 +146,8 @@ package Contracts is
    --    Async_Writers
    --    Effective_Reads
    --    Effective_Writes
+   --    Postcondition
+   --    Precondition
    --
    --  In the case of a protected or task type, there will also be
    --  a call to Analyze_Protected_Contract or Analyze_Task_Contract.
@@ -169,14 +182,18 @@ package Contracts is
    --  stub Stub_Id as if they appeared at the end of a declarative region. The
    --  pragmas in question are:
    --
+   --    Always_Terminates
    --    Contract_Cases
    --    Depends
+   --    Exceptional_Cases
    --    Global
    --    Postcondition
    --    Precondition
+   --    Program_Exit
    --    Refined_Depends
    --    Refined_Global
    --    Refined_Post
+   --    Subprogram_Variant
    --    Test_Case
 
    procedure Analyze_Task_Contract (Task_Id : Entity_Id);
@@ -215,6 +232,7 @@ package Contracts is
    --  Inherit relevant contract items from source subprogram From_Subp. Subp
    --  denotes the destination subprogram. The inherited items are:
    --    Extensions_Visible
+   --    Side_Effects
    --  ??? it would be nice if this routine handles Pre'Class and Post'Class
 
    procedure Instantiate_Subprogram_Contract (Templ : Node_Id; L : List_Id);

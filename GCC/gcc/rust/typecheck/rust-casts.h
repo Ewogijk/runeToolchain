@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -28,21 +28,24 @@ namespace Resolver {
 class TypeCastRules
 {
 public:
-  static TypeCoercionRules::CoercionResult
-  resolve (Location locus, TyTy::TyWithLocation from, TyTy::TyWithLocation to);
+  static TypeCoercionRules::CoercionResult resolve (location_t locus,
+						    TyTy::TyWithLocation from,
+						    TyTy::TyWithLocation to,
+						    bool emit_error = true);
+
+  static void emit_cast_error (location_t locus, TyTy::TyWithLocation from,
+			       TyTy::TyWithLocation to);
 
 protected:
-  TypeCoercionRules::CoercionResult check ();
+  TypeCoercionRules::CoercionResult check (bool emit_error);
   TypeCoercionRules::CoercionResult cast_rules ();
   TypeCoercionRules::CoercionResult check_ptr_ptr_cast ();
 
-  void emit_cast_error () const;
-
 protected:
-  TypeCastRules (Location locus, TyTy::TyWithLocation from,
+  TypeCastRules (location_t locus, TyTy::TyWithLocation from,
 		 TyTy::TyWithLocation to);
 
-  Location locus;
+  location_t locus;
   TyTy::TyWithLocation from;
   TyTy::TyWithLocation to;
 };

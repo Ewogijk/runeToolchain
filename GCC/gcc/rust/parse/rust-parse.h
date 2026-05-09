@@ -17,11 +17,120 @@ along with GCC; see the file COPYING3.  If not see
 #ifndef RUST_PARSE_H
 #define RUST_PARSE_H
 
+#include "rust-ast.h"
+#include "rust-item.h"
 #include "rust-lex.h"
 #include "rust-ast-full.h"
 #include "rust-diagnostics.h"
+#include "rust-parse-error.h"
+#include "rust-parse-utils.h"
+#include "rust-feature.h"
+#include "rust-feature-store.h"
+
+#include "expected.h"
 
 namespace Rust {
+
+// Left binding powers of operations.
+enum binding_powers
+{
+  // Highest priority
+  LBP_HIGHEST = 100,
+
+  LBP_PATH = 95,
+
+  LBP_METHOD_CALL = 90,
+
+  LBP_FIELD_EXPR = 85,
+
+  LBP_FUNCTION_CALL = 80,
+  LBP_ARRAY_REF = LBP_FUNCTION_CALL,
+
+  LBP_QUESTION_MARK = 75, // unary postfix - counts as left
+
+  LBP_UNARY_PLUS = 70,		    // Used only when the null denotation is +
+  LBP_UNARY_MINUS = LBP_UNARY_PLUS, // Used only when the null denotation is -
+  LBP_UNARY_ASTERISK = LBP_UNARY_PLUS, // deref operator - unary prefix
+  LBP_UNARY_EXCLAM = LBP_UNARY_PLUS,
+  LBP_UNARY_AMP = LBP_UNARY_PLUS,
+  LBP_UNARY_AMP_MUT = LBP_UNARY_PLUS,
+
+  LBP_AS = 65,
+
+  LBP_MUL = 60,
+  LBP_DIV = LBP_MUL,
+  LBP_MOD = LBP_MUL,
+
+  LBP_PLUS = 55,
+  LBP_MINUS = LBP_PLUS,
+
+  LBP_L_SHIFT = 50,
+  LBP_R_SHIFT = LBP_L_SHIFT,
+
+  LBP_AMP = 45,
+
+  LBP_CARET = 40,
+
+  LBP_PIPE = 35,
+
+  LBP_EQUAL = 30,
+  LBP_NOT_EQUAL = LBP_EQUAL,
+  LBP_SMALLER_THAN = LBP_EQUAL,
+  LBP_SMALLER_EQUAL = LBP_EQUAL,
+  LBP_GREATER_THAN = LBP_EQUAL,
+  LBP_GREATER_EQUAL = LBP_EQUAL,
+
+  LBP_LOGICAL_AND = 25,
+
+  LBP_LOGICAL_OR = 20,
+
+  LBP_DOT_DOT = 15,
+  LBP_DOT_DOT_EQ = LBP_DOT_DOT,
+
+  // TODO: note all these assig operators are RIGHT associative!
+  LBP_ASSIG = 10,
+  LBP_PLUS_ASSIG = LBP_ASSIG,
+  LBP_MINUS_ASSIG = LBP_ASSIG,
+  LBP_MULT_ASSIG = LBP_ASSIG,
+  LBP_DIV_ASSIG = LBP_ASSIG,
+  LBP_MOD_ASSIG = LBP_ASSIG,
+  LBP_AMP_ASSIG = LBP_ASSIG,
+  LBP_PIPE_ASSIG = LBP_ASSIG,
+  LBP_CARET_ASSIG = LBP_ASSIG,
+  LBP_L_SHIFT_ASSIG = LBP_ASSIG,
+  LBP_R_SHIFT_ASSIG = LBP_ASSIG,
+
+  // return, break, and closures as lowest priority?
+  LBP_RETURN = 5,
+  LBP_BREAK = LBP_RETURN,
+  LBP_CLOSURE = LBP_RETURN, // unary prefix operators
+
+#if 0
+  // rust precedences
+  // used for closures
+  PREC_CLOSURE = -40,
+  // used for break, continue, return, and yield
+  PREC_JUMP = -30,
+  // used for range (although weird comment in rustc about this)
+  PREC_RANGE = -10,
+  // used for binary operators mentioned below - also cast, colon (type),
+  // assign, assign_op
+  PREC_BINOP = FROM_ASSOC_OP,
+  // used for box, address_of, let, unary (again, weird comment on let)
+  PREC_PREFIX = 50,
+  // used for await, call, method call, field, index, try,
+  // inline asm, macro invocation
+  PREC_POSTFIX = 60,
+  // used for array, repeat, tuple, literal, path, paren, if,
+  // while, for, 'loop', match, block, try block, async, struct
+  PREC_PAREN = 99,
+  PREC_FORCE_PAREN = 100,
+#endif
+
+  // lowest priority
+  LBP_LOWEST = 0
+};
+
 /* HACK: used to resolve the expression-or-statement problem at the end of a
  * block by allowing either to be returned (technically). Tagged union would
  * probably take up the same amount of space. */
@@ -44,16 +153,6 @@ struct ExprOrStmt
   ExprOrStmt (std::unique_ptr<AST::MacroInvocation> macro)
     : expr (std::move (macro))
   {}
-
-  // Returns whether this object is in an error state.
-  bool is_error () const
-  {
-    return (expr == nullptr && stmt == nullptr)
-	   || (expr != nullptr && stmt != nullptr);
-  }
-
-  // Returns an error state object.
-  static ExprOrStmt create_error () { return ExprOrStmt (nullptr, nullptr); }
 
   ~ExprOrStmt () = default;
 
@@ -87,6 +186,9 @@ struct ParseRestrictions
   bool expr_can_be_null = false;
   bool expr_can_be_stmt = false;
   bool consume_semi = true;
+  /* Macro invocations that are statements can expand without a semicolon after
+   * the final statement, if it's an expression statement. */
+  bool allow_close_after_expr_stmt = false;
 };
 
 // Parser implementation for gccrs.
@@ -95,6 +197,11 @@ template <typename ManagedTokenSource> class Parser
 {
 public:
   /**
+   * Consume a token
+   */
+  void skip_token ();
+
+  /**
    * Consume a token, reporting an error if it isn't the next token
    *
    * @param t ID of the token to consume
@@ -102,6 +209,15 @@ public:
    * @return true if the token was next, false if it wasn't found
    */
   bool skip_token (TokenId t);
+
+  /**
+   * Consume a token, reporting an error if it isn't the next token
+   *
+   * @param token pointer to similar token to consume
+   *
+   * @return true if the token was next, false if it wasn't found
+   */
+  bool skip_token (const_TokenPtr token);
 
   /**
    * Same as `skip_token` but allows for failure without necessarily reporting
@@ -113,19 +229,29 @@ public:
    */
   bool maybe_skip_token (TokenId t);
 
-  std::unique_ptr<AST::Expr>
+  tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Expr>
   parse_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
 	      ParseRestrictions restrictions = ParseRestrictions ());
 
-  std::unique_ptr<AST::LiteralExpr> parse_literal_expr (AST::AttrVec outer_attrs
-							= AST::AttrVec ());
+  tl::expected<std::unique_ptr<AST::LiteralExpr>, Parse::Error::Node>
+  parse_literal_expr (AST::AttrVec outer_attrs = AST::AttrVec ());
 
-  std::unique_ptr<AST::BlockExpr>
+  tl::expected<std::unique_ptr<AST::BlockExpr>, Parse::Error::Node>
   parse_block_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		    Location pratt_parsed_loc = Linemap::unknown_location ());
+		    tl::optional<AST::LoopLabel> = tl::nullopt,
+		    location_t pratt_parsed_loc = UNKNOWN_LOCATION);
 
-  std::unique_ptr<AST::Item> parse_item (bool called_from_statement);
+  tl::expected<AST::AnonConst, Parse::Error::Node> parse_anon_const ();
+
+  tl::expected<std::unique_ptr<AST::ConstBlock>, Parse::Error::Node>
+  parse_const_block_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
+			  location_t loc = UNKNOWN_LOCATION);
+
+  bool is_macro_rules_def (const_TokenPtr t);
+  tl::expected<std::unique_ptr<AST::Item>, Parse::Error::Item>
+  parse_item (bool called_from_statement);
   std::unique_ptr<AST::Pattern> parse_pattern ();
+  std::unique_ptr<AST::Pattern> parse_pattern_no_alt ();
 
   /**
    * Parse a statement
@@ -140,18 +266,28 @@ public:
 					 = ParseRestrictions ());
   std::unique_ptr<AST::Type> parse_type (bool save_errors = true);
   std::unique_ptr<AST::ExternalItem> parse_external_item ();
-  std::unique_ptr<AST::TraitItem> parse_trait_item ();
-  std::unique_ptr<AST::InherentImplItem> parse_inherent_impl_item ();
-  std::unique_ptr<AST::TraitImplItem> parse_trait_impl_item ();
+  std::unique_ptr<AST::AssociatedItem> parse_trait_item ();
+  std::unique_ptr<AST::AssociatedItem> parse_inherent_impl_item ();
+  std::unique_ptr<AST::AssociatedItem> parse_trait_impl_item ();
   AST::PathInExpression parse_path_in_expression ();
-  std::vector<std::unique_ptr<AST::LifetimeParam> > parse_lifetime_params ();
-  AST::Visibility parse_visibility ();
+  std::vector<std::unique_ptr<AST::LifetimeParam>> parse_lifetime_params ();
+  tl::expected<AST::Visibility, Parse::Error::Visibility> parse_visibility ();
   std::unique_ptr<AST::IdentifierPattern> parse_identifier_pattern ();
-  std::unique_ptr<AST::TokenTree> parse_token_tree ();
-  AST::Attribute parse_attribute_body ();
+  tl::expected<std::unique_ptr<AST::Token>, Parse::Error::Node>
+  parse_identifier_or_keyword_token ();
+  tl::expected<std::unique_ptr<AST::TokenTree>, Parse::Error::Node>
+  parse_token_tree ();
+
+  tl::expected<Parse::AttributeBody, Parse::Error::AttributeBody>
+  parse_attribute_body ();
   AST::AttrVec parse_inner_attributes ();
   std::unique_ptr<AST::MacroInvocation>
   parse_macro_invocation (AST::AttrVec outer_attrs);
+
+  /*
+   * This has to be public for parsing expressions with outer attributes
+   */
+  AST::AttrVec parse_outer_attributes ();
 
 private:
   void skip_after_semicolon ();
@@ -161,42 +297,47 @@ private:
   void skip_after_end_attribute ();
 
   const_TokenPtr expect_token (TokenId t);
+  const_TokenPtr expect_token (const_TokenPtr token_expect);
   void unexpected_token (const_TokenPtr t);
   bool skip_generics_right_angle ();
 
   void parse_statement_seq (bool (Parser::*done) ());
 
   // AST-related stuff - maybe move or something?
-  AST::Attribute parse_inner_attribute ();
-  AST::AttrVec parse_outer_attributes ();
-  AST::Attribute parse_outer_attribute ();
-  std::unique_ptr<AST::AttrInput> parse_attr_input ();
-  AST::Attribute parse_doc_comment ();
+  tl::expected<AST::Attribute, Parse::Error::Attribute>
+  parse_inner_attribute ();
+  tl::expected<AST::Attribute, Parse::Error::Attribute>
+  parse_outer_attribute ();
+  tl::expected<std::unique_ptr<AST::AttrInput>, Parse::Error::AttrInput>
+  parse_attr_input ();
+  Parse::AttributeBody parse_doc_comment ();
 
   // Path-related
-  AST::SimplePath parse_simple_path ();
-  AST::SimplePathSegment parse_simple_path_segment ();
+  tl::expected<AST::SimplePath, Parse::Error::Node> parse_simple_path ();
+  tl::expected<AST::SimplePathSegment, Parse::Error::SimplePathSegment>
+  parse_simple_path_segment (int base_peek = 0);
   AST::TypePath parse_type_path ();
   std::unique_ptr<AST::TypePathSegment> parse_type_path_segment ();
-  AST::PathIdentSegment parse_path_ident_segment ();
-  AST::GenericArg parse_generic_arg ();
+  tl::expected<AST::PathIdentSegment, Parse::Error::PathIdentSegment>
+  parse_path_ident_segment ();
+  tl::optional<AST::GenericArg> parse_generic_arg ();
   AST::GenericArgs parse_path_generic_args ();
   AST::GenericArgsBinding parse_generic_args_binding ();
-  AST::TypePathFunction parse_type_path_function (Location locus);
+  AST::TypePathFunction parse_type_path_function (location_t locus);
   AST::PathExprSegment parse_path_expr_segment ();
   AST::QualifiedPathInExpression
   // When given a pratt_parsed_loc, use it as the location of the
   // first token parsed in the expression (the parsing of that first
   // token should be skipped).
-  parse_qualified_path_in_expression (Location pratt_parsed_loc
-				      = Linemap::unknown_location ());
-  AST::QualifiedPathType
-  parse_qualified_path_type (Location pratt_parsed_loc
-			     = Linemap::unknown_location ());
+  parse_qualified_path_in_expression (location_t pratt_parsed_loc
+				      = UNKNOWN_LOCATION);
+  AST::QualifiedPathType parse_qualified_path_type (location_t pratt_parsed_loc
+						    = UNKNOWN_LOCATION);
   AST::QualifiedPathInType parse_qualified_path_in_type ();
 
   // Token tree or macro related
-  AST::DelimTokenTree parse_delim_token_tree ();
+  tl::expected<AST::DelimTokenTree, Parse::Error::Node>
+  parse_delim_token_tree ();
   std::unique_ptr<AST::MacroRulesDefinition>
   parse_macro_rules_def (AST::AttrVec outer_attrs);
   std::unique_ptr<AST::MacroRulesDefinition>
@@ -221,19 +362,33 @@ private:
   parse_use_decl (AST::Visibility vis, AST::AttrVec outer_attrs);
   std::unique_ptr<AST::UseTree> parse_use_tree ();
   std::unique_ptr<AST::Function> parse_function (AST::Visibility vis,
-						 AST::AttrVec outer_attrs);
-  AST::FunctionQualifiers parse_function_qualifiers ();
-  std::vector<std::unique_ptr<AST::GenericParam> >
+						 AST::AttrVec outer_attrs,
+						 bool is_external = false);
+  tl::expected<AST::FunctionQualifiers, Parse::Error::Node>
+  parse_function_qualifiers ();
+  tl::expected<std::pair<std::vector<TokenId>, std::string>, Parse::Error::Node>
+  parse_function_qualifiers_raw (location_t locus);
+  bool
+  ensure_function_qualifier_order (location_t locus,
+				   const std::vector<TokenId> &found_order);
+  tl::expected<AST::FunctionQualifiers, Parse::Error::Node>
+  function_qualifiers_from_keywords (location_t locus,
+				     std::vector<TokenId> keywords,
+				     std::string abi);
+  void emit_function_qualifier_order_error_msg (
+    location_t locus, const std::vector<TokenId> &found_order);
+
+  std::vector<std::unique_ptr<AST::GenericParam>>
   parse_generic_params_in_angles ();
   template <typename EndTokenPred>
-  std::vector<std::unique_ptr<AST::GenericParam> >
+  std::vector<std::unique_ptr<AST::GenericParam>>
   parse_generic_params (EndTokenPred is_end_token);
   template <typename EndTokenPred>
   std::unique_ptr<AST::GenericParam>
   parse_generic_param (EndTokenPred is_end_token);
 
   template <typename EndTokenPred>
-  std::vector<std::unique_ptr<AST::LifetimeParam> >
+  std::vector<std::unique_ptr<AST::LifetimeParam>>
   parse_lifetime_params (EndTokenPred is_end_token);
   std::vector<AST::LifetimeParam> parse_lifetime_params_objs ();
   template <typename EndTokenPred>
@@ -244,34 +399,42 @@ private:
     ParseFunction parsing_function, EndTokenPred is_end_token,
     std::string error_msg = "failed to parse generic param in generic params")
     -> std::vector<decltype (parsing_function ())>;
-  AST::LifetimeParam parse_lifetime_param ();
-  std::vector<std::unique_ptr<AST::TypeParam> > parse_type_params ();
+  tl::expected<AST::LifetimeParam, Parse::Error::LifetimeParam>
+  parse_lifetime_param ();
+  std::vector<std::unique_ptr<AST::TypeParam>> parse_type_params ();
   template <typename EndTokenPred>
-  std::vector<std::unique_ptr<AST::TypeParam> >
+  std::vector<std::unique_ptr<AST::TypeParam>>
   parse_type_params (EndTokenPred is_end_token);
   std::unique_ptr<AST::TypeParam> parse_type_param ();
   template <typename EndTokenPred>
-  std::vector<AST::FunctionParam>
+  std::vector<std::unique_ptr<AST::Param>>
   parse_function_params (EndTokenPred is_end_token);
-  AST::FunctionParam parse_function_param ();
+  std::unique_ptr<AST::Param> parse_function_param ();
   std::unique_ptr<AST::Type> parse_function_return_type ();
   AST::WhereClause parse_where_clause ();
-  std::unique_ptr<AST::WhereClauseItem> parse_where_clause_item ();
+  std::unique_ptr<AST::WhereClauseItem> parse_where_clause_item (
+    const std::vector<AST::LifetimeParam> &global_for_lifetimes);
   std::unique_ptr<AST::LifetimeWhereClauseItem>
   parse_lifetime_where_clause_item ();
   std::unique_ptr<AST::TypeBoundWhereClauseItem>
-  parse_type_bound_where_clause_item ();
+  parse_type_bound_where_clause_item (
+    const std::vector<AST::LifetimeParam> &global_for_lifetimes);
   std::vector<AST::LifetimeParam> parse_for_lifetimes ();
   template <typename EndTokenPred>
-  std::vector<std::unique_ptr<AST::TypeParamBound> >
+  std::vector<std::unique_ptr<AST::TypeParamBound>>
   parse_type_param_bounds (EndTokenPred is_end_token);
-  std::vector<std::unique_ptr<AST::TypeParamBound> > parse_type_param_bounds ();
+  std::vector<std::unique_ptr<AST::TypeParamBound>> parse_type_param_bounds ();
   std::unique_ptr<AST::TypeParamBound> parse_type_param_bound ();
   std::unique_ptr<AST::TraitBound> parse_trait_bound ();
   std::vector<AST::Lifetime> parse_lifetime_bounds ();
   template <typename EndTokenPred>
   std::vector<AST::Lifetime> parse_lifetime_bounds (EndTokenPred is_end_token);
-  AST::Lifetime parse_lifetime ();
+  tl::expected<AST::Lifetime, Parse::Error::Lifetime>
+  parse_lifetime (bool allow_elided);
+  AST::Lifetime lifetime_from_token (const_TokenPtr tok);
+  std::unique_ptr<AST::ExternalTypeItem>
+  parse_external_type_item (AST::Visibility vis, AST::AttrVec outer_attrs);
+
   std::unique_ptr<AST::TypeAlias> parse_type_alias (AST::Visibility vis,
 						    AST::AttrVec outer_attrs);
   std::unique_ptr<AST::Struct> parse_struct (AST::Visibility vis,
@@ -284,11 +447,12 @@ private:
   AST::TupleField parse_tuple_field ();
   std::unique_ptr<AST::Enum> parse_enum (AST::Visibility vis,
 					 AST::AttrVec outer_attrs);
-  std::vector<std::unique_ptr<AST::EnumItem> > parse_enum_items ();
+  std::vector<std::unique_ptr<AST::EnumItem>> parse_enum_items ();
   template <typename EndTokenPred>
-  std::vector<std::unique_ptr<AST::EnumItem> >
+  std::vector<std::unique_ptr<AST::EnumItem>>
   parse_enum_items (EndTokenPred is_end_token);
-  std::unique_ptr<AST::EnumItem> parse_enum_item ();
+  tl::expected<std::unique_ptr<AST::EnumItem>, Parse::Error::EnumVariant>
+  parse_enum_item ();
   std::unique_ptr<AST::Union> parse_union (AST::Visibility vis,
 					   AST::AttrVec outer_attrs);
   std::unique_ptr<AST::ConstantItem>
@@ -298,226 +462,278 @@ private:
   std::unique_ptr<AST::Trait> parse_trait (AST::Visibility vis,
 					   AST::AttrVec outer_attrs);
   std::unique_ptr<AST::TraitItemType>
-  parse_trait_type (AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::TraitItemConst>
+  parse_trait_type (AST::AttrVec outer_attrs, AST::Visibility);
+  std::unique_ptr<AST::ConstantItem>
   parse_trait_const (AST::AttrVec outer_attrs);
-  AST::SelfParam parse_self_param ();
+
+  tl::expected<std::unique_ptr<AST::Param>, Parse::Error::Self>
+  parse_self_param ();
+
   std::unique_ptr<AST::Impl> parse_impl (AST::Visibility vis,
 					 AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::InherentImplItem>
+  std::unique_ptr<AST::AssociatedItem>
   parse_inherent_impl_function_or_method (AST::Visibility vis,
 					  AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::TraitImplItem>
+  std::unique_ptr<AST::AssociatedItem>
   parse_trait_impl_function_or_method (AST::Visibility vis,
 				       AST::AttrVec outer_attrs);
   std::unique_ptr<AST::ExternBlock>
   parse_extern_block (AST::Visibility vis, AST::AttrVec outer_attrs);
-  AST::NamedFunctionParam parse_named_function_param (AST::AttrVec outer_attrs
-						      = AST::AttrVec ());
-  AST::Method parse_method ();
+  std::unique_ptr<AST::Function> parse_method ();
+  std::unique_ptr<AST::Function> parse_async_item (AST::Visibility vis,
+						   AST::AttrVec outer_attrs);
 
   // Expression-related (Pratt parsed)
-  std::unique_ptr<AST::Expr>
+  tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Expr>
   parse_expr (int right_binding_power,
 	      AST::AttrVec outer_attrs = AST::AttrVec (),
 	      ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::Expr>
-  null_denotation (const_TokenPtr t, AST::AttrVec outer_attrs = AST::AttrVec (),
+  tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Expr>
+  null_denotation (AST::AttrVec outer_attrs = AST::AttrVec (),
 		   ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::Expr>
+  tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Expr>
+  null_denotation_path (AST::PathInExpression path, AST::AttrVec outer_attrs,
+			ParseRestrictions restrictions = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Expr>
+  null_denotation_not_path (const_TokenPtr t, AST::AttrVec outer_attrs,
+			    ParseRestrictions restrictions
+			    = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Expr>
+  left_denotations (tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Expr>
+		      null_denotation,
+		    int right_binding_power, AST::AttrVec outer_attrs,
+		    ParseRestrictions restrictions = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Expr>
   left_denotation (const_TokenPtr t, std::unique_ptr<AST::Expr> left,
 		   AST::AttrVec outer_attrs = AST::AttrVec (),
 		   ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_arithmetic_or_logical_expr (
     const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
     AST::AttrVec outer_attrs, AST::ArithmeticOrLogicalExpr::ExprType expr_type,
     ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_binary_plus_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			  AST::AttrVec outer_attrs,
 			  ParseRestrictions restrictions
 			  = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_binary_minus_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			   AST::AttrVec outer_attrs,
 			   ParseRestrictions restrictions
 			   = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_binary_mult_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			  AST::AttrVec outer_attrs,
 			  ParseRestrictions restrictions
 			  = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_binary_div_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			 AST::AttrVec outer_attrs,
 			 ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_binary_mod_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			 AST::AttrVec outer_attrs,
 			 ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_bitwise_and_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			  AST::AttrVec outer_attrs,
 			  ParseRestrictions restrictions
 			  = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_bitwise_or_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			 AST::AttrVec outer_attrs,
 			 ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_bitwise_xor_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			  AST::AttrVec outer_attrs,
 			  ParseRestrictions restrictions
 			  = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_left_shift_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			 AST::AttrVec outer_attrs,
 			 ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ArithmeticOrLogicalExpr>
+  tl::expected<std::unique_ptr<AST::ArithmeticOrLogicalExpr>,
+	       Parse::Error::Expr>
   parse_right_shift_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			  AST::AttrVec outer_attrs,
 			  ParseRestrictions restrictions
 			  = ParseRestrictions ());
-  std::unique_ptr<AST::ComparisonExpr>
+  tl::expected<std::unique_ptr<AST::ComparisonExpr>, Parse::Error::Expr>
   parse_comparison_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			 AST::AttrVec outer_attrs,
 			 AST::ComparisonExpr::ExprType expr_type,
 			 ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ComparisonExpr>
+  tl::expected<std::unique_ptr<AST::ComparisonExpr>, Parse::Error::Expr>
   parse_binary_equal_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			   AST::AttrVec outer_attrs,
 			   ParseRestrictions restrictions
 			   = ParseRestrictions ());
-  std::unique_ptr<AST::ComparisonExpr> parse_binary_not_equal_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ComparisonExpr> parse_binary_greater_than_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ComparisonExpr> parse_binary_less_than_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ComparisonExpr> parse_binary_greater_equal_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ComparisonExpr> parse_binary_less_equal_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::LazyBooleanExpr>
+  tl::expected<std::unique_ptr<AST::ComparisonExpr>, Parse::Error::Expr>
+  parse_binary_not_equal_expr (const_TokenPtr tok,
+			       std::unique_ptr<AST::Expr> left,
+			       AST::AttrVec outer_attrs,
+			       ParseRestrictions restrictions
+			       = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::ComparisonExpr>, Parse::Error::Expr>
+  parse_binary_greater_than_expr (const_TokenPtr tok,
+				  std::unique_ptr<AST::Expr> left,
+				  AST::AttrVec outer_attrs,
+				  ParseRestrictions restrictions
+				  = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::ComparisonExpr>, Parse::Error::Expr>
+  parse_binary_less_than_expr (const_TokenPtr tok,
+			       std::unique_ptr<AST::Expr> left,
+			       AST::AttrVec outer_attrs,
+			       ParseRestrictions restrictions
+			       = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::ComparisonExpr>, Parse::Error::Expr>
+  parse_binary_greater_equal_expr (const_TokenPtr tok,
+				   std::unique_ptr<AST::Expr> left,
+				   AST::AttrVec outer_attrs,
+				   ParseRestrictions restrictions
+				   = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::ComparisonExpr>, Parse::Error::Expr>
+  parse_binary_less_equal_expr (const_TokenPtr tok,
+				std::unique_ptr<AST::Expr> left,
+				AST::AttrVec outer_attrs,
+				ParseRestrictions restrictions
+				= ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::LazyBooleanExpr>, Parse::Error::Expr>
   parse_lazy_or_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 		      AST::AttrVec outer_attrs,
 		      ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::LazyBooleanExpr>
+  tl::expected<std::unique_ptr<AST::LazyBooleanExpr>, Parse::Error::Expr>
   parse_lazy_and_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 		       AST::AttrVec outer_attrs,
 		       ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::TypeCastExpr>
+  tl::expected<std::unique_ptr<AST::TypeCastExpr>, Parse::Error::Expr>
   parse_type_cast_expr (const_TokenPtr tok,
 			std::unique_ptr<AST::Expr> expr_to_cast,
 			AST::AttrVec outer_attrs,
 			ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::AssignmentExpr>
+  tl::expected<std::unique_ptr<AST::AssignmentExpr>, Parse::Error::Expr>
   parse_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 		    AST::AttrVec outer_attrs,
 		    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr> parse_compound_assignment_expr (
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
+  parse_compound_assignment_expr (
     const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
     AST::AttrVec outer_attrs, AST::CompoundAssignmentExpr::ExprType expr_type,
     ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
   parse_plus_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			 AST::AttrVec outer_attrs,
 			 ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
   parse_minus_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			  AST::AttrVec outer_attrs,
 			  ParseRestrictions restrictions
 			  = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
   parse_mult_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			 AST::AttrVec outer_attrs,
 			 ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
   parse_div_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			AST::AttrVec outer_attrs,
 			ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
   parse_mod_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			AST::AttrVec outer_attrs,
 			ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
   parse_and_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			AST::AttrVec outer_attrs,
 			ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
   parse_or_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 		       AST::AttrVec outer_attrs,
 		       ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
   parse_xor_assig_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
 			AST::AttrVec outer_attrs,
 			ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr> parse_left_shift_assig_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CompoundAssignmentExpr> parse_right_shift_assig_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::AwaitExpr>
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
+  parse_left_shift_assig_expr (const_TokenPtr tok,
+			       std::unique_ptr<AST::Expr> left,
+			       AST::AttrVec outer_attrs,
+			       ParseRestrictions restrictions
+			       = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::CompoundAssignmentExpr>, Parse::Error::Expr>
+  parse_right_shift_assig_expr (const_TokenPtr tok,
+				std::unique_ptr<AST::Expr> left,
+				AST::AttrVec outer_attrs,
+				ParseRestrictions restrictions
+				= ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::AwaitExpr>, Parse::Error::Expr>
   parse_await_expr (const_TokenPtr tok,
 		    std::unique_ptr<AST::Expr> expr_to_await,
 		    AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::MethodCallExpr> parse_method_call_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> receiver_expr,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::CallExpr> parse_function_call_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> function_expr,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::RangeExpr> parse_led_range_exclusive_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::RangeExpr>
+  tl::expected<std::unique_ptr<AST::MethodCallExpr>, Parse::Error::Expr>
+  parse_method_call_expr (const_TokenPtr tok,
+			  std::unique_ptr<AST::Expr> receiver_expr,
+			  AST::AttrVec outer_attrs,
+			  ParseRestrictions restrictions
+			  = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::CallExpr>, Parse::Error::Expr>
+  parse_function_call_expr (const_TokenPtr tok,
+			    std::unique_ptr<AST::Expr> function_expr,
+			    AST::AttrVec outer_attrs,
+			    ParseRestrictions restrictions
+			    = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::RangeExpr>, Parse::Error::Expr>
+  parse_led_range_exclusive_expr (const_TokenPtr tok,
+				  std::unique_ptr<AST::Expr> left,
+				  AST::AttrVec outer_attrs,
+				  ParseRestrictions restrictions
+				  = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::RangeExpr>, Parse::Error::Expr>
   parse_nud_range_exclusive_expr (const_TokenPtr tok, AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::RangeFromToInclExpr> parse_range_inclusive_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> left,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::RangeToInclExpr>
+  tl::expected<std::unique_ptr<AST::RangeFromToInclExpr>, Parse::Error::Expr>
+  parse_range_inclusive_expr (const_TokenPtr tok,
+			      std::unique_ptr<AST::Expr> left,
+			      AST::AttrVec outer_attrs,
+			      ParseRestrictions restrictions
+			      = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::RangeToInclExpr>, Parse::Error::Expr>
   parse_range_to_inclusive_expr (const_TokenPtr tok, AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::TupleIndexExpr> parse_tuple_index_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> tuple_expr,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::FieldAccessExpr> parse_field_access_expr (
-    const_TokenPtr tok, std::unique_ptr<AST::Expr> struct_expr,
-    AST::AttrVec outer_attrs,
-    ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::ArrayIndexExpr>
+  tl::expected<std::unique_ptr<AST::TupleIndexExpr>, Parse::Error::Expr>
+  parse_tuple_index_expr (const_TokenPtr tok,
+			  std::unique_ptr<AST::Expr> tuple_expr,
+			  AST::AttrVec outer_attrs,
+			  ParseRestrictions restrictions
+			  = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::FieldAccessExpr>, Parse::Error::Expr>
+  parse_field_access_expr (const_TokenPtr tok,
+			   std::unique_ptr<AST::Expr> struct_expr,
+			   AST::AttrVec outer_attrs,
+			   ParseRestrictions restrictions
+			   = ParseRestrictions ());
+  tl::expected<std::unique_ptr<AST::ArrayIndexExpr>, Parse::Error::Expr>
   parse_index_expr (const_TokenPtr tok, std::unique_ptr<AST::Expr> array_expr,
 		    AST::AttrVec outer_attrs,
 		    ParseRestrictions restrictions = ParseRestrictions ());
   std::unique_ptr<AST::MacroInvocation> parse_macro_invocation_partial (
     AST::PathInExpression path, AST::AttrVec outer_attrs,
     ParseRestrictions restrictions = ParseRestrictions ());
-  std::unique_ptr<AST::StructExprStruct>
+  tl::expected<std::unique_ptr<AST::StructExprStruct>, Parse::Error::Expr>
   parse_struct_expr_struct_partial (AST::PathInExpression path,
 				    AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::CallExpr>
+  tl::expected<std::unique_ptr<AST::CallExpr>, Parse::Error::Expr>
   parse_struct_expr_tuple_partial (AST::PathInExpression path,
 				   AST::AttrVec outer_attrs);
-  AST::PathInExpression parse_path_in_expression_pratt (const_TokenPtr tok);
-  std::unique_ptr<AST::ClosureExpr>
+  tl::expected<std::unique_ptr<AST::ClosureExpr>, Parse::Error::Expr>
   parse_closure_expr_pratt (const_TokenPtr tok,
 			    AST::AttrVec outer_attrs = AST::AttrVec ());
   std::unique_ptr<AST::TupleIndexExpr> parse_tuple_index_expr_float (
@@ -525,79 +741,77 @@ private:
     AST::AttrVec outer_attrs,
     ParseRestrictions restrictions = ParseRestrictions ());
 
-  // Expression-related (non-Pratt parsed)
-  std::unique_ptr<AST::ExprWithBlock>
-  parse_expr_with_block (AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::ExprWithoutBlock>
-  parse_expr_without_block (AST::AttrVec outer_attrs = AST::AttrVec (),
-			    ParseRestrictions restrictions
-			    = ParseRestrictions ());
   // When given a pratt_parsed_loc, use it as the location of the
   // first token parsed in the expression (the parsing of that first
   // token should be skipped).
-  std::unique_ptr<AST::IfExpr>
+  tl::expected<std::unique_ptr<AST::IfExpr>, Parse::Error::Node>
   parse_if_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		 Location pratt_parsed_loc = Linemap::unknown_location ());
-  std::unique_ptr<AST::IfLetExpr>
+		 location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::IfLetExpr>, Parse::Error::Node>
   parse_if_let_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		     Location pratt_parsed_loc = Linemap::unknown_location ());
-  std::unique_ptr<AST::LoopExpr>
+		     location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::LoopExpr>, Parse::Error::Node>
   parse_loop_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		   AST::LoopLabel label = AST::LoopLabel::error (),
-		   Location pratt_parsed_loc = Linemap::unknown_location ());
-  std::unique_ptr<AST::WhileLoopExpr>
+		   tl::optional<AST::LoopLabel> label = tl::nullopt,
+		   location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::WhileLoopExpr>, Parse::Error::Node>
   parse_while_loop_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-			 AST::LoopLabel label = AST::LoopLabel::error (),
-			 Location pratt_parsed_loc
-			 = Linemap::unknown_location ());
-  std::unique_ptr<AST::WhileLetLoopExpr>
+			 tl::optional<AST::LoopLabel> label = tl::nullopt,
+			 location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::WhileLetLoopExpr>, Parse::Error::Node>
   parse_while_let_loop_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-			     AST::LoopLabel label = AST::LoopLabel::error ());
-  std::unique_ptr<AST::ForLoopExpr>
+			     tl::optional<AST::LoopLabel> label = tl::nullopt);
+  tl::expected<std::unique_ptr<AST::ForLoopExpr>, Parse::Error::Node>
   parse_for_loop_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		       AST::LoopLabel label = AST::LoopLabel::error ());
-  std::unique_ptr<AST::MatchExpr>
+		       tl::optional<AST::LoopLabel> label = tl::nullopt);
+  tl::expected<std::unique_ptr<AST::MatchExpr>, Parse::Error::Node>
   parse_match_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		    Location pratt_parsed_loc = Linemap::unknown_location ());
+		    location_t pratt_parsed_loc = UNKNOWN_LOCATION);
   AST::MatchArm parse_match_arm ();
-  std::vector<std::unique_ptr<AST::Pattern> >
-  parse_match_arm_patterns (TokenId end_token_id);
-  std::unique_ptr<AST::BaseLoopExpr>
-  parse_labelled_loop_expr (AST::AttrVec outer_attrs = AST::AttrVec ());
-  AST::LoopLabel parse_loop_label ();
-  std::unique_ptr<AST::AsyncBlockExpr>
+  std::unique_ptr<AST::Pattern> parse_match_arm_pattern (TokenId end_token_id);
+  tl::expected<std::unique_ptr<AST::Expr>, Parse::Error::Node>
+  parse_labelled_loop_expr (const_TokenPtr tok,
+			    AST::AttrVec outer_attrs = AST::AttrVec ());
+  tl::expected<AST::LoopLabel, Parse::Error::LoopLabel>
+  parse_loop_label (const_TokenPtr tok);
+  tl::expected<std::unique_ptr<AST::AsyncBlockExpr>, Parse::Error::Node>
   parse_async_block_expr (AST::AttrVec outer_attrs = AST::AttrVec ());
-  std::unique_ptr<AST::GroupedExpr> parse_grouped_expr (AST::AttrVec outer_attrs
-							= AST::AttrVec ());
-  std::unique_ptr<AST::ClosureExpr> parse_closure_expr (AST::AttrVec outer_attrs
-							= AST::AttrVec ());
+  tl::expected<std::unique_ptr<AST::GroupedExpr>, Parse::Error::Node>
+  parse_grouped_expr (AST::AttrVec outer_attrs = AST::AttrVec ());
+  tl::expected<std::unique_ptr<AST::ClosureExpr>, Parse::Error::Node>
+  parse_closure_expr (AST::AttrVec outer_attrs = AST::AttrVec ());
   AST::ClosureParam parse_closure_param ();
 
+  tl::expected<std::unique_ptr<AST::BoxExpr>, Parse::Error::Node>
+  parse_box_expr (AST::AttrVec outer_attrs,
+		  location_t pratt_parsed_loc = UNKNOWN_LOCATION);
   // When given a pratt_parsed_loc, use it as the location of the
   // first token parsed in the expression (the parsing of that first
   // token should be skipped).
-  std::unique_ptr<AST::ReturnExpr>
+  tl::expected<std::unique_ptr<AST::ReturnExpr>, Parse::Error::Node>
   parse_return_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		     Location pratt_parsed_loc = Linemap::unknown_location ());
-  std::unique_ptr<AST::BreakExpr>
+		     location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::TryExpr>, Parse::Error::Node>
+  parse_try_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
+		  location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::BreakExpr>, Parse::Error::Node>
   parse_break_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		    Location pratt_parsed_loc = Linemap::unknown_location ());
+		    location_t pratt_parsed_loc = UNKNOWN_LOCATION);
   std::unique_ptr<AST::ContinueExpr>
   parse_continue_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		       Location pratt_parsed_loc
-		       = Linemap::unknown_location ());
-  std::unique_ptr<AST::UnsafeBlockExpr>
+		       location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::UnsafeBlockExpr>, Parse::Error::Node>
   parse_unsafe_block_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-			   Location pratt_parsed_loc
-			   = Linemap::unknown_location ());
-  std::unique_ptr<AST::ArrayExpr>
+			   location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::ArrayExpr>, Parse::Error::Node>
   parse_array_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-		    Location pratt_parsed_loc = Linemap::unknown_location ());
-  std::unique_ptr<AST::ExprWithoutBlock>
+		    location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::ExprWithoutBlock>, Parse::Error::Node>
   parse_grouped_or_tuple_expr (AST::AttrVec outer_attrs = AST::AttrVec (),
-			       Location pratt_parsed_loc
-			       = Linemap::unknown_location ());
-  std::unique_ptr<AST::StructExprField> parse_struct_expr_field ();
+			       location_t pratt_parsed_loc = UNKNOWN_LOCATION);
+  tl::expected<std::unique_ptr<AST::StructExprField>,
+	       Parse::Error::StructExprField>
+  parse_struct_expr_field ();
   bool will_be_expr_with_block ();
 
   // Type-related
@@ -605,7 +819,7 @@ private:
   std::unique_ptr<AST::TypeNoBounds> parse_slice_or_array_type ();
   std::unique_ptr<AST::RawPointerType> parse_raw_pointer_type ();
   std::unique_ptr<AST::ReferenceType>
-  parse_reference_type_inner (Location locus);
+  parse_reference_type_inner (location_t locus);
   std::unique_ptr<AST::ReferenceType> parse_reference_type ();
   std::unique_ptr<AST::BareFunctionType>
   parse_bare_function_type (std::vector<AST::LifetimeParam> for_lifetimes);
@@ -628,19 +842,10 @@ private:
   std::unique_ptr<AST::LetStmt> parse_let_stmt (AST::AttrVec outer_attrs,
 						ParseRestrictions restrictions
 						= ParseRestrictions ());
-  std::unique_ptr<AST::ExprStmt> parse_expr_stmt (AST::AttrVec outer_attrs,
-						  ParseRestrictions restrictions
-						  = ParseRestrictions ());
-  std::unique_ptr<AST::ExprStmtWithBlock>
-  parse_expr_stmt_with_block (AST::AttrVec outer_attrs);
-  std::unique_ptr<AST::ExprStmtWithoutBlock>
-  parse_expr_stmt_without_block (AST::AttrVec outer_attrs,
-				 ParseRestrictions restrictions
-				 = ParseRestrictions ());
-  ExprOrStmt parse_stmt_or_expr_without_block ();
-  ExprOrStmt parse_stmt_or_expr_with_block (AST::AttrVec outer_attrs);
-  ExprOrStmt parse_macro_invocation_maybe_semi (AST::AttrVec outer_attrs);
-  ExprOrStmt parse_path_based_stmt_or_expr (AST::AttrVec outer_attrs);
+  std::unique_ptr<AST::Stmt> parse_expr_stmt (AST::AttrVec outer_attrs,
+					      ParseRestrictions restrictions
+					      = ParseRestrictions ());
+  tl::expected<ExprOrStmt, Parse::Error::Node> parse_stmt_or_expr ();
 
   // Pattern-related
   std::unique_ptr<AST::Pattern> parse_literal_or_range_pattern ();
@@ -663,13 +868,19 @@ private:
 
   void add_error (Error error) { error_table.push_back (std::move (error)); }
 
+  void collect_potential_gating_error (Feature::Name feature, Error error)
+  {
+    Features::EarlyFeatureGateStore::get ().add (feature, error);
+  }
+
 public:
   // Construct parser with specified "managed" token source.
   Parser (ManagedTokenSource &tokenSource) : lexer (tokenSource) {}
 
   // Parse items without parsing an entire crate. This function is the main
   // parsing loop of AST::Crate::parse_crate().
-  std::vector<std::unique_ptr<AST::Item> > parse_items ();
+  tl::expected<std::vector<std::unique_ptr<AST::Item>>, Parse::Error::Items>
+  parse_items ();
 
   // Main entry point for parser.
   std::unique_ptr<AST::Crate> parse_crate ();
@@ -684,15 +895,24 @@ public:
   // Get a reference to the list of errors encountered
   std::vector<Error> &get_errors () { return error_table; }
 
+  std::vector<std::pair<Feature::Name, Error>> &
+  get_potential_feature_gate_errors ()
+  {
+    return gating_errors;
+  }
+
   const ManagedTokenSource &get_token_source () const { return lexer; }
 
   const_TokenPtr peek_current_token () { return lexer.peek_token (0); }
+  const_TokenPtr peek (int n) { return lexer.peek_token (n); }
 
 private:
   // The token source (usually lexer) associated with the parser.
   ManagedTokenSource &lexer;
   // The error list.
   std::vector<Error> error_table;
+
+  std::vector<std::pair<Feature::Name, Error>> gating_errors;
   // The names of inline modules while parsing.
   std::vector<std::string> inline_module_stack;
 
@@ -708,11 +928,15 @@ private:
     }
     ~InlineModuleStackScope () { parser.inline_module_stack.pop_back (); }
   };
+
+  // don't want to make things *only* AttributeParser uses public
+  // TODO: fold more of AttributeParser into Parser?
+  friend struct ::Rust::AST::AttributeParser;
 };
 
-std::string
-extract_module_path (const AST::AttrVec &inner_attrs,
-		     const AST::AttrVec &outer_attrs, const std::string &name);
+std::string extract_module_path (const AST::AttrVec &inner_attrs,
+				 const AST::AttrVec &outer_attrs,
+				 const std::string &name);
 
 /**
  * Check if a MacroMatch is allowed to follow the last parsed MacroMatch.
@@ -722,12 +946,8 @@ extract_module_path (const AST::AttrVec &inner_attrs,
  *
  * @return true if the follow-up is valid, false otherwise
  */
-bool
-is_match_compatible (const AST::MacroMatch &last_match,
-		     const AST::MacroMatch &current_match);
+bool is_match_compatible (const AST::MacroMatch &last_match,
+			  const AST::MacroMatch &current_match);
 } // namespace Rust
-
-// as now template, include implementations of all methods
-#include "rust-parse-impl.h"
 
 #endif // RUST_PARSE_H

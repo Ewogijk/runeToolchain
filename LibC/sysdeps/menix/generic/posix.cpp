@@ -51,7 +51,7 @@ int sys_flock(int fd, int options) {
 	return r.error;
 }
 
-int sys_open_dir(const char *path, int *handle) { return sys_open(path, O_DIRECTORY, 0, handle); }
+int sys_open_dir(const char *path, int *handle) { return sys_open(path, O_RDONLY | O_DIRECTORY, 0600, handle); }
 
 int sys_read_entries(int handle, void *buffer, size_t max_size, size_t *bytes_read) {
 	auto r = menix_syscall(SYSCALL_GETDENTS, handle, (size_t)buffer, (size_t)max_size);
@@ -475,19 +475,34 @@ int sys_socketpair(int domain, int type_and_flags, int proto, int *fds) {
 	return 0;
 }
 
-int sys_poll(struct pollfd *fds, nfds_t count, int timeout, int *num_events) {
-	auto r = menix_syscall(SYSCALL_POLL, (size_t)fds, count, timeout);
+int sys_ppoll(
+    struct pollfd *fds,
+    nfds_t count,
+    const struct timespec *timeout,
+    const sigset_t *sigmask,
+    int *num_events
+) {
+	auto r = menix_syscall(SYSCALL_PPOLL, (size_t)fds, count, (size_t)timeout, (size_t)sigmask);
 	if (r.error)
 		return r.error;
 	*num_events = (int)r.value;
 	return 0;
 }
 
+int sys_poll(struct pollfd *fds, nfds_t count, int timeout, int *num_events) {
+	struct timespec ts;
+	ts.tv_sec = timeout / 1000;
+	ts.tv_nsec = (timeout % 1000) * 1000000;
+
+	return sys_ppoll(fds, count, timeout != -1 ? &ts : NULL, NULL, num_events);
+}
+
 int sys_ioctl(int fd, unsigned long request, void *arg, int *result) {
 	auto r = menix_syscall(SYSCALL_IOCTL, fd, request, (size_t)arg);
 	if (r.error)
 		return r.error;
-	*result = r.value;
+	if (result)
+		*result = r.value;
 	return 0;
 }
 
@@ -562,11 +577,22 @@ int sys_peername(
 }
 
 int sys_gethostname(char *buffer, size_t bufsize) {
-	return menix_syscall(SYSCALL_GETHOSTNAME, (size_t)buffer, bufsize).error;
+	struct utsname name;
+	int i = sys_uname(&name);
+	if (i)
+		return i;
+	if (bufsize >= sizeof(name.nodename))
+		bufsize = sizeof(name.nodename) - 1;
+	memcpy(buffer, name.nodename, bufsize);
+	return 0;
 }
 
 int sys_sethostname(const char *buffer, size_t bufsize) {
-	return menix_syscall(SYSCALL_SETHOSTNAME, (size_t)buffer, bufsize).error;
+	struct utsname name = {};
+	if (bufsize >= sizeof(name.nodename))
+		bufsize = sizeof(name.nodename) - 1;
+	memcpy(name.nodename, buffer, bufsize);
+	return menix_syscall(SYSCALL_SETUNAME, (size_t)&name).error;
 }
 
 int sys_mkfifoat(int dirfd, const char *path, mode_t mode) {
@@ -633,7 +659,7 @@ int sys_timer_settime(
 int sys_timer_delete(timer_t t) { return menix_syscall(SYSCALL_TIMER_DELETE, (size_t)t).error; }
 
 int sys_uname(struct utsname *buf) {
-	auto r = menix_syscall(SYSCALL_UNAME, (size_t)buf);
+	auto r = menix_syscall(SYSCALL_GETUNAME, (size_t)buf);
 	return r.error;
 }
 

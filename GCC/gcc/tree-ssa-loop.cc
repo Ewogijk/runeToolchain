@@ -1,5 +1,5 @@
 /* Loop optimizations over tree-ssa.
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -28,6 +28,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tm_p.h"
 #include "fold-const.h"
 #include "gimple-iterator.h"
+#include "gimple-range.h"
 #include "tree-ssa-loop-ivopts.h"
 #include "tree-ssa-loop-manip.h"
 #include "tree-ssa-loop-niter.h"
@@ -35,7 +36,6 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfgloop.h"
 #include "tree-inline.h"
 #include "tree-scalar-evolution.h"
-#include "tree-vectorizer.h"
 #include "omp-general.h"
 #include "diagnostic-core.h"
 #include "stringpool.h"
@@ -405,10 +405,14 @@ pass_scev_cprop::execute (function *)
 {
   bool any = false;
 
+  enable_ranger (cfun);
+
   /* Perform final value replacement in loops, in case the replacement
      expressions are cheap.  */
   for (auto loop : loops_list (cfun, LI_FROM_INNERMOST))
     any |= final_value_replacement_loop (loop);
+
+  disable_ranger (cfun);
 
   return any ? TODO_cleanup_cfg | TODO_update_ssa_only_virtuals : 0;
 }

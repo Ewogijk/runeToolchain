@@ -1,7 +1,15 @@
 /* { dg-output "3\r*\n" } */
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+
 extern "C" {
     fn printf(s: *const i8, ...);
 }
+
+#[lang = "sized"]
+pub trait Sized {}
 
 trait FnLike<A, R> {
     fn call(&self, arg: A) -> R;
@@ -10,7 +18,6 @@ trait FnLike<A, R> {
 struct S;
 impl<T> FnLike<&T, &T> for S {
     fn call(&self, arg: &T) -> &T {
-        // { dg-warning "unused name .self." "" { target *-*-* } .-1 }
         arg
     }
 }

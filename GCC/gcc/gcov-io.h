@@ -1,5 +1,5 @@
 /* File format for coverage information
-   Copyright (C) 1996-2023 Free Software Foundation, Inc.
+   Copyright (C) 1996-2026 Free Software Foundation, Inc.
    Contributed by Bob Manson <manson@cygnus.com>.
    Completely remangled by Nathan Sidwell <nathan@codesourcery.com>.
 
@@ -101,7 +101,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
    Records are not nested, but there is a record hierarchy.  Tag
    numbers reflect this hierarchy.  Tags are unique across note and
    data files.  Some record types have a varying amount of data.  The
-   LENGTH is the number of 4bytes that follow and is usually used to
+   LENGTH is the number of bytes that follow and is usually used to
    determine how much data.  The tag value is split into 4 8-bit
    fields, one for each of four possible levels.  The most significant
    is allocated first.  Unused levels are zero.  Active levels are
@@ -261,6 +261,12 @@ typedef uint64_t gcov_type_unsigned;
 #define GCOV_TAG_ARCS		 ((gcov_unsigned_t)0x01430000)
 #define GCOV_TAG_ARCS_LENGTH(NUM)  (1 + (NUM) * 2 * GCOV_WORD_SIZE)
 #define GCOV_TAG_ARCS_NUM(LENGTH)  (((LENGTH / GCOV_WORD_SIZE) - 1) / 2)
+#define GCOV_TAG_CONDS		   ((gcov_unsigned_t)0x01470000)
+#define GCOV_TAG_CONDS_LENGTH(NUM) ((NUM) * 2 * GCOV_WORD_SIZE)
+#define GCOV_TAG_CONDS_NUM(LENGTH) (((LENGTH) / GCOV_WORD_SIZE) / 2)
+#define GCOV_TAG_PATHS		   ((gcov_unsigned_t)0x01490000)
+#define GCOV_TAG_PATHS_LENGTH(NUM) ((NUM) * GCOV_WORD_SIZE)
+#define GCOV_TAG_PATHS_NUM(LENGTH) (((LENGTH) / GCOV_WORD_SIZE))
 #define GCOV_TAG_LINES		 ((gcov_unsigned_t)0x01450000)
 #define GCOV_TAG_COUNTER_BASE 	 ((gcov_unsigned_t)0x01a10000)
 #define GCOV_TAG_COUNTER_LENGTH(NUM) ((NUM) * 2 * GCOV_WORD_SIZE)
@@ -268,6 +274,8 @@ typedef uint64_t gcov_type_unsigned;
 #define GCOV_TAG_OBJECT_SUMMARY  ((gcov_unsigned_t)0xa1000000)
 #define GCOV_TAG_OBJECT_SUMMARY_LENGTH (2 * GCOV_WORD_SIZE)
 #define GCOV_TAG_PROGRAM_SUMMARY ((gcov_unsigned_t)0xa3000000) /* Obsolete */
+
+#define GCOV_TAG_AFDO_SUMMARY    ((gcov_unsigned_t)0xa8000000)
 #define GCOV_TAG_AFDO_FILE_NAMES ((gcov_unsigned_t)0xaa000000)
 #define GCOV_TAG_AFDO_FUNCTION ((gcov_unsigned_t)0xac000000)
 #define GCOV_TAG_AFDO_WORKING_SET ((gcov_unsigned_t)0xaf000000)
@@ -334,6 +342,8 @@ GCOV_COUNTERS
 #define GCOV_ARC_ON_TREE 	(1 << 0)
 #define GCOV_ARC_FAKE		(1 << 1)
 #define GCOV_ARC_FALLTHROUGH	(1 << 2)
+#define GCOV_ARC_TRUE		(1 << 3)
+#define GCOV_ARC_FALSE		(1 << 4)
 
 /* Object & program summary record.  */
 
@@ -341,6 +351,11 @@ struct gcov_summary
 {
   gcov_unsigned_t runs;		/* Number of program runs.  */
   gcov_type sum_max;    	/* Sum of individual run max values.  */
+  gcov_type cutoff;		/* Values smaller than this value are not
+				   reliable (0 may mean non-zero).
+				   For read profile cutoff is typically 1
+				   however when we scale up or use auto-fdo
+				   it may become bigger value.  */
 };
 
 #if !defined(inhibit_libc)
@@ -374,6 +389,7 @@ char *mangle_path (char const *base);
 /* Available outside gcov */
 GCOV_LINKAGE void gcov_write (const void *, unsigned) ATTRIBUTE_HIDDEN;
 GCOV_LINKAGE void gcov_write_unsigned (gcov_unsigned_t) ATTRIBUTE_HIDDEN;
+GCOV_LINKAGE int gcov_is_error (void);
 #endif
 
 #if !IN_GCOV && !IN_LIBGCOV

@@ -1,3 +1,10 @@
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
+
 struct Foo(f32, bool);
 
 struct GenericStruct<T>(T, usize);

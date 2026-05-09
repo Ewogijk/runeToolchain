@@ -1,6 +1,6 @@
 ## Makefile for the C++11 sources of the GNU C++ Standard library.
 ##
-## Copyright (C) 1997-2023 Free Software Foundation, Inc.
+## Copyright (C) 1997-2026 Free Software Foundation, Inc.
 ##
 ## This file is part of the libstdc++ version 3 distribution.
 ## Process this file with automake to produce Makefile.in.
@@ -43,7 +43,8 @@ experimental_dir =
 endif
 
 ## Keep this list sync'd with acinclude.m4:GLIBCXX_CONFIGURE.
-SUBDIRS = c++98 c++11 c++17 c++20 $(filesystem_dir) $(backtrace_dir) $(experimental_dir)
+SUBDIRS = c++98 c++11 c++17 c++20 c++23 c++26 \
+	$(filesystem_dir) $(backtrace_dir) $(experimental_dir)
 
 # Cross compiler support.
 if VTV_CYGMIN
@@ -75,6 +76,8 @@ vpath % $(top_srcdir)/src/c++98
 vpath % $(top_srcdir)/src/c++11
 vpath % $(top_srcdir)/src/c++17
 vpath % $(top_srcdir)/src/c++20
+vpath % $(top_srcdir)/src/c++23
+vpath % $(top_srcdir)/src/c++26
 if ENABLE_FILESYSTEM_TS
 vpath % $(top_srcdir)/src/filesystem
 endif
@@ -142,7 +145,8 @@ libstdc___la_LIBADD = \
 	$(top_builddir)/src/c++98/libc++98convenience.la \
 	$(top_builddir)/src/c++11/libc++11convenience.la \
 	$(top_builddir)/src/c++17/libc++17convenience.la \
-	$(top_builddir)/src/c++20/libc++20convenience.la
+	$(top_builddir)/src/c++20/libc++20convenience.la \
+	$(top_builddir)/src/c++23/libmodulesconvenience.la
 
 libstdc___la_DEPENDENCIES = \
 	${version_dep} \
@@ -150,10 +154,16 @@ libstdc___la_DEPENDENCIES = \
 	$(top_builddir)/src/c++98/libc++98convenience.la \
 	$(top_builddir)/src/c++11/libc++11convenience.la \
 	$(top_builddir)/src/c++17/libc++17convenience.la \
-	$(top_builddir)/src/c++20/libc++20convenience.la
+	$(top_builddir)/src/c++20/libc++20convenience.la \
+	$(top_builddir)/src/c++23/libmodulesconvenience.la
+
+if ENABLE_DARWIN_AT_RPATH
+libstdc___darwin_rpath = -Wc,-nodefaultrpaths
+libstdc___darwin_rpath += -Wl,-rpath,@loader_path
+endif
 
 libstdc___la_LDFLAGS = \
-	-version-info $(libtool_VERSION) ${version_arg} -lm
+	-version-info $(libtool_VERSION) ${version_arg} -lm $(libstdc___darwin_rpath)
 
 libstdc___la_LINK = $(CXXLINK) $(libstdc___la_LDFLAGS) $(lt_host_flags)
 
@@ -342,9 +352,7 @@ libstdc++-symbols.ver-sun : libstdc++-symbols.ver \
 	CXXFILT="$(CXXFILT)"; export CXXFILT; \
 	perl $(toplevel_srcdir)/contrib/make_sunver.pl \
 	  libstdc++-symbols.ver \
-	  $(libstdc___la_OBJECTS:%.lo=.libs/%.o) \
-	 `echo ' $(libstdc___la_LIBADD) ' | \
-	    sed -e 's,/\([^/.]*\)\.la,/.libs/\1.a,g' -e 's/ -l[^ ]* / /'` \
+	  $(libstdc___la_OBJECTS) $(libstdc___la_LIBADD) \
 	 > $@ || (rm -f $@ ; exit 1)
 endif
 if ENABLE_SYMVERS_DARWIN

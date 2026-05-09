@@ -1,6 +1,6 @@
 (* RndFile.mod implement the ISO RndFile specification.
 
-Copyright (C) 2008-2023 Free Software Foundation, Inc.
+Copyright (C) 2008-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -51,7 +51,7 @@ FROM EXCEPTIONS IMPORT ExceptionNumber, RAISE,
                        AllocateSource, ExceptionSource, IsCurrentSource,
                        IsExceptionalExecution ;
 
-IMPORT FIO, SYSTEM, RTio, errno, ErrnoCategory ;
+IMPORT FIO, RTio, errno, ErrnoCategory ;
 
 
 VAR
@@ -359,13 +359,13 @@ VAR
 BEGIN
    IF IsRndFile(cid)
    THEN
-      d := DeviceTablePtrValue(cid, did) ;
-      RETURN( 0 )
+      d := DeviceTablePtrValue(cid, did)
    ELSE
       RAISEdevException(cid, did, IOChan.wrongDevice,
                         'RndFile.' + __FUNCTION__ +
                         ': channel is not a random file')
-   END
+   END ;
+   RETURN( 0 )
 END StartPos ;
 
 
@@ -386,7 +386,8 @@ BEGIN
    ELSE
       RAISEdevException(cid, did, IOChan.wrongDevice,
                         'RndFile.' + __FUNCTION__ +
-                        ': channel is not a random file')
+                        ': channel is not a random file') ;
+      RETURN 0
    END
 END CurrentPos ;
 
@@ -397,9 +398,9 @@ PROCEDURE EndPos (cid: ChanId): FilePos;
      position after which there have been no writes.
   *)
 VAR
-   d  : DeviceTablePtr ;
-   end,
-   old: FilePos ;
+   d   : DeviceTablePtr ;
+   endP,
+   old : FilePos ;
 BEGIN
    IF IsRndFile(cid)
    THEN
@@ -409,14 +410,15 @@ BEGIN
          old := CurrentPos(cid) ;
          FIO.SetPositionFromEnd(RTio.GetFile(cid), 0) ;
          checkErrno(dev, d) ;
-         end := CurrentPos(cid) ;
+         endP := CurrentPos(cid) ;
          FIO.SetPositionFromBeginning(RTio.GetFile(cid), old) ;
-         RETURN( end )
+         RETURN( endP )
       END
    ELSE
       RAISEdevException(cid, did, IOChan.wrongDevice,
                         'RndFile.' + __FUNCTION__ +
-                        ': channel is not a random file')
+                        ': channel is not a random file') ;
+      RETURN 0
    END
 END EndPos ;
 
@@ -442,7 +444,8 @@ BEGIN
    ELSE
       RAISEdevException(cid, did, IOChan.wrongDevice,
                         'RndFile.' + __FUNCTION__ +
-                        ': channel is not a random file')
+                        ': channel is not a random file') ;
+      RETURN 0
    END
 END NewPos ;
 

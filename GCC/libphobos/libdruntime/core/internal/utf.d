@@ -21,6 +21,8 @@
 
 module core.internal.utf;
 
+debug (utf) import core.stdc.stdio : printf;
+
 extern (C) void onUnicodeError( string msg, size_t idx, string file = __FILE__, size_t line = __LINE__ ) @safe pure;
 
 /*******************************
@@ -753,7 +755,7 @@ wstring toUTF16(const scope char[] s)
     return cast(wstring)r;
 }
 
-alias const(wchar)* wptr;
+alias wptr = const(wchar)*;
 /** ditto */
 @safe pure
 wptr toUTF16z(const scope char[] s)

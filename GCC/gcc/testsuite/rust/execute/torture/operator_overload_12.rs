@@ -1,8 +1,16 @@
 // { dg-output "1\r*\n" }
 // { dg-additional-options "-w" }
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+
 extern "C" {
     fn printf(s: *const i8, ...);
 }
+
+#[lang = "sized"]
+pub trait Sized {}
 
 #[lang = "bitand_assign"]
 pub trait BitAndAssign<Rhs = Self> {

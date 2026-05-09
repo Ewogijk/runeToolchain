@@ -2,6 +2,24 @@
  * This module contains UDA's (User Defined Attributes) either used in
  * the runtime or special UDA's recognized by compiler.
  *
+ * $(SCRIPT inhibitQuickIndex = 1;)
+ * $(BOOKTABLE Cheat Sheet,
+ * $(THEAD Attribute Name, Linkage, Description)
+ * $(TROW $(LREF gnuAbiTag), C++,
+ *         Declares an ABI tag on a C++ symbol.)
+ * $(TROW $(LREF mustuse),,
+ *          Ensures that values of a struct or union type are not discarded.)
+ * $(TROW $(LREF optional), Objective-C,
+ *         Makes an Objective-C interface method optional.)
+ * $(TROW $(LREF selector), Objective-C,
+ *          Attaches an Objective-C selector to a method.)
+ * $(TROW $(LREF standalone),,
+ *          Marks a shared module constructor as not depending on any
+ *          other module constructor being run first.)
+ * $(TROW $(LREF weak),,
+ *         Specifies that a global symbol should be emitted with weak linkage.)
+ * )
+ *
  * Copyright: Copyright Jacob Carlborg 2015.
  * License:   $(LINK2 http://www.boost.org/LICENSE_1_0.txt, Boost License 1.0)
  * Authors:   Jacob Carlborg
@@ -59,6 +77,32 @@ version (CoreDdoc)
 version (DigitalMars)
 {
     enum weak;
+}
+else
+{
+    // GDC and LDC declare this attribute in their own modules.
+}
+
+/**
+* When applied to a global variable, causes it to be emitted to a
+* non-standard object file/executable section.
+*
+* The target platform might impose certain restrictions on the format for
+* section names.
+*
+* Examples:
+* ---
+* import core.attributes;
+*
+* @section("mySection") int myGlobal;
+* ---
+*/
+version (DigitalMars)
+{
+    struct section
+    {
+        string name;
+    }
 }
 else
 {
@@ -290,3 +334,15 @@ version (UdaGNUAbiTag) struct gnuAbiTag
  * ---
  */
 enum mustuse;
+
+/**
+ * Use this attribute to indicate that a shared module constructor does not depend on any
+ * other module constructor being run first. This avoids errors on cyclic module constructors.
+ *
+ * However, it is now up to the user to enforce safety.
+ * The module constructor must be marked `@system` as a result.
+ * Prefer to refactor the module constructor causing the cycle so it's in its own module if possible.
+ *
+ * This is only allowed on `shared` static constructors, not thread-local module constructors.
+ */
+enum standalone;

@@ -1,5 +1,5 @@
-/* Subclass of diagnostic_path for analyzer diagnostics.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+/* Subclass of diagnostics::paths::path for analyzer diagnostics.
+   Copyright (C) 2019-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -22,36 +22,61 @@ along with GCC; see the file COPYING3.  If not see
 #define GCC_ANALYZER_CHECKER_PATH_H
 
 #include "analyzer/checker-event.h"
+#include "simple-diagnostic-path.h"
 
 namespace ana {
 
-/* Subclass of diagnostic_path for analyzer diagnostics.  */
+/* Subclass of diagnostic path for analyzer diagnostics.  */
 
-class checker_path : public diagnostic_path
+class checker_path : public diagnostics::paths::path
 {
 public:
-  checker_path (logger *logger) : diagnostic_path (), m_logger (logger) {}
+  checker_path (const diagnostics::logical_locations::manager &logical_loc_mgr,
+		const extrinsic_state &ext_state,
+		logger *logger)
+  : diagnostics::paths::path (logical_loc_mgr),
+    m_ext_state (ext_state),
+    m_thread ("main"),
+    m_logger (logger)
+  {}
 
-  /* Implementation of diagnostic_path vfuncs.  */
+  /* Implementation of diagnostics::paths::path vfuncs.  */
 
   unsigned num_events () const final override
   {
     return m_events.length ();
   }
 
-  const diagnostic_event & get_event (int idx) const final override
+  const diagnostics::paths::event &
+  get_event (int idx) const final override
   {
     return *m_events[idx];
   }
+  unsigned num_threads () const final override
+  {
+    return 1;
+  }
+  const diagnostics::paths::thread &
+  get_thread (diagnostics::paths::thread_id_t) const final override
+  {
+    return m_thread;
+  }
+
+  const extrinsic_state &get_ext_state () const { return m_ext_state; }
 
   checker_event *get_checker_event (int idx)
   {
     return m_events[idx];
   }
 
+  bool
+  same_function_p (int event_idx_a,
+		   int event_idx_b) const final override;
+
   void dump (pretty_printer *pp) const;
   void debug () const;
 
+  logger *get_logger () const { return m_logger; }
   void maybe_log (logger *logger, const char *desc) const;
 
   void add_event (std::unique_ptr<checker_event> event);
@@ -91,21 +116,22 @@ public:
     checker_event *e;
     int i;
     FOR_EACH_VEC_ELT (m_events, i, e)
-      e->prepare_for_emission (this, pd, diagnostic_event_id_t (i));
+      e->prepare_for_emission (this, pd, diagnostics::paths::event_id_t (i));
   }
 
   void fixup_locations (pending_diagnostic *pd);
 
   void record_setjmp_event (const exploded_node *enode,
-			    diagnostic_event_id_t setjmp_emission_id)
+			    diagnostics::paths::event_id_t setjmp_emission_id)
   {
     m_setjmp_event_ids.put (enode, setjmp_emission_id);
   }
 
   bool get_setjmp_event (const exploded_node *enode,
-			 diagnostic_event_id_t *out_emission_id)
+			 diagnostics::paths::event_id_t *out_emission_id)
   {
-    if (diagnostic_event_id_t *emission_id = m_setjmp_event_ids.get (enode))
+    if (diagnostics::paths::event_id_t *emission_id
+	  = m_setjmp_event_ids.get (enode))
       {
 	*out_emission_id = *emission_id;
 	return true;
@@ -120,13 +146,17 @@ public:
 private:
   DISABLE_COPY_AND_ASSIGN(checker_path);
 
+  const extrinsic_state &m_ext_state;
+
+  simple_diagnostic_thread m_thread;
+
   /* The events that have occurred along this path.  */
   auto_delete_vec<checker_event> m_events;
 
   /* During prepare_for_emission (and after), the setjmp_event for each
      exploded_node *, so that rewind events can refer to them in their
      descriptions.  */
-  hash_map <const exploded_node *, diagnostic_event_id_t> m_setjmp_event_ids;
+  hash_map <const exploded_node *, diagnostics::paths::event_id_t> m_setjmp_event_ids;
 
   logger *m_logger;
 };

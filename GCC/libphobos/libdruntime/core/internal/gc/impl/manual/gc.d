@@ -23,10 +23,12 @@ import core.gc.gcinterface;
 
 import core.internal.container.array;
 
+import core.thread.threadbase : ThreadBase;
+
 import cstdlib = core.stdc.stdlib : calloc, free, malloc, realloc;
 static import core.memory;
 
-extern (C) void onOutOfMemoryError(void* pretend_sideffect = null) @trusted pure nothrow @nogc; /* dmd @@@BUG11461@@@ */
+extern (C) noreturn onOutOfMemoryError(void* pretend_sideffect = null, string file = __FILE__, size_t line = __LINE__) @trusted pure nothrow @nogc; /* dmd @@@BUG11461@@@ */
 
 // register GC in C constructor (_STI_)
 private pragma(crt_constructor) void gc_manual_ctor()
@@ -76,10 +78,6 @@ class ManualGC : GC
     }
 
     void collect() nothrow
-    {
-    }
-
-    void collectNoStack() nothrow
     {
     }
 
@@ -270,5 +268,33 @@ class ManualGC : GC
     ulong allocatedInCurrentThread() nothrow
     {
         return typeof(return).init;
+    }
+
+    void[] getArrayUsed(void *ptr, bool atomic = false) nothrow
+    {
+        return null;
+    }
+
+    bool expandArrayUsed(void[] slice, size_t newUsed, bool atomic = false) nothrow @safe
+    {
+        return false;
+    }
+
+    size_t reserveArrayCapacity(void[] slice, size_t request, bool atomic = false) nothrow @safe
+    {
+        return 0;
+    }
+
+    bool shrinkArrayUsed(void[] slice, size_t existingUsed, bool atomic = false) nothrow
+    {
+        return false;
+    }
+
+    void initThread(ThreadBase t) nothrow @nogc
+    {
+    }
+
+    void cleanupThread(ThreadBase t) nothrow @nogc
+    {
     }
 }

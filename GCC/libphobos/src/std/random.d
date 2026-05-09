@@ -247,23 +247,17 @@ version (StdUnittest)
  *   $(LI it has a 'bool isUniformRandom' field readable in CTFE)
  * )
  */
-template isUniformRNG(Rng, ElementType)
-{
-    enum bool isUniformRNG = .isUniformRNG!Rng &&
-        is(std.range.primitives.ElementType!Rng == ElementType);
-}
+enum isUniformRNG(Rng, ElementType) = .isUniformRNG!Rng &&
+	is(std.range.primitives.ElementType!Rng == ElementType);
 
 /**
  * ditto
  */
-template isUniformRNG(Rng)
-{
-    enum bool isUniformRNG = isInputRange!Rng &&
-        is(typeof(
-        {
-            static assert(Rng.isUniformRandom); //tag
-        }));
-}
+enum isUniformRNG(Rng) = isInputRange!Rng &&
+	is(typeof(
+	{
+        static assert(Rng.isUniformRandom); //tag
+    }));
 
 ///
 @safe unittest
@@ -311,29 +305,23 @@ template isUniformRNG(Rng)
  *   $(LI it has a 'seed(ElementType)' function)
  * )
  */
-template isSeedable(Rng, SeedType)
-{
-    enum bool isSeedable = isUniformRNG!(Rng) &&
-        is(typeof(
-        {
-            Rng r = void;              // can define a Rng object
-            SeedType s = void;
-            r.seed(s); // can seed a Rng
-        }));
-}
+enum isSeedable(Rng, SeedType) = isUniformRNG!(Rng) &&
+	is(typeof(
+    {
+        Rng r = void;              ///< can define a Rng object
+        SeedType s = void; ///< Dummy doc to silence D-scanner.
+        r.seed(s); // can seed a Rng
+    }));
 
 ///ditto
-template isSeedable(Rng)
-{
-    enum bool isSeedable = isUniformRNG!Rng &&
-        is(typeof(
-        {
-            Rng r = void;                     // can define a Rng object
-            alias SeedType = typeof(r.front);
-            SeedType s = void;
-            r.seed(s); // can seed a Rng
-        }));
-}
+enum isSeedable(Rng) = isUniformRNG!Rng &&
+	is(typeof(
+    {
+        Rng r = void;                     ///< can define a Rng object
+        alias SeedType = typeof(r.front);
+        SeedType s = void; ///< Dummy doc to silence D-scanner.
+        r.seed(s); // can seed a Rng
+    }));
 
 ///
 @safe unittest
@@ -812,7 +800,7 @@ Parameters for the generator.
 
     // Bitmasks used in the 'twist' part of the algorithm
     private enum UIntType lowerMask = (cast(UIntType) 1u << r) - 1,
-                          upperMask = (~lowerMask) & this.max;
+                          upperMask = (~lowerMask) & max;
 
     /*
        Collection of all state variables
@@ -905,17 +893,17 @@ Parameters for the generator.
     private static void seedImpl(UIntType value, ref State mtState) @nogc
     {
         mtState.data[$ - 1] = value;
-        static if (this.max != UIntType.max)
+        static if (max != UIntType.max)
         {
-            mtState.data[$ - 1] &= this.max;
+            mtState.data[$ - 1] &= max;
         }
 
         foreach_reverse (size_t i, ref e; mtState.data[0 .. $ - 1])
         {
             e = f * (mtState.data[i + 1] ^ (mtState.data[i + 1] >> (w - 2))) + cast(UIntType)(n - (i + 1));
-            static if (this.max != UIntType.max)
+            static if (max != UIntType.max)
             {
-                e &= this.max;
+                e &= max;
             }
         }
 
@@ -935,7 +923,8 @@ Parameters for the generator.
    `Exception` if the InputRange didn't provide enough elements to seed the generator.
    The number of elements required is the 'n' template parameter of the MersenneTwisterEngine struct.
  */
-    void seed(T)(T range) if (isInputRange!T && is(immutable ElementType!T == immutable UIntType))
+    void seed(T)(T range)
+    if (isInputRange!T && is(immutable ElementType!T == immutable UIntType))
     {
         this.seedImpl(range, this.state);
     }
@@ -945,7 +934,7 @@ Parameters for the generator.
        which can be used with an arbitrary `State` instance
     */
     private static void seedImpl(T)(T range, ref State mtState)
-        if (isInputRange!T && is(immutable ElementType!T == immutable UIntType))
+    if (isInputRange!T && is(immutable ElementType!T == immutable UIntType))
     {
         size_t j;
         for (j = 0; j < n && !range.empty; ++j, range.popFront())
@@ -1771,10 +1760,39 @@ else
     }
 }
 
+version (linux)
+    version = SeedUseGetEntropy;
+version (Windows)
+    version = SeedUseGetEntropy;
+
 /**
 A "good" seed for initializing random number engines. Initializing
 with $(D_PARAM unpredictableSeed) makes engines generate different
 random number sequences every run.
+
+This function utilizes the system $(I cryptographically-secure pseudo-random
+number generator (CSPRNG)) or $(I pseudo-random number generator (PRNG))
+where available and implemented (currently `arc4random` on applicable BSD
+systems, `getrandom` on Linux or `BCryptGenRandom` on Windows) to generate
+“high quality” pseudo-random numbers – if possible.
+As a consequence, calling it may block under certain circumstances (typically
+during early boot when the system's entropy pool has not yet been
+initialized).
+
+On x86 CPU models which support the `RDRAND` instruction, that will be used
+when no more specialized randomness source is implemented.
+
+In the future, further platform-specific PRNGs may be incorporated.
+
+Warning:
+$(B This function must not be used for cryptographic purposes.)
+Despite being implemented for certain targets, there are no guarantees
+that it sources its randomness from a CSPRNG.
+The implementation also includes a fallback option that provides very little
+randomness and is used when no better source of randomness is available or
+integrated on the target system.
+As written earlier, this function only aims to provide randomness for seeding
+ordinary (non-cryptographic) PRNG engines.
 
 Returns:
 A single unsigned integer seed value, different on each successive call
@@ -1787,7 +1805,16 @@ how excellent the source of entropy is.
 */
 @property uint unpredictableSeed() @trusted nothrow @nogc
 {
-    version (AnyARC4Random)
+    version (SeedUseGetEntropy)
+    {
+        import std.internal.entropy : crashOnError, EntropySource, getEntropy;
+
+        uint buffer;
+        const status = (() @trusted => getEntropy(&buffer, buffer.sizeof, EntropySource.tryAll))();
+        crashOnError(status);
+        return buffer;
+    }
+    else version (AnyARC4Random)
     {
         return arc4random();
     }
@@ -1836,7 +1863,16 @@ if (isUnsigned!UIntType)
         /// ditto
         @property UIntType unpredictableSeed() @nogc nothrow @trusted
         {
-            version (AnyARC4Random)
+            version (SeedUseGetEntropy)
+            {
+                import std.internal.entropy : crashOnError, EntropySource, getEntropy;
+
+                UIntType buffer;
+                const status = (() @trusted => getEntropy(&buffer, buffer.sizeof, EntropySource.tryAll))();
+                crashOnError(status);
+                return buffer;
+            }
+            else version (AnyARC4Random)
             {
                 static if (UIntType.sizeof <= uint.sizeof)
                 {
@@ -2215,6 +2251,7 @@ at least that number won't be represented fairly.
 Hence, our condition to reroll is
 `bucketFront > (UpperType.max - (upperDist - 1))`
 +/
+/// ditto
 auto uniform(string boundaries = "[)", T1, T2, RandomGen)
 (T1 a, T2 b, ref RandomGen rng)
 if ((isIntegral!(CommonType!(T1, T2)) || isSomeChar!(CommonType!(T1, T2))) &&
@@ -2277,9 +2314,14 @@ if ((isIntegral!(CommonType!(T1, T2)) || isSomeChar!(CommonType!(T1, T2))) &&
     return cast(ResultType)(lower + offset);
 }
 
+///
 @safe unittest
 {
     import std.conv : to;
+    import std.meta : AliasSeq;
+    import std.range.primitives : isForwardRange;
+    import std.traits : isIntegral, isSomeChar;
+
     auto gen = Mt19937(123_456_789);
     static assert(isForwardRange!(typeof(gen)));
 
@@ -2290,7 +2332,7 @@ if ((isIntegral!(CommonType!(T1, T2)) || isSomeChar!(CommonType!(T1, T2))) &&
     auto c = uniform(0.0, 1.0);
     assert(0 <= c && c < 1);
 
-    static foreach (T; std.meta.AliasSeq!(char, wchar, dchar, byte, ubyte, short, ushort,
+    static foreach (T; AliasSeq!(char, wchar, dchar, byte, ubyte, short, ushort,
                           int, uint, long, ulong, float, double, real))
     {{
         T lo = 0, hi = 100;
@@ -2344,7 +2386,7 @@ if ((isIntegral!(CommonType!(T1, T2)) || isSomeChar!(CommonType!(T1, T2))) &&
 
     auto reproRng = Xorshift(239842);
 
-    static foreach (T; std.meta.AliasSeq!(char, wchar, dchar, byte, ubyte, short,
+    static foreach (T; AliasSeq!(char, wchar, dchar, byte, ubyte, short,
                           ushort, int, uint, long, ulong))
     {{
         T lo = T.min + 10, hi = T.max - 10;
@@ -2842,7 +2884,7 @@ auto ref choice(Range)(ref Range range)
            "Choice did not return a valid element from the given Range");
 }
 
-@safe unittest // issue 18631
+@safe unittest // https://issues.dlang.org/show_bug.cgi?id=18631
 {
     auto rng = MinstdRand0(42);
     const a = [0,1,2];
@@ -2855,7 +2897,7 @@ auto ref choice(Range)(ref Range range)
     auto z1 = choice(cast(const)[1, 2, 3], rng);
 }
 
-@safe unittest // Ref range (issue 18631 PR)
+@safe unittest // Ref range (https://issues.dlang.org/show_bug.cgi?id=18631 PR)
 {
     struct TestRange
     {

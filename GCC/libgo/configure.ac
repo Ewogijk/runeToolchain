@@ -10,7 +10,7 @@ AC_INIT(package-unused, version-unused,, libgo)
 AC_CONFIG_SRCDIR(Makefile.am)
 AC_CONFIG_HEADER(config.h)
 
-libtool_VERSION=22:0:0
+libtool_VERSION=25:0:0
 AC_SUBST(libtool_VERSION)
 
 AM_ENABLE_MULTILIB(, ..)
@@ -53,6 +53,7 @@ AC_LIBTOOL_DLOPEN
 AM_PROG_LIBTOOL
 AC_SUBST(enable_shared)
 AC_SUBST(enable_static)
+AM_CONDITIONAL([ENABLE_DARWIN_AT_RPATH], [test x$enable_darwin_at_rpath = xyes])
 
 CC_FOR_BUILD=${CC_FOR_BUILD:-gcc}
 AC_SUBST(CC_FOR_BUILD)
@@ -207,6 +208,10 @@ AM_CONDITIONAL(LIBGO_IS_HURD, test $is_hurd = yes)
 AM_CONDITIONAL(LIBGO_IS_BSD, test $is_darwin = yes -o $is_dragonfly = yes -o $is_freebsd = yes -o $is_netbsd = yes -o $is_openbsd = yes)
 AC_SUBST(GOOS)
 AC_SUBST(ALLGOOS)
+
+if test "${GOOS}" = "unknown"; then
+   AC_MSG_ERROR("could not determine GOOS from ${host}")
+fi
 
 dnl Test whether we need to use DejaGNU or whether we can use the
 dnl simpler gotest approach.  We can only use gotest for a native
@@ -375,6 +380,10 @@ AC_SUBST(GOARCH)
 AC_SUBST(ALLGOARCH)
 AC_SUBST(ALLGOARCHFAMILY)
 
+if test "${GOARCH}" = "unknown"; then
+   AC_MSG_ERROR("could not determine GOARCH from ${host}")
+fi
+
 AM_CONDITIONAL(LIBGO_IS_X86, test "$GOARCH" = "386" -o "$GOARCH" = "amd64" -o "$GOARCH" = "amd64p32")
 
 FUNCTION_DESCRIPTORS=false
@@ -432,6 +441,15 @@ AC_SUBST(OSCFLAGS)
 
 dnl Check if assembler supports disabling hardware capability support.
 GCC_CHECK_ASSEMBLER_HWCAP
+
+case "$target" in
+    *86*-*-solaris2.*)
+	# Link with -shared-libgcc on Solaris 11+/x86 as a workaround for
+	# PR go/64900.
+	OSLDFLAGS="-Wc,-shared-libgcc"
+	;;
+esac
+AC_SUBST(OSLDFLAGS)
 
 dnl Use -fsplit-stack when compiling C code if available.
 AC_CACHE_CHECK([whether -fsplit-stack is supported],
@@ -912,6 +930,8 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM(,)],
 [libgo_cv_ld_static=no])
 LDFLAGS=$LDFLAGS_hold])
 AM_CONDITIONAL(HAVE_STATIC_LINK, test "$libgo_cv_ld_static" = yes)
+
+AC_SUBST(SYSROOT_CFLAGS_FOR_TARGET)
 
 AC_CACHE_SAVE
 

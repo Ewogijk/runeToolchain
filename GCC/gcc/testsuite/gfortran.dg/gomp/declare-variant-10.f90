@@ -1,7 +1,7 @@
 ! { dg-do compile }
 ! { dg-additional-options "-cpp -foffload=disable -fdump-tree-gimple" }
 ! { dg-additional-options "-mavx512bw" { target { i?86-*-* x86_64-*-* } } }
-
+! { dg-additional-options "-Wno-deprecated-openmp" }
 #undef i386
 
 program main
@@ -15,7 +15,7 @@ contains
   subroutine f03 ()
   end subroutine
   subroutine f04 ()
-    !$omp declare variant (f03) match (device={kind("any"),arch(x86_64),isa(avx512f,avx512bw)})
+    !$omp declare variant (f03) match (device={arch(x86_64),isa(avx512f,avx512bw)})
   end subroutine
   subroutine f05 ()
   end subroutine
@@ -50,7 +50,7 @@ contains
   subroutine f17 ()
   end subroutine
   subroutine f18 ()
-    !$omp declare variant (f17) match (device={kind(any,fpga)})
+    !$omp declare variant (f17) match (device={kind(fpga)})
   end subroutine
 
   subroutine test1 ()

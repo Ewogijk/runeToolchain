@@ -1,4 +1,8 @@
-// { dg-output "18\r*\n21\r*\n" }
+// { dg-output "22\r*\n25\r*\n" }
+#![feature(no_core)]
+#![no_core]
+#![feature(rustc_attrs)]
+
 extern "C" {
     fn printf(fmt: *const i8, ...);
 }

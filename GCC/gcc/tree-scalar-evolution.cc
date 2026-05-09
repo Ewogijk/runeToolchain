@@ -1,5 +1,5 @@
 /* Scalar evolution detector.
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Sebastian Pop <s.pop@laposte.net>
 
 This file is part of GCC.
@@ -284,6 +284,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-into-ssa.h"
 #include "builtins.h"
 #include "case-cfn-macros.h"
+#include "tree-eh.h"
 
 static tree analyze_scalar_evolution_1 (class loop *, tree);
 static tree analyze_scalar_evolution_for_address_of (class loop *loop,
@@ -669,6 +670,17 @@ scev_dfs::add_to_evolution_1 (tree chrec_before, tree to_add, gimple *at_stmt)
 	  to_add = chrec_convert (type, to_add, at_stmt);
 	  right = chrec_convert_rhs (type, right, at_stmt);
 	  right = chrec_fold_plus (chrec_type (right), right, to_add);
+	  /* When we have an evolution in a non-wrapping type and
+	     in the process of accumulating CHREC_RIGHT there was
+	     overflow this indicates in the association that happened
+	     in building the CHREC clearly involved UB.  Avoid this.
+	     In building a CHREC we basically turn (a + INCR1) + INCR2
+	     into a + (INCR1 + INCR2) which is not always valid.
+	     Note this check only catches few invalid cases.  */
+	  if ((INTEGRAL_TYPE_P (type) && ! TYPE_OVERFLOW_WRAPS (type))
+	      && TREE_CODE (right) == INTEGER_CST
+	      && TREE_OVERFLOW (right))
+	    return chrec_dont_know;
 	  return build_polynomial_chrec (var, left, right);
 	}
       else
@@ -868,9 +880,23 @@ scev_dfs::add_to_evolution (tree chrec_before, enum tree_code code,
     }
 
   if (code == MINUS_EXPR)
-    to_add = chrec_fold_multiply (type, to_add, SCALAR_FLOAT_TYPE_P (type)
-				  ? build_real (type, dconstm1)
-				  : build_int_cst_type (type, -1));
+    {
+      if (INTEGRAL_TYPE_P (type)
+	  && TYPE_OVERFLOW_UNDEFINED (type)
+	  && !expr_not_equal_to (to_add,
+				 wi::to_wide (TYPE_MIN_VALUE (type))))
+	{
+	  tree utype = unsigned_type_for (type);
+	  to_add = chrec_convert_rhs (utype, to_add);
+	  to_add = chrec_fold_multiply (utype, to_add,
+					build_int_cst_type (utype, -1));
+	  to_add = chrec_convert_rhs (type, to_add);
+	}
+      else
+	to_add = chrec_fold_multiply (type, to_add, SCALAR_FLOAT_TYPE_P (type)
+				      ? build_real (type, dconstm1)
+				      : build_int_cst_type (type, -1));
+    }
 
   res = add_to_evolution_1 (chrec_before, to_add, at_stmt);
 
@@ -1293,20 +1319,22 @@ scev_dfs::follow_ssa_edge_expr (gimple *at_stmt, tree expr,
 gcond *
 get_loop_exit_condition (const class loop *loop)
 {
+  return get_loop_exit_condition (single_exit (loop));
+}
+
+/* If the statement just before the EXIT_EDGE contains a condition then
+   return the condition, otherwise NULL. */
+
+gcond *
+get_loop_exit_condition (const_edge exit_edge)
+{
   gcond *res = NULL;
-  edge exit_edge = single_exit (loop);
 
   if (dump_file && (dump_flags & TDF_SCEV))
     fprintf (dump_file, "(get_loop_exit_condition \n  ");
 
   if (exit_edge)
-    {
-      gimple *stmt;
-
-      stmt = last_stmt (exit_edge->src);
-      if (gcond *cond_stmt = safe_dyn_cast <gcond *> (stmt))
-	res = cond_stmt;
-    }
+    res = safe_dyn_cast <gcond *> (*gsi_last_bb (exit_edge->src));
 
   if (dump_file && (dump_flags & TDF_SCEV))
     {
@@ -1340,7 +1368,37 @@ simplify_peeled_chrec (class loop *loop, tree arg, tree init_cond)
   hash_map<tree, name_expansion *> *peeled_chrec_map = NULL;
 
   ev = instantiate_parameters (loop, analyze_scalar_evolution (loop, arg));
-  if (ev == NULL_TREE || TREE_CODE (ev) != POLYNOMIAL_CHREC)
+  if (ev == NULL_TREE)
+    return chrec_dont_know;
+
+  /* Support the case where we can derive the original CHREC from the
+     peeled one if that's a converted other IV.  This can be done
+     when the original unpeeled converted IV does not overflow and
+     has the same initial value.  */
+  if (CONVERT_EXPR_P (ev)
+      && TREE_CODE (init_cond) == INTEGER_CST
+      && TREE_CODE (TREE_OPERAND (ev, 0)) == POLYNOMIAL_CHREC
+      && (TYPE_PRECISION (TREE_TYPE (ev))
+	  > TYPE_PRECISION (TREE_TYPE (TREE_OPERAND (ev, 0))))
+      && (!TYPE_UNSIGNED (TREE_TYPE (ev))
+	  || TYPE_UNSIGNED (TREE_TYPE (TREE_OPERAND (ev, 0)))))
+    {
+      left = CHREC_LEFT (TREE_OPERAND (ev, 0));
+      right = CHREC_RIGHT (TREE_OPERAND (ev, 0));
+      tree left_before = chrec_fold_minus (TREE_TYPE (TREE_OPERAND (ev, 0)),
+					   left, right);
+      if (TREE_CODE (left_before) == INTEGER_CST
+	  && wi::to_widest (init_cond) == wi::to_widest (left_before)
+	  && !scev_probably_wraps_p (NULL_TREE, left_before, right, NULL,
+				     loop, false))
+	return build_polynomial_chrec (loop->num, init_cond,
+				       chrec_convert (TREE_TYPE (ev),
+						      right, NULL,
+						      false, NULL_TREE));
+      return chrec_dont_know;
+    }
+
+  if (TREE_CODE (ev) != POLYNOMIAL_CHREC)
     return chrec_dont_know;
 
   left = CHREC_LEFT (ev);
@@ -1709,6 +1767,20 @@ interpret_rhs_expr (class loop *loop, gimple *at_stmt,
       res = chrec_fold_plus (type, chrec1, chrec2);
       break;
 
+    case POINTER_DIFF_EXPR:
+      {
+	tree utype = unsigned_type_for (type);
+	chrec1 = analyze_scalar_evolution (loop, rhs1);
+	chrec2 = analyze_scalar_evolution (loop, rhs2);
+	chrec1 = chrec_convert (utype, chrec1, at_stmt);
+	chrec2 = chrec_convert (utype, chrec2, at_stmt);
+	chrec1 = instantiate_parameters (loop, chrec1);
+	chrec2 = instantiate_parameters (loop, chrec2);
+	res = chrec_fold_minus (utype, chrec1, chrec2);
+	res = chrec_convert (type, res, at_stmt);
+	break;
+      }
+
     case PLUS_EXPR:
       chrec1 = analyze_scalar_evolution (loop, rhs1);
       chrec2 = analyze_scalar_evolution (loop, rhs2);
@@ -2046,6 +2118,30 @@ analyze_scalar_evolution (class loop *loop, tree var)
     fprintf (dump_file, ")\n");
 
   return res;
+}
+
+/* If CHREC doesn't overflow, set the nonwrapping flag.  */
+
+void record_nonwrapping_chrec (tree chrec)
+{
+  CHREC_NOWRAP(chrec) = 1;
+
+  if (dump_file && (dump_flags & TDF_SCEV))
+    {
+      fprintf (dump_file, "(record_nonwrapping_chrec: ");
+      print_generic_expr (dump_file, chrec);
+      fprintf (dump_file, ")\n");
+    }
+}
+
+/* Return true if CHREC's nonwrapping flag is set.  */
+
+bool nonwrapping_chrec_p (tree chrec)
+{
+  if (!chrec || TREE_CODE(chrec) != POLYNOMIAL_CHREC)
+    return false;
+
+  return CHREC_NOWRAP(chrec);
 }
 
 /* Analyzes and returns the scalar evolution of VAR address in LOOP.  */
@@ -3031,14 +3127,15 @@ iv_can_overflow_p (class loop *loop, tree type, tree base, tree step)
   widest_int nit;
   wide_int base_min, base_max, step_min, step_max, type_min, type_max;
   signop sgn = TYPE_SIGN (type);
-  value_range r;
+  int_range_max r;
 
   if (integer_zerop (step))
     return false;
 
   if (!INTEGRAL_TYPE_P (TREE_TYPE (base))
       || !get_range_query (cfun)->range_of_expr (r, base)
-      || r.kind () != VR_RANGE)
+      || r.varying_p ()
+      || r.undefined_p ())
     return true;
 
   base_min = r.lower_bound ();
@@ -3046,7 +3143,8 @@ iv_can_overflow_p (class loop *loop, tree type, tree base, tree step)
 
   if (!INTEGRAL_TYPE_P (TREE_TYPE (step))
       || !get_range_query (cfun)->range_of_expr (r, step)
-      || r.kind () != VR_RANGE)
+      || r.varying_p ()
+      || r.undefined_p ())
     return true;
 
   step_min = r.lower_bound ();
@@ -3059,7 +3157,7 @@ iv_can_overflow_p (class loop *loop, tree type, tree base, tree step)
   type_max = wi::max_value (type);
 
   /* Just sanity check that we don't see values out of the range of the type.
-     In this case the arithmetics bellow would overflow.  */
+     In this case the arithmetics below would overflow.  */
   gcc_checking_assert (wi::ge_p (base_min, type_min, sgn)
 		       && wi::le_p (base_max, type_max, sgn));
 
@@ -3215,7 +3313,11 @@ simple_iv_with_niters (class loop *wrto_loop, class loop *use_loop,
   if (tree_does_not_contain_chrecs (ev))
     {
       iv->base = ev;
-      iv->step = build_int_cst (TREE_TYPE (ev), 0);
+      tree ev_type = TREE_TYPE (ev);
+      if (POINTER_TYPE_P (ev_type))
+	ev_type = sizetype;
+
+      iv->step = build_int_cst (ev_type, 0);
       iv->no_overflow = true;
       return true;
     }
@@ -3282,7 +3384,8 @@ simple_iv_with_niters (class loop *wrto_loop, class loop *use_loop,
 
   type = TREE_TYPE (iv->base);
   e = TREE_OPERAND (iv->base, 0);
-  if (TREE_CODE (e) != PLUS_EXPR
+  if (!tree_nop_conversion_p (type, TREE_TYPE (e))
+      || TREE_CODE (e) != PLUS_EXPR
       || TREE_CODE (TREE_OPERAND (e, 1)) != INTEGER_CST
       || !tree_int_cst_equal (iv->step,
 			      fold_convert (type, TREE_OPERAND (e, 1))))
@@ -3348,11 +3451,13 @@ scev_finalize (void)
 }
 
 /* Returns true if the expression EXPR is considered to be too expensive
-   for scev_const_prop.  */
+   for scev_const_prop.  Sets *COND_OVERFLOW_P to true when the
+   expression might contain a sub-expression that is subject to undefined
+   overflow behavior and conditionally evaluated.  */
 
 static bool
-expression_expensive_p (tree expr, hash_map<tree, uint64_t> &cache,
-			uint64_t &cost)
+expression_expensive_p (tree expr, bool *cond_overflow_p,
+			hash_map<tree, uint64_t> &cache, uint64_t &cost)
 {
   enum tree_code code;
 
@@ -3427,6 +3532,28 @@ bitcount_call:
 		  && (optab_handler (optab, word_mode)
 		      != CODE_FOR_nothing))
 		  break;
+	      /* If popcount is available for a wider mode, we emulate the
+		 operation for a narrow mode by first zero-extending the value
+		 and then computing popcount in the wider mode.  Analogue for
+		 ctz.  For clz we do the same except that we additionally have
+		 to subtract the difference of the mode precisions from the
+		 result.  */
+	      if (is_a <scalar_int_mode> (mode, &int_mode))
+		{
+		  machine_mode wider_mode_iter;
+		  FOR_EACH_WIDER_MODE (wider_mode_iter, mode)
+		    if (optab_handler (optab, wider_mode_iter)
+			!= CODE_FOR_nothing)
+		      goto check_call_args;
+		  /* Operation ctz may be emulated via clz in expand_ctz.  */
+		  if (optab == ctz_optab)
+		    {
+		      FOR_EACH_WIDER_MODE_FROM (wider_mode_iter, mode)
+			if (optab_handler (clz_optab, wider_mode_iter)
+			    != CODE_FOR_nothing)
+			  goto check_call_args;
+		    }
+		}
 	      return true;
 	    }
 	  break;
@@ -3438,8 +3565,9 @@ bitcount_call:
 	  break;
 	}
 
+check_call_args:
       FOR_EACH_CALL_EXPR_ARG (arg, iter, expr)
-	if (expression_expensive_p (arg, cache, op_cost))
+	if (expression_expensive_p (arg, cond_overflow_p, cache, op_cost))
 	  return true;
       *cache.get (expr) += op_cost;
       cost += op_cost + 1;
@@ -3448,7 +3576,8 @@ bitcount_call:
 
   if (code == COND_EXPR)
     {
-      if (expression_expensive_p (TREE_OPERAND (expr, 0), cache, op_cost)
+      if (expression_expensive_p (TREE_OPERAND (expr, 0), cond_overflow_p,
+				  cache, op_cost)
 	  || (EXPR_P (TREE_OPERAND (expr, 1))
 	      && EXPR_P (TREE_OPERAND (expr, 2)))
 	  /* If either branch has side effects or could trap.  */
@@ -3456,11 +3585,13 @@ bitcount_call:
 	  || generic_expr_could_trap_p (TREE_OPERAND (expr, 1))
 	  || TREE_SIDE_EFFECTS (TREE_OPERAND (expr, 0))
 	  || generic_expr_could_trap_p (TREE_OPERAND (expr, 0))
-	  || expression_expensive_p (TREE_OPERAND (expr, 1),
+	  || expression_expensive_p (TREE_OPERAND (expr, 1), cond_overflow_p,
 				     cache, op_cost)
-	  || expression_expensive_p (TREE_OPERAND (expr, 2),
+	  || expression_expensive_p (TREE_OPERAND (expr, 2), cond_overflow_p,
 				     cache, op_cost))
 	return true;
+      /* Conservatively assume there's overflow for now.  */
+      *cond_overflow_p = true;
       *cache.get (expr) += op_cost;
       cost += op_cost + 1;
       return false;
@@ -3470,12 +3601,14 @@ bitcount_call:
     {
     case tcc_binary:
     case tcc_comparison:
-      if (expression_expensive_p (TREE_OPERAND (expr, 1), cache, op_cost))
+      if (expression_expensive_p (TREE_OPERAND (expr, 1), cond_overflow_p,
+				  cache, op_cost))
 	return true;
 
       /* Fallthru.  */
     case tcc_unary:
-      if (expression_expensive_p (TREE_OPERAND (expr, 0), cache, op_cost))
+      if (expression_expensive_p (TREE_OPERAND (expr, 0), cond_overflow_p,
+				  cache, op_cost))
 	return true;
       *cache.get (expr) += op_cost;
       cost += op_cost + 1;
@@ -3487,12 +3620,18 @@ bitcount_call:
 }
 
 bool
-expression_expensive_p (tree expr)
+expression_expensive_p (tree expr, bool *cond_overflow_p)
 {
   hash_map<tree, uint64_t> cache;
   uint64_t expanded_size = 0;
-  return (expression_expensive_p (expr, cache, expanded_size)
-	  || expanded_size > cache.elements ());
+  *cond_overflow_p = false;
+  return (expression_expensive_p (expr, cond_overflow_p, cache, expanded_size)
+	  /* ???  Both the explicit unsharing and gimplification of expr will
+	     expand shared trees to multiple copies.
+	     Guard against exponential growth by counting the visits and
+	     comparing againt the number of original nodes.  Allow a tiny
+	     bit of duplication to catch some additional optimizations.  */
+	  || expanded_size > (cache.elements () + 1));
 }
 
 /* Match.pd function to match bitwise inductive expression.
@@ -3523,6 +3662,7 @@ analyze_and_compute_bitwise_induction_effect (class loop* loop,
   if (!gimple_bitwise_induction_p (phidef, &match_op[0], NULL)
       || TREE_CODE (match_op[2]) != SSA_NAME
       || !(header_phi = dyn_cast <gphi *> (SSA_NAME_DEF_STMT (match_op[2])))
+      || gimple_bb (header_phi) != loop->header
       || gimple_phi_num_args (header_phi) != 2)
     return NULL_TREE;
 
@@ -3675,6 +3815,9 @@ analyze_and_compute_bitop_with_inv_effect (class loop* loop, tree phidef,
   match_op[0] = gimple_assign_rhs1 (def);
   match_op[1] = gimple_assign_rhs2 (def);
 
+  if (expr_invariant_in_loop_p (loop, match_op[1]))
+    std::swap (match_op[0], match_op[1]);
+
   if (TREE_CODE (match_op[1]) != SSA_NAME
       || !expr_invariant_in_loop_p (loop, match_op[0])
       || !(header_phi = dyn_cast <gphi *> (SSA_NAME_DEF_STMT (match_op[1])))
@@ -3722,7 +3865,6 @@ final_value_replacement_loop (class loop *loop)
     split_loop_exit_edge (exit);
 
   /* Set stmt insertion pointer.  All stmts are inserted before this point.  */
-  gimple_stmt_iterator gsi = gsi_after_labels (exit->dest);
 
   class loop *ex_loop
     = superloop_at_depth (loop,
@@ -3790,6 +3932,7 @@ final_value_replacement_loop (class loop *loop)
 								   niter_num)))
 	def = bit_def;
 
+      bool cond_overflow_p;
       if (!tree_does_not_contain_chrecs (def)
 	  || chrec_contains_symbols_defined_in_loop (def, ex_loop->num)
 	  /* Moving the computation from the loop may prolong life range
@@ -3803,7 +3946,7 @@ final_value_replacement_loop (class loop *loop)
 
 	     he probably knows that n is not large, and does not want it
 	     to be turned into n %= 45.  */
-	  || expression_expensive_p (def))
+	  || expression_expensive_p (def, &cond_overflow_p))
 	{
 	  if (dump_file && (dump_flags & TDF_DETAILS))
 	    {
@@ -3823,50 +3966,80 @@ final_value_replacement_loop (class loop *loop)
 	  print_gimple_stmt (dump_file, phi, 0);
 	  fprintf (dump_file, " with expr: ");
 	  print_generic_expr (dump_file, def);
+	  fprintf (dump_file, "\n");
 	}
       any = true;
+      /* ???  Here we'd like to have a unshare_expr that would assign
+	 shared sub-trees to new temporary variables either gimplified
+	 to a GIMPLE sequence or to a statement list (keeping this a
+	 GENERIC interface).  */
       def = unshare_expr (def);
+      auto loc = gimple_phi_arg_location (phi, exit->dest_idx);
+
+      /* Create the replacement statements.  */
+      gimple_seq stmts;
+      def = force_gimple_operand (def, &stmts, false, NULL_TREE);
+
+      /* Propagate constants immediately, but leave an unused initialization
+	 around to avoid invalidating the SCEV cache.  */
+      if (CONSTANT_CLASS_P (def) && !SSA_NAME_OCCURS_IN_ABNORMAL_PHI (rslt))
+	replace_uses_by (rslt, def);
+
+      /* Remove the old phi after the gimplification to make sure the
+	 SSA name is defined by a statement so that fold_stmt during
+	 the gimplification does not crash. */
       remove_phi_node (&psi, false);
+      gassign *ass = gimple_build_assign (rslt, def);
+      gimple_set_location (ass, loc);
+      gimple_seq_add_stmt (&stmts, ass);
 
       /* If def's type has undefined overflow and there were folded
 	 casts, rewrite all stmts added for def into arithmetics
 	 with defined overflow behavior.  */
-      if (folded_casts && ANY_INTEGRAL_TYPE_P (TREE_TYPE (def))
-	  && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (def)))
+      if ((folded_casts
+	   && ANY_INTEGRAL_TYPE_P (TREE_TYPE (def))
+	   && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (def)))
+	  || cond_overflow_p)
 	{
-	  gimple_seq stmts;
 	  gimple_stmt_iterator gsi2;
-	  def = force_gimple_operand (def, &stmts, true, NULL_TREE);
 	  gsi2 = gsi_start (stmts);
 	  while (!gsi_end_p (gsi2))
 	    {
-	      gimple *stmt = gsi_stmt (gsi2);
-	      gimple_stmt_iterator gsi3 = gsi2;
+	      if (gimple_needing_rewrite_undefined (gsi_stmt (gsi2)))
+		rewrite_to_defined_unconditional (&gsi2);
 	      gsi_next (&gsi2);
-	      gsi_remove (&gsi3, false);
-	      if (is_gimple_assign (stmt)
-		  && arith_code_with_undefined_signed_overflow
-		  (gimple_assign_rhs_code (stmt)))
-		gsi_insert_seq_before (&gsi,
-				       rewrite_to_defined_overflow (stmt),
-				       GSI_SAME_STMT);
-	      else
-		gsi_insert_before (&gsi, stmt, GSI_SAME_STMT);
 	    }
 	}
-      else
-	def = force_gimple_operand_gsi (&gsi, def, false, NULL_TREE,
-					true, GSI_SAME_STMT);
-
-      gassign *ass = gimple_build_assign (rslt, def);
-      gimple_set_location (ass,
-			   gimple_phi_arg_location (phi, exit->dest_idx));
-      gsi_insert_before (&gsi, ass, GSI_SAME_STMT);
+      gimple_stmt_iterator gsi = gsi_after_labels (exit->dest);
+      gsi_insert_seq_before (&gsi, stmts, GSI_SAME_STMT);
       if (dump_file)
 	{
-	  fprintf (dump_file, "\n final stmt:\n  ");
-	  print_gimple_stmt (dump_file, ass, 0);
+	  fprintf (dump_file, " final stmt:\n  ");
+	  print_gimple_stmt (dump_file, SSA_NAME_DEF_STMT (rslt), 0);
 	  fprintf (dump_file, "\n");
+	}
+
+      /* Re-fold immediate uses of the replaced def, but avoid
+	 CFG manipulations from this function.  For now only do
+	 a single-level re-folding, not re-folding uses of
+	 folded uses.  */
+      if (! SSA_NAME_OCCURS_IN_ABNORMAL_PHI (rslt))
+	{
+	  gimple *use_stmt;
+	  imm_use_iterator imm_iter;
+	  auto_vec<gimple *, 4> to_fold;
+	  FOR_EACH_IMM_USE_STMT (use_stmt, imm_iter, rslt)
+	    if (!stmt_can_throw_internal (cfun, use_stmt))
+	      to_fold.safe_push (use_stmt);
+	  /* Delay folding until after the immediate use walk is completed
+	     as we have an active ranger and that might walk immediate
+	     uses of rslt again.  See PR122502.  */
+	  for (gimple *use_stmt : to_fold)
+	    {
+	      gimple_stmt_iterator gsi = gsi_for_stmt (use_stmt);
+	      if (fold_stmt (&gsi, follow_all_ssa_edges))
+		update_stmt (gsi_stmt (gsi));
+	    }
 	}
     }
 

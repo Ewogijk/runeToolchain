@@ -1,4 +1,11 @@
+#![feature(no_core)]
+#![no_core]
+
 #![feature(intrinsics)]
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
 
 extern "rust-intrinsic" {
     #[rustc_const_stable(feature = "const_ptr_offset", since = "1.61.0")]

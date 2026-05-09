@@ -1,6 +1,6 @@
 /* m2treelib.cc provides call trees, modify_expr and miscelaneous.
 
-Copyright (C) 2012-2023 Free Software Foundation, Inc.
+Copyright (C) 2012-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius@glam.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -45,7 +45,7 @@ m2treelib_do_jump_if_bit (location_t location, enum tree_code code, tree word,
 {
   word = m2convert_ToWord (location, word);
   bit = m2convert_ToWord (location, bit);
-  m2statement_DoJump (
+  m2statement_IfExprJump (
       location,
       m2expr_build_binary_op (
           location, code,
@@ -55,7 +55,7 @@ m2treelib_do_jump_if_bit (location_t location, enum tree_code code, tree word,
                                FALSE),
               FALSE),
           m2expr_GetWordZero (location), FALSE),
-      NULL, label);
+      label);
 }
 
 /* build_modify_expr - taken from c-typeck.cc and heavily pruned.
@@ -99,7 +99,7 @@ build_modify_expr (location_t location, tree lhs, enum tree_code modifycode,
   if (TREE_CODE (lhs) == COMPONENT_REF
       && (TREE_CODE (lhstype) == INTEGER_TYPE
           || TREE_CODE (lhstype) == BOOLEAN_TYPE
-          || TREE_CODE (lhstype) == REAL_TYPE
+	  || SCALAR_FLOAT_TYPE_P (lhstype)
           || TREE_CODE (lhstype) == ENUMERAL_TYPE))
     lhstype = TREE_TYPE (get_unwidened (lhs, 0));
 
@@ -147,8 +147,8 @@ m2treelib_build_modify_expr (location_t location, tree des,
 
 /* nCount - return the number of trees chained on, t.  */
 
-static int
-nCount (tree t)
+int
+m2treelib_nCount (tree t)
 {
   int i = 0;
 
@@ -167,7 +167,7 @@ tree
 m2treelib_DoCall (location_t location, tree rettype, tree funcptr,
                   tree param_list)
 {
-  int n = nCount (param_list);
+  int n = m2treelib_nCount (param_list);
   tree *argarray = XALLOCAVEC (tree, n);
   tree l = param_list;
   int i;
@@ -188,7 +188,6 @@ m2treelib_DoCall0 (location_t location, tree rettype, tree funcptr)
   tree *argarray = XALLOCAVEC (tree, 1);
 
   argarray[0] = NULL_TREE;
-
   return build_call_array_loc (location, rettype, funcptr, 0, argarray);
 }
 
@@ -200,7 +199,6 @@ m2treelib_DoCall1 (location_t location, tree rettype, tree funcptr, tree arg0)
   tree *argarray = XALLOCAVEC (tree, 1);
 
   argarray[0] = arg0;
-
   return build_call_array_loc (location, rettype, funcptr, 1, argarray);
 }
 
@@ -214,7 +212,6 @@ m2treelib_DoCall2 (location_t location, tree rettype, tree funcptr, tree arg0,
 
   argarray[0] = arg0;
   argarray[1] = arg1;
-
   return build_call_array_loc (location, rettype, funcptr, 2, argarray);
 }
 
@@ -229,20 +226,7 @@ m2treelib_DoCall3 (location_t location, tree rettype, tree funcptr, tree arg0,
   argarray[0] = arg0;
   argarray[1] = arg1;
   argarray[2] = arg2;
-
   return build_call_array_loc (location, rettype, funcptr, 3, argarray);
-}
-
-/* get_rvalue - returns the rvalue of t.  The, type, is the object
-   type to be copied upon indirection.  */
-
-tree
-m2treelib_get_rvalue (location_t location, tree t, tree type, bool is_lvalue)
-{
-  if (is_lvalue)
-    return m2expr_BuildIndirect (location, t, type);
-  else
-    return t;
 }
 
 /* get_field_no - returns the field no for, op.  The, op, is either a
@@ -377,12 +361,12 @@ m2treelib_get_set_address_if_var (location_t location, tree op, bool is_lvalue,
     return m2treelib_get_set_address (location, op, is_lvalue);
 }
 
-/* add_stmt - t is a statement.  Add it to the statement-tree.  */
+/* add_stmt add stmt to the statement-tree.  */
 
 tree
-add_stmt (location_t location, tree t)
+add_stmt (location_t location, tree stmt)
 {
-  return m2block_add_stmt (location, t);
+  return m2block_add_stmt (location, stmt);
 }
 
 /* taken from gcc/c-semantics.cc.  */

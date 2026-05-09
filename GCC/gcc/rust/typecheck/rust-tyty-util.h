@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -25,6 +25,7 @@ namespace Rust {
 namespace TyTy {
 
 class BaseType;
+class ConstType;
 
 // this is a placeholder for types that can change like inference variables
 class TyVar
@@ -40,7 +41,10 @@ public:
 
   TyVar monomorphized_clone () const;
 
-  static TyVar get_implicit_infer_var (Location locus);
+  static TyVar get_implicit_infer_var (location_t locus);
+
+  static TyVar get_implicit_const_infer_var (location_t locus,
+					     TyVar *implicit_type = nullptr);
 
   static TyVar subst_covariant_var (TyTy::BaseType *orig,
 				    TyTy::BaseType *subst);
@@ -52,15 +56,15 @@ private:
 class TyWithLocation
 {
 public:
-  explicit TyWithLocation (BaseType *ty, Location locus);
+  explicit TyWithLocation (BaseType *ty, location_t locus);
   explicit TyWithLocation (BaseType *ty);
 
   BaseType *get_ty () const { return ty; }
-  Location get_locus () const { return locus; }
+  location_t get_locus () const { return locus; }
 
 private:
   BaseType *ty;
-  Location locus;
+  location_t locus;
 };
 
 } // namespace TyTy

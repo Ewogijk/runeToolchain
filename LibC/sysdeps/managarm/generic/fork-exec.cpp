@@ -57,13 +57,21 @@ int sys_futex_wake(int *pointer) {
 int sys_waitpid(pid_t pid, int *status, int flags, struct rusage *ru, pid_t *ret_pid) {
 	SignalGuard sguard;
 
+	if (ru) {
+		mlibc::infoLogger() << "mlibc: struct rusage in sys_waitpid is unsupported" << frg::endlog;
+		return ENOSYS;
+	}
+
 	managarm::posix::CntRequest<MemoryAllocator> req(getSysdepsAllocator());
 	req.set_request_type(managarm::posix::CntReqType::WAIT);
 	req.set_pid(pid);
 	req.set_flags(flags);
+	req.set_cancellation_id(allocateCancellationId());
 
-	auto [offer, send_head, recv_resp] = exchangeMsgsSync(
+	auto [offer, send_head, recv_resp] = exchangeMsgsSyncCancellable(
 	    getPosixLane(),
+	    req.cancellation_id(),
+	    -1,
 	    helix_ng::offer(
 	        helix_ng::sendBragiHeadOnly(req, getSysdepsAllocator()), helix_ng::recvInline()
 	    )
@@ -78,9 +86,12 @@ int sys_waitpid(pid_t pid, int *status, int flags, struct rusage *ru, pid_t *ret
 	if (resp.error() != managarm::posix::Errors::SUCCESS)
 		return resp.error() | toErrno;
 
+	*ret_pid = resp.pid();
+	if (*ret_pid == 0)
+		return 0;
+
 	if (status)
 		*status = resp.mode();
-	*ret_pid = resp.pid();
 
 	if (ru != nullptr) {
 		ru->ru_utime.tv_sec = resp.ru_user_time() / 1'000'000'000;
@@ -316,6 +327,21 @@ int sys_setegid(gid_t egid) {
 	return 0;
 }
 
+int sys_setresgid(gid_t rgid, gid_t egid, gid_t sgid) {
+	// TODO: handle saved set-user-ID
+	(void)sgid;
+
+	int real = sys_setgid(rgid);
+	if (real)
+		return real;
+
+	int effective = sys_setegid(egid);
+	if (effective)
+		return effective;
+
+	return 0;
+}
+
 uid_t sys_getuid() {
 	SignalGuard sguard;
 
@@ -412,9 +438,50 @@ int sys_seteuid(uid_t euid) {
 	return 0;
 }
 
+int sys_setresuid(uid_t ruid, uid_t euid, uid_t suid) {
+	// TODO: handle saved set-user-ID
+	(void)suid;
+
+	int real = sys_setuid(ruid);
+	if (real)
+		return real;
+
+	int effective = sys_seteuid(euid);
+	if (effective)
+		return effective;
+
+	return 0;
+}
+
+int sys_setreuid(uid_t ruid, uid_t euid) {
+	int real = sys_setuid(ruid);
+	if (real)
+		return real;
+
+	int effective = sys_seteuid(euid);
+	if (effective)
+		return effective;
+
+	return 0;
+}
+
+int sys_setregid(gid_t rgid, gid_t egid) {
+	int real = sys_setgid(rgid);
+	if (real)
+		return real;
+
+	int effective = sys_setegid(egid);
+	if (effective)
+		return effective;
+
+	return 0;
+}
+
 pid_t sys_gettid() {
-	// TODO: use an actual gettid syscall.
-	return sys_getpid();
+	HelWord tid = 0;
+	HEL_CHECK(helSyscall0_1(kHelCallSuper + posix::superGetTid, &tid));
+
+	return tid;
 }
 
 pid_t sys_getpid() {
@@ -608,37 +675,52 @@ int sys_setschedparam(void *tcb, int policy, const struct sched_param *param) {
 	return 0;
 }
 
-int sys_clone(void *tcb, pid_t *pid_out, void *stack) {
+int sys_clone(void *tcb, pid_t *tid_out, void *stack) {
 	(void)tcb;
 
-	HelWord pid = 0;
-	HEL_CHECK(helSyscall2_1(
+	HelWord posixErr = 0;
+	HelWord tid = 0;
+	posix::superCloneArgs args{
+	    .flags = (CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD),
+	};
+
+	HEL_CHECK(helSyscall3_2(
 	    kHelCallSuper + posix::superClone,
 	    reinterpret_cast<HelWord>(__mlibc_start_thread),
 	    reinterpret_cast<HelWord>(stack),
-	    &pid
+	    reinterpret_cast<HelWord>(&args),
+	    &posixErr,
+	    &tid
 	));
 
-	if (pid_out)
-		*pid_out = pid;
+	if (posixErr)
+		return managarm::posix::Errors(posixErr) | toErrno;
+
+	if (tid_out)
+		*tid_out = tid;
 
 	return 0;
 }
 
 int sys_tcb_set(void *pointer) {
-#if defined(__aarch64__)
+#if defined(__x86_64__)
+	HEL_CHECK(helWriteFsBase(pointer));
+#elif defined(__aarch64__)
 	uintptr_t addr = reinterpret_cast<uintptr_t>(pointer);
 	addr += sizeof(Tcb) - 0x10;
 	asm volatile("msr tpidr_el0, %0" ::"r"(addr));
+#elif defined(__riscv) && __riscv_xlen == 64
+	uintptr_t tp = reinterpret_cast<uintptr_t>(pointer) + sizeof(Tcb);
+	asm volatile("mv tp, %0" : : "r"(tp) : "memory");
 #else
-	HEL_CHECK(helWriteFsBase(pointer));
+#error Unknown architecture
 #endif
 	return 0;
 }
 
 void sys_thread_exit() {
 	// This implementation is inherently signal-safe.
-	HEL_CHECK(helSyscall1(kHelCallSuper + posix::superExit, 0));
+	HEL_CHECK(helSyscall1(kHelCallSuper + posix::superThreadExit, 0));
 	__builtin_trap();
 }
 
@@ -662,13 +744,13 @@ int sys_thread_setname(void *tcb, const char *name) {
 		return e;
 	}
 
-	if (int e = sys_write(fd, name, strlen(name) + 1, NULL)) {
+	if (int e = sys_write(fd, name, strlen(name) + 1, nullptr)) {
 		return e;
 	}
 
 	sys_close(fd);
 
-	pthread_setcancelstate(cs, 0);
+	pthread_setcancelstate(cs, nullptr);
 
 	return 0;
 }
@@ -697,7 +779,7 @@ int sys_thread_getname(void *tcb, char *name, size_t size) {
 	name[real_size - 1] = 0;
 	sys_close(fd);
 
-	pthread_setcancelstate(cs, 0);
+	pthread_setcancelstate(cs, nullptr);
 
 	if (static_cast<ssize_t>(size) <= real_size) {
 		return ERANGE;

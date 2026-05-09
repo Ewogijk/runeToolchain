@@ -1,7 +1,7 @@
 --
 -- m2-1.bnf grammar and associated actions for pass 1.
 --
--- Copyright (C) 2001-2023 Free Software Foundation, Inc.
+-- Copyright (C) 2001-2026 Free Software Foundation, Inc.
 -- Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 --
 -- This file is part of GNU Modula-2.
@@ -23,7 +23,7 @@
 (* output from m2-1.bnf, automatically generated do not edit if these
    are the top two lines in the file.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -46,7 +46,7 @@ IMPLEMENTATION MODULE P1Build ;
 
 FROM M2LexBuf IMPORT currentstring, currenttoken, GetToken, InsertToken, InsertTokenAndRewind, GetTokenNo ;
 FROM M2Error IMPORT ErrorStringAt ;
-FROM M2Quads IMPORT PushT, PushTF, PushTFtok, IsAutoPushOn, PushAutoOff, PushAutoOn, PopAuto, DisplayStack ;
+FROM M2Quads IMPORT Top, PushT, PushTF, PushTFtok, IsAutoPushOn, PushAutoOff, PushAutoOn, PopAuto, DisplayStack, DupFrame ;
 FROM M2Reserved IMPORT tokToTok, toktype, NulTok, ImportTok, ExportTok, QualifiedTok, UnQualifiedTok, BuiltinTok, InlineTok ;
 FROM NameKey IMPORT Name, NulName, makekey ;
 FROM StrLib IMPORT StrCopy, StrConCat, StrEqual ;
@@ -64,8 +64,7 @@ FROM M2Quads IMPORT PushT, PopT,
                     EndBuildInit,
                     BuildProcedureStart,
                     BuildProcedureEnd,
-                    BuildAssignment,
-                    BuildInline ;
+                    BuildAssignment ;
 
 FROM P1SymBuild IMPORT P1StartBuildProgramModule,
                        P1EndBuildProgramModule,
@@ -90,6 +89,7 @@ FROM P1SymBuild IMPORT P1StartBuildProgramModule,
                        BuildProcedureHeading,
                        StartBuildProcedure,
                        EndBuildProcedure,
+                       EndBuildForward,
                        AddImportToImportStatement,
                        BuildImportStatement ;
 
@@ -358,9 +358,12 @@ END Ident ;
 *)
 
 PROCEDURE IdentScope (stopset0: SetOfStop0; stopset1: SetOfStop1; stopset2: SetOfStop2) ;
+VAR
+   tokpos: CARDINAL ;
 BEGIN
-   Ident(stopset0, stopset1, stopset2) ;
-   AddNameToScope(LastIdent)
+   tokpos := GetTokenNo () ;
+   Ident (stopset0, stopset1, stopset2) ;
+   AddNameToScope (tokpos, LastIdent)
 END IdentScope ;
 
 
@@ -374,14 +377,14 @@ PROCEDURE PossiblyExportIdent (stopset0: SetOfStop0; stopset1: SetOfStop1; stops
 VAR
    nothing: CARDINAL ;
 BEGIN
-   AddNameToScope(makekey(currentstring)) ;
-   PushTF(makekey(currentstring), identtok) ;
+   AddNameToScope (GetTokenNo (), makekey (currentstring)) ;
+   PushTFtok (makekey (currentstring), identtok, GetTokenNo ()) ;
    CheckExplicitExported ;
-   IF NOT IsAutoPushOn()
+   IF NOT IsAutoPushOn ()
    THEN
-      PopT(nothing)
+      PopT (nothing)
    END ;
-   Expect(identtok, stopset0, stopset1, stopset2)
+   Expect (identtok, stopset0, stopset1, stopset2)
 END PossiblyExportIdent ;
 
 
@@ -483,6 +486,7 @@ token   'EXIT'            exittok
 token   'EXPORT'          exporttok
 token   'FINALLY'         finallytok
 token   'FOR'             fortok
+token   'FORWARD'         forwardtok
 token   'FROM'            fromtok
 token   'IF'              iftok
 token   'IMPLEMENTATION'  implementationtok
@@ -870,10 +874,20 @@ LoopStatement := "LOOP" StatementSequence "END" =:
 
 WithStatement := "WITH" Designator "DO" StatementSequence "END" =:
 
-ProcedureDeclaration := ProcedureHeading ";" ( ProcedureBlock              % PushAutoOn %
-                        Ident )                                            % EndBuildProcedure %
+ProcedureDeclaration :=                                                    % VAR top: CARDINAL ; %
+                                                                           % top := Top () %
+                        ProcedureHeading ";" PostProcedureHeading          % Assert (top = Top ()) %
+                                                                  =:
+
+PostProcedureHeading := ProperProcedure | ForwardDeclaration =:
+
+ForwardDeclaration := "FORWARD"                                            % EndBuildForward (GetTokenNo ()-1) %
+                    =:
+
+ProperProcedure := ProcedureBlock                                          % PushAutoOn %
+                                  Ident                                    % EndBuildProcedure %
                                                                            % PopAuto %
-                      =:
+                                        =:
 
 DefineBuiltinProcedure := "__ATTRIBUTE__" "__BUILTIN__" "(" "(" Ident ")" ")"
                           | "__INLINE__"                                   % PushT(InlineTok) %
@@ -1037,14 +1051,14 @@ NamedOperand := '[' Ident ']' =:
 
 AsmOperandName := [ NamedOperand ] =:
 
-AsmOperands  := string [ ':' AsmList [ ':' AsmList [ ':' TrashList ] ] ]
-             =:
+AsmOperands  := ConstExpression [ ':' AsmList [ ':' AsmList [ ':' TrashList ] ] ]
+              =:
 
 AsmList      := [ AsmElement ] { ',' AsmElement } =:
 
-AsmElement   := AsmOperandName string '(' Expression ')'
-             =:
+AsmElement   := AsmOperandName ConstExpression '(' Expression ')'
+              =:
 
-TrashList    := [ string ] { ',' string } =:
+TrashList    := [ ConstExpression ] { ',' ConstExpression } =:
 
 FNB

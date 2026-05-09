@@ -1,6 +1,11 @@
+/* { dg-require-effective-target lto } */
 /* { dg-additional-options "-flto" } */
 /* { dg-additional-options "-foffload-options=nvptx-none=-misa=sm_35" { target { offload_target_nvptx } } } */
 /* { dg-additional-sources requires-4-aux.c } */
+
+/* GCC explicitly disables XNACK for gfx908 (and others) as the hardware
+   support is limited, which results in a diagnostic.  */
+/* { dg-xfail-if "gfx908 xnack broken" { offload_target_amdgcn } "-foffload=-march=gfx908" } */
 
 /* Check no diagnostic by device-compiler's or host compiler's lto1.
    Other file uses: 'requires reverse_offload', but that's inactive as

@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -19,7 +19,9 @@
 #ifndef RUST_AST_TYPE_H
 #define RUST_AST_TYPE_H
 
+#include "optional.h"
 #include "rust-ast.h"
+#include "rust-expr.h"
 #include "rust-path.h"
 
 namespace Rust {
@@ -40,7 +42,7 @@ class TraitBound : public TypeParamBound
 
   TypePath type_path;
 
-  Location locus;
+  location_t locus;
 
 public:
   // Returns whether trait bound has "for" lifetimes
@@ -48,17 +50,22 @@ public:
 
   std::vector<LifetimeParam> &get_for_lifetimes () { return for_lifetimes; }
 
-  TraitBound (TypePath type_path, Location locus, bool in_parens = false,
+  const std::vector<LifetimeParam> &get_for_lifetimes () const
+  {
+    return for_lifetimes;
+  }
+
+  TraitBound (TypePath type_path, location_t locus, bool in_parens = false,
 	      bool opening_question_mark = false,
 	      std::vector<LifetimeParam> for_lifetimes
 	      = std::vector<LifetimeParam> ())
-    : TypeParamBound (Analysis::Mappings::get ()->get_next_node_id ()),
+    : TypeParamBound (Analysis::Mappings::get ().get_next_node_id ()),
       in_parens (in_parens), opening_question_mark (opening_question_mark),
       for_lifetimes (std::move (for_lifetimes)),
       type_path (std::move (type_path)), locus (locus)
   {}
 
-  TraitBound (NodeId id, TypePath type_path, Location locus,
+  TraitBound (NodeId id, TypePath type_path, location_t locus,
 	      bool in_parens = false, bool opening_question_mark = false,
 	      std::vector<LifetimeParam> for_lifetimes
 	      = std::vector<LifetimeParam> ())
@@ -68,9 +75,16 @@ public:
       type_path (std::move (type_path)), locus (locus)
   {}
 
+  TraitBound (TraitBound const &other)
+    : TypeParamBound (other.get_node_id ()), in_parens (other.in_parens),
+      opening_question_mark (other.opening_question_mark),
+      for_lifetimes (other.for_lifetimes), type_path (other.type_path),
+      locus (other.locus)
+  {}
+
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -81,6 +95,11 @@ public:
   bool is_in_parens () const { return in_parens; }
   bool has_opening_question_mark () const { return opening_question_mark; }
 
+  TypeParamBoundType get_bound_type () const override
+  {
+    return TypeParamBound::TypeParamBoundType::TRAIT;
+  }
+
 protected:
   /* Use covariance to implement clone function as returning this object rather
    * than base */
@@ -88,6 +107,11 @@ protected:
   {
     return new TraitBound (node_id, type_path, locus, in_parens,
 			   opening_question_mark, for_lifetimes);
+  }
+  TraitBound *reconstruct_impl () const override
+  {
+    return new TraitBound (type_path, locus, in_parens, opening_question_mark,
+			   for_lifetimes);
   }
 };
 
@@ -101,7 +125,7 @@ class ImplTraitType : public Type
   // inlined form
   std::vector<std::unique_ptr<TypeParamBound> > type_param_bounds;
 
-  Location locus;
+  location_t locus;
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -110,16 +134,21 @@ protected:
   {
     return new ImplTraitType (*this);
   }
+  ImplTraitType *reconstruct_impl () const override
+  {
+    return new ImplTraitType (reconstruct_vec (type_param_bounds), locus);
+  }
 
 public:
   ImplTraitType (
     std::vector<std::unique_ptr<TypeParamBound> > type_param_bounds,
-    Location locus)
+    location_t locus)
     : type_param_bounds (std::move (type_param_bounds)), locus (locus)
   {}
 
   // copy constructor with vector clone
-  ImplTraitType (ImplTraitType const &other) : locus (other.locus)
+  ImplTraitType (ImplTraitType const &other)
+    : Type (other.node_id), locus (other.locus)
   {
     type_param_bounds.reserve (other.type_param_bounds.size ());
     for (const auto &e : other.type_param_bounds)
@@ -144,11 +173,10 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
-  // TODO: mutable getter seems kinda dodgy
   std::vector<std::unique_ptr<TypeParamBound> > &get_type_param_bounds ()
   {
     return type_param_bounds;
@@ -158,6 +186,8 @@ public:
   {
     return type_param_bounds;
   }
+
+  Type::Kind get_type_kind () const override { return Type::Kind::ImplTrait; }
 };
 
 // An opaque value of another type that implements a set of traits
@@ -165,7 +195,7 @@ class TraitObjectType : public Type
 {
   bool has_dyn;
   std::vector<std::unique_ptr<TypeParamBound> > type_param_bounds;
-  Location locus;
+  location_t locus;
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -174,18 +204,23 @@ protected:
   {
     return new TraitObjectType (*this);
   }
+  TraitObjectType *reconstruct_impl () const override
+  {
+    return new TraitObjectType (reconstruct_vec (type_param_bounds), locus,
+				has_dyn);
+  }
 
 public:
   TraitObjectType (
     std::vector<std::unique_ptr<TypeParamBound> > type_param_bounds,
-    Location locus, bool is_dyn_dispatch)
+    location_t locus, bool is_dyn_dispatch)
     : has_dyn (is_dyn_dispatch),
       type_param_bounds (std::move (type_param_bounds)), locus (locus)
   {}
 
   // copy constructor with vector clone
   TraitObjectType (TraitObjectType const &other)
-    : has_dyn (other.has_dyn), locus (other.locus)
+    : Type (other.node_id), has_dyn (other.has_dyn), locus (other.locus)
   {
     type_param_bounds.reserve (other.type_param_bounds.size ());
     for (const auto &e : other.type_param_bounds)
@@ -210,13 +245,12 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
   bool is_dyn () const { return has_dyn; }
 
-  // TODO: mutable getter seems kinda dodgy
   std::vector<std::unique_ptr<TypeParamBound> > &get_type_param_bounds ()
   {
     return type_param_bounds;
@@ -226,13 +260,15 @@ public:
   {
     return type_param_bounds;
   }
+
+  Type::Kind get_type_kind () const override { return Type::Kind::TraitObject; }
 };
 
 // A type with parentheses around it, used to avoid ambiguity.
 class ParenthesisedType : public TypeNoBounds
 {
   std::unique_ptr<Type> type_in_parens;
-  Location locus;
+  location_t locus;
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -241,10 +277,14 @@ protected:
   {
     return new ParenthesisedType (*this);
   }
+  ParenthesisedType *reconstruct_impl () const override
+  {
+    return new ParenthesisedType (type_in_parens->reconstruct (), locus);
+  }
 
 public:
   // Constructor uses Type pointer for polymorphism
-  ParenthesisedType (std::unique_ptr<Type> type_inside_parens, Location locus)
+  ParenthesisedType (std::unique_ptr<Type> type_inside_parens, location_t locus)
     : type_in_parens (std::move (type_inside_parens)), locus (locus)
   {}
 
@@ -280,7 +320,7 @@ public:
     return type_in_parens->to_trait_bound (true);
   }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -290,38 +330,50 @@ public:
     rust_assert (type_in_parens != nullptr);
     return type_in_parens;
   }
+
+  Type::Kind get_type_kind () const override
+  {
+    return Type::Kind::Parenthesised;
+  }
 };
 
 // Impl trait with a single bound? Poor reference material here.
 class ImplTraitTypeOneBound : public TypeNoBounds
 {
-  TraitBound trait_bound;
-  Location locus;
-
-protected:
-  /* Use covariance to implement clone function as returning this object rather
-   * than base */
-  ImplTraitTypeOneBound *clone_type_no_bounds_impl () const override
-  {
-    return new ImplTraitTypeOneBound (*this);
-  }
+  std::unique_ptr<TypeParamBound> trait_bound;
+  location_t locus;
 
 public:
-  ImplTraitTypeOneBound (TraitBound trait_bound, Location locus)
+  ImplTraitTypeOneBound (std::unique_ptr<TypeParamBound> trait_bound,
+			 location_t locus)
     : trait_bound (std::move (trait_bound)), locus (locus)
+  {}
+
+  ImplTraitTypeOneBound (ImplTraitTypeOneBound const &other)
+    : trait_bound (other.trait_bound->clone_type_param_bound ()),
+      locus (other.locus)
   {}
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
-  // TODO: would a "vis_type" be better?
-  TraitBound &get_trait_bound ()
+  std::unique_ptr<TypeParamBound> &get_trait_bound () { return trait_bound; }
+
+  TypeNoBounds *clone_type_no_bounds_impl () const override
   {
-    // TODO: check to ensure invariants are met?
-    return trait_bound;
+    return new ImplTraitTypeOneBound (*this);
+  }
+  TypeNoBounds *reconstruct_impl () const override
+  {
+    return new ImplTraitTypeOneBound (trait_bound->reconstruct (), locus);
+  }
+
+  Type::Kind get_type_kind () const override
+  {
+    return Type::Kind::ImplTraitTypeOneBound;
   }
 };
 
@@ -331,7 +383,7 @@ class TraitObjectTypeOneBound : public TypeNoBounds
 {
   bool has_dyn;
   TraitBound trait_bound;
-  Location locus;
+  location_t locus;
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -340,9 +392,13 @@ protected:
   {
     return new TraitObjectTypeOneBound (*this);
   }
+  TraitObjectTypeOneBound *reconstruct_impl () const override
+  {
+    return new TraitObjectTypeOneBound (trait_bound, locus, has_dyn);
+  }
 
 public:
-  TraitObjectTypeOneBound (TraitBound trait_bound, Location locus,
+  TraitObjectTypeOneBound (TraitBound trait_bound, location_t locus,
 			   bool is_dyn_dispatch = false)
     : has_dyn (is_dyn_dispatch), trait_bound (std::move (trait_bound)),
       locus (locus)
@@ -358,7 +414,7 @@ public:
     return new TraitBound (trait_bound);
   }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -370,6 +426,11 @@ public:
   }
 
   bool is_dyn () const { return has_dyn; }
+
+  Type::Kind get_type_kind () const override
+  {
+    return Type::Kind::TraitObjectTypeOneBound;
+  }
 };
 
 class TypePath; // definition moved to "rust-path.h"
@@ -379,13 +440,13 @@ class TypePath; // definition moved to "rust-path.h"
 class TupleType : public TypeNoBounds
 {
   std::vector<std::unique_ptr<Type> > elems;
-  Location locus;
+  location_t locus;
 
 public:
   // Returns whether the tuple type is the unit type, i.e. has no elements.
   bool is_unit_type () const { return elems.empty (); }
 
-  TupleType (std::vector<std::unique_ptr<Type> > elems, Location locus)
+  TupleType (std::vector<std::unique_ptr<Type> > elems, location_t locus)
     : elems (std::move (elems)), locus (locus)
   {}
 
@@ -415,11 +476,10 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
-  // TODO: mutable getter seems kinda dodgy
   std::vector<std::unique_ptr<Type> > &get_elems () { return elems; }
   const std::vector<std::unique_ptr<Type> > &get_elems () const
   {
@@ -433,6 +493,12 @@ protected:
   {
     return new TupleType (*this);
   }
+  TupleType *reconstruct_impl () const override
+  {
+    return new TupleType (reconstruct_vec (elems), locus);
+  }
+
+  Type::Kind get_type_kind () const override { return Type::Kind::Tuple; }
 };
 
 /* A type with no values, representing the result of computations that never
@@ -440,7 +506,7 @@ protected:
  * Represented as "!". */
 class NeverType : public TypeNoBounds
 {
-  Location locus;
+  location_t locus;
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -449,15 +515,21 @@ protected:
   {
     return new NeverType (*this);
   }
+  NeverType *reconstruct_impl () const override
+  {
+    return new NeverType (locus);
+  }
 
 public:
-  NeverType (Location locus) : locus (locus) {}
+  NeverType (location_t locus) : locus (locus) {}
 
   std::string as_string () const override { return "! (never type)"; }
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
+
+  Type::Kind get_type_kind () const override { return Type::Kind::Never; }
 };
 
 // A type consisting of a pointer without safety or liveness guarantees
@@ -473,7 +545,7 @@ public:
 private:
   PointerType pointer_type;
   std::unique_ptr<TypeNoBounds> type;
-  Location locus;
+  location_t locus;
 
 public:
   // Returns whether the pointer is mutable or constant.
@@ -481,7 +553,8 @@ public:
 
   // Constructor requires pointer for polymorphism reasons
   RawPointerType (PointerType pointer_type,
-		  std::unique_ptr<TypeNoBounds> type_no_bounds, Location locus)
+		  std::unique_ptr<TypeNoBounds> type_no_bounds,
+		  location_t locus)
     : pointer_type (pointer_type), type (std::move (type_no_bounds)),
       locus (locus)
   {}
@@ -507,16 +580,25 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: would a "vis_type" be better?
-  std::unique_ptr<TypeNoBounds> &get_type_pointed_to ()
+  TypeNoBounds &get_type_pointed_to ()
+  {
+    rust_assert (type != nullptr);
+    return *type;
+  }
+
+  std::unique_ptr<TypeNoBounds> &get_type_pointed_to_ptr ()
   {
     rust_assert (type != nullptr);
     return type;
   }
+
+  // Getter for direct access to the type unique_ptr
+  std::unique_ptr<TypeNoBounds> &get_type_ptr () { return type; }
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -525,28 +607,35 @@ protected:
   {
     return new RawPointerType (*this);
   }
+  RawPointerType *reconstruct_impl () const override
+  {
+    return new RawPointerType (pointer_type, type->reconstruct (), locus);
+  }
+
+  Type::Kind get_type_kind () const override { return Type::Kind::RawPointer; }
 };
 
 // A type pointing to memory owned by another value
 class ReferenceType : public TypeNoBounds
 {
   // bool has_lifetime; // TODO: handle in lifetime or something?
-  Lifetime lifetime;
+  tl::optional<Lifetime> lifetime;
 
   bool has_mut;
   std::unique_ptr<TypeNoBounds> type;
-  Location locus;
+  location_t locus;
 
 public:
   // Returns whether the reference is mutable or immutable.
   bool is_mut () const { return has_mut; }
 
   // Returns whether the reference has a lifetime.
-  bool has_lifetime () const { return !lifetime.is_error (); }
+  bool has_lifetime () const { return lifetime.has_value (); }
 
   // Constructor
   ReferenceType (bool is_mut, std::unique_ptr<TypeNoBounds> type_no_bounds,
-		 Location locus, Lifetime lifetime = Lifetime::error ())
+		 location_t locus,
+		 tl::optional<Lifetime> lifetime = Lifetime::elided ())
     : lifetime (std::move (lifetime)), has_mut (is_mut),
       type (std::move (type_no_bounds)), locus (locus)
   {}
@@ -574,12 +663,18 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: would a "vis_type" be better?
-  std::unique_ptr<TypeNoBounds> &get_type_referenced ()
+  TypeNoBounds &get_type_referenced ()
+  {
+    rust_assert (type != nullptr);
+    return *type;
+  }
+
+  std::unique_ptr<TypeNoBounds> &get_type_referenced_ptr ()
   {
     rust_assert (type != nullptr);
     return type;
@@ -587,9 +682,13 @@ public:
 
   bool get_has_mut () const { return has_mut; }
 
-  Lifetime &get_lifetime () { return lifetime; }
+  Lifetime &get_lifetime () { return lifetime.value (); }
+  const Lifetime &get_lifetime () const { return lifetime.value (); }
 
-  std::unique_ptr<TypeNoBounds> &get_base_type () { return type; }
+  TypeNoBounds &get_base_type () { return *type; }
+
+  // Getter for direct access to the type unique_ptr
+  std::unique_ptr<TypeNoBounds> &get_type_ptr () { return type; }
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -598,33 +697,44 @@ protected:
   {
     return new ReferenceType (*this);
   }
+  ReferenceType *reconstruct_impl () const override
+  {
+    return new ReferenceType (has_mut, type->reconstruct (), locus,
+			      // TODO: Improve this - it's ugly!
+			      has_lifetime () ? tl::make_optional<Lifetime> (
+				lifetime->get_lifetime_type (),
+				lifetime->get_lifetime_name (),
+				lifetime->get_locus ())
+					      : tl::nullopt);
+  }
+
+  Type::Kind get_type_kind () const override { return Type::Kind::Reference; }
 };
 
 // A fixed-size sequence of elements of a specified type
 class ArrayType : public TypeNoBounds
 {
   std::unique_ptr<Type> elem_type;
-  std::unique_ptr<Expr> size;
-  Location locus;
+  AnonConst size;
+  location_t locus;
 
 public:
   // Constructor requires pointers for polymorphism
-  ArrayType (std::unique_ptr<Type> type, std::unique_ptr<Expr> array_size,
-	     Location locus)
+  ArrayType (std::unique_ptr<Type> type, AnonConst array_size, location_t locus)
     : elem_type (std::move (type)), size (std::move (array_size)), locus (locus)
   {}
 
   // Copy constructor requires deep copies of both unique pointers
   ArrayType (ArrayType const &other)
-    : elem_type (other.elem_type->clone_type ()),
-      size (other.size->clone_expr ()), locus (other.locus)
+    : elem_type (other.elem_type->clone_type ()), size (other.size),
+      locus (other.locus)
   {}
 
   // Overload assignment operator to deep copy pointers
   ArrayType &operator= (ArrayType const &other)
   {
     elem_type = other.elem_type->clone_type ();
-    size = other.size->clone_expr ();
+    size = other.size;
     locus = other.locus;
     return *this;
   }
@@ -635,23 +745,32 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: would a "vis_type" be better?
-  std::unique_ptr<Type> &get_elem_type ()
+  Type &get_elem_type ()
+  {
+    rust_assert (elem_type != nullptr);
+    return *elem_type;
+  }
+
+  std::unique_ptr<Type> &get_elem_type_ptr ()
   {
     rust_assert (elem_type != nullptr);
     return elem_type;
   }
 
   // TODO: would a "vis_expr" be better?
-  std::unique_ptr<Expr> &get_size_expr ()
+  AnonConst &get_size_expr ()
   {
-    rust_assert (size != nullptr);
+    // rust_assert (size != nullptr);
+
     return size;
   }
+
+  std::unique_ptr<Type> &get_element_type () { return elem_type; }
 
 protected:
   /* Use covariance to implement clone function as returning this object rather
@@ -660,6 +779,14 @@ protected:
   {
     return new ArrayType (*this);
   }
+  ArrayType *reconstruct_impl () const override
+  {
+    return new ArrayType (elem_type->reconstruct (),
+			  size /* FIXME: This should be `reconstruct_expr()` */,
+			  locus);
+  }
+
+  Type::Kind get_type_kind () const override { return Type::Kind::Array; }
 };
 
 /* A dynamically-sized type representing a "view" into a sequence of elements of
@@ -667,11 +794,11 @@ protected:
 class SliceType : public TypeNoBounds
 {
   std::unique_ptr<Type> elem_type;
-  Location locus;
+  location_t locus;
 
 public:
   // Constructor requires pointer for polymorphism
-  SliceType (std::unique_ptr<Type> type, Location locus)
+  SliceType (std::unique_ptr<Type> type, location_t locus)
     : elem_type (std::move (type)), locus (locus)
   {}
 
@@ -695,49 +822,68 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
   // TODO: would a "vis_type" be better?
-  std::unique_ptr<Type> &get_elem_type ()
+  Type &get_elem_type ()
   {
     rust_assert (elem_type != nullptr);
-    return elem_type;
+    return *elem_type;
   }
 
+  // Getter for direct access to the elem_type unique_ptr
+  std::unique_ptr<Type> &get_elem_type_ptr () { return elem_type; }
+
 protected:
-  /* Use covariance to implement clone function as returning this object rather
-   * than base */
+  /* Use covariance to implement clone function as returning this object
+   * rather than base */
   SliceType *clone_type_no_bounds_impl () const override
   {
     return new SliceType (*this);
   }
+  SliceType *reconstruct_impl () const override
+  {
+    return new SliceType (elem_type->reconstruct (), locus);
+  }
+
+  Type::Kind get_type_kind () const override { return Type::Kind::Slice; }
 };
 
 /* Type used in generic arguments to explicitly request type inference (wildcard
  * pattern) */
 class InferredType : public TypeNoBounds
 {
-  Location locus;
+  location_t locus;
 
   // e.g. Vec<_> = whatever
 protected:
-  /* Use covariance to implement clone function as returning this object rather
-   * than base */
+  /* Use covariance to implement clone function as returning this object
+   * rather than base */
   InferredType *clone_type_no_bounds_impl () const override
   {
+    // This goes through the copy constructor
     return new InferredType (*this);
   }
 
+  InferredType *reconstruct_impl () const override
+  {
+    // This goes through the base constructor which calls the base
+    // TypeNoBounds constructor, which allocates a new NodeId
+    return new InferredType (locus);
+  }
+
 public:
-  InferredType (Location locus) : locus (locus) {}
+  InferredType (location_t locus) : locus (locus) {}
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
+
+  Type::Kind get_type_kind () const override { return Type::Kind::Inferred; }
 };
 
 class QualifiedPathInType; // definition moved to "rust-path.h"
@@ -761,12 +907,12 @@ private:
   ParamKind param_kind;
   Identifier name; // technically, can be an identifier or '_'
 
-  Location locus;
+  location_t locus;
 
 public:
   MaybeNamedParam (Identifier name, ParamKind param_kind,
 		   std::unique_ptr<Type> param_type,
-		   std::vector<Attribute> outer_attrs, Location locus)
+		   std::vector<Attribute> outer_attrs, location_t locus)
     : outer_attrs (std::move (outer_attrs)),
       param_type (std::move (param_type)), param_kind (param_kind),
       name (std::move (name)), locus (locus)
@@ -813,17 +959,23 @@ public:
   // Creates an error state param.
   static MaybeNamedParam create_error ()
   {
-    return MaybeNamedParam ("", UNNAMED, nullptr, {}, Location ());
+    return MaybeNamedParam ({""}, UNNAMED, nullptr, {}, UNDEF_LOCATION);
   }
 
-  Location get_locus () const { return locus; }
+  location_t get_locus () const { return locus; }
 
   // TODO: this mutable getter seems really dodgy. Think up better way.
   std::vector<Attribute> &get_outer_attrs () { return outer_attrs; }
   const std::vector<Attribute> &get_outer_attrs () const { return outer_attrs; }
 
   // TODO: would a "vis_type" be better?
-  std::unique_ptr<Type> &get_type ()
+  Type &get_type ()
+  {
+    rust_assert (param_type != nullptr);
+    return *param_type;
+  }
+
+  std::unique_ptr<Type> &get_type_ptr ()
   {
     rust_assert (param_type != nullptr);
     return param_type;
@@ -851,7 +1003,7 @@ class BareFunctionType : public TypeNoBounds
   // BareFunctionReturnType return_type;
   std::unique_ptr<TypeNoBounds> return_type; // inlined version
 
-  Location locus;
+  location_t locus;
 
 public:
   // Whether a return type is defined with the function.
@@ -874,7 +1026,7 @@ public:
 		    FunctionQualifiers qualifiers,
 		    std::vector<MaybeNamedParam> named_params, bool is_variadic,
 		    std::vector<Attribute> variadic_attrs,
-		    std::unique_ptr<TypeNoBounds> type, Location locus)
+		    std::unique_ptr<TypeNoBounds> type, location_t locus)
     : for_lifetimes (std::move (lifetime_params)),
       function_qualifiers (std::move (qualifiers)),
       params (std::move (named_params)), _is_variadic (is_variadic),
@@ -882,7 +1034,7 @@ public:
       return_type (std::move (type)), locus (locus)
   {
     if (!variadic_attrs.empty ())
-      is_variadic = true;
+      _is_variadic = true;
   }
 
   // Copy constructor with clone
@@ -922,7 +1074,7 @@ public:
 
   std::string as_string () const override;
 
-  Location get_locus () const override final { return locus; }
+  location_t get_locus () const override final { return locus; }
 
   void accept_vis (ASTVisitor &vis) override;
 
@@ -934,7 +1086,13 @@ public:
   }
 
   // TODO: would a "vis_type" be better?
-  std::unique_ptr<TypeNoBounds> &get_return_type ()
+  TypeNoBounds &get_return_type ()
+  {
+    rust_assert (has_return_type ());
+    return *return_type;
+  }
+
+  std::unique_ptr<TypeNoBounds> &get_return_type_ptr ()
   {
     rust_assert (has_return_type ());
     return return_type;
@@ -942,12 +1100,29 @@ public:
 
   FunctionQualifiers &get_function_qualifiers () { return function_qualifiers; }
 
+  BareFunctionType *reconstruct_impl () const override
+  {
+    std::unique_ptr<TypeNoBounds> ret_type = nullptr;
+    if (return_type != nullptr)
+      ret_type = return_type->reconstruct ();
+
+    return new BareFunctionType (
+      for_lifetimes, function_qualifiers, params,
+      /* FIXME: Should params be reconstruct() as well? */
+      _is_variadic, variadic_attrs, std::move (ret_type), locus);
+  }
+
 protected:
-  /* Use covariance to implement clone function as returning this object rather
-   * than base */
+  /* Use covariance to implement clone function as returning this object
+   * rather than base */
   BareFunctionType *clone_type_no_bounds_impl () const override
   {
     return new BareFunctionType (*this);
+  }
+
+  Type::Kind get_type_kind () const override
+  {
+    return Type::Kind::BareFunction;
   }
 };
 
@@ -961,13 +1136,13 @@ class MacroInvocation;
  * function item type?
  * closure expression types?
  * primitive types (bool, int, float, char, str (the slice))
- * Although supposedly TypePaths are used to reference these types (including
- * primitives) */
+ * Although supposedly TypePaths are used to reference these types
+ * (including primitives) */
 
 /* FIXME: Incomplete spec references:
- *  anonymous type parameters, aka "impl Trait in argument position" - impl then
- * trait bounds abstract return types, aka "impl Trait in return position" -
- * impl then trait bounds */
+ *  anonymous type parameters, aka "impl Trait in argument position" - impl
+ * then trait bounds abstract return types, aka "impl Trait in return
+ * position" - impl then trait bounds */
 } // namespace AST
 } // namespace Rust
 

@@ -1,5 +1,5 @@
 /* Subclasses of custom_edge_info for describing outcomes of function calls.
-   Copyright (C) 2021-2023 Free Software Foundation, Inc.
+   Copyright (C) 2021-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -18,45 +18,31 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
-#include "config.h"
-#define INCLUDE_MEMORY
-#include "system.h"
-#include "coretypes.h"
-#include "tree.h"
-#include "function.h"
-#include "basic-block.h"
-#include "gimple.h"
-#include "gimple-iterator.h"
-#include "diagnostic-core.h"
-#include "options.h"
-#include "cgraph.h"
-#include "tree-pretty-print.h"
-#include "bitmap.h"
-#include "analyzer/analyzer.h"
-#include "analyzer/analyzer-logging.h"
+#include "analyzer/common.h"
+
 #include "ordered-hash-map.h"
 #include "cfg.h"
 #include "digraph.h"
-#include "analyzer/supergraph.h"
 #include "sbitmap.h"
+#include "diagnostics/event-id.h"
+
+#include "analyzer/analyzer-logging.h"
+#include "analyzer/supergraph.h"
 #include "analyzer/call-string.h"
 #include "analyzer/program-point.h"
 #include "analyzer/store.h"
 #include "analyzer/region-model.h"
 #include "analyzer/constraint-manager.h"
-#include "diagnostic-event-id.h"
 #include "analyzer/sm.h"
 #include "analyzer/pending-diagnostic.h"
 #include "analyzer/region-model-reachability.h"
 #include "analyzer/analyzer-selftests.h"
 #include "analyzer/program-state.h"
-#include "diagnostic-path.h"
 #include "analyzer/checker-path.h"
 #include "analyzer/diagnostic-manager.h"
 #include "analyzer/exploded-graph.h"
 #include "analyzer/call-details.h"
 #include "analyzer/call-info.h"
-#include "make-unique.h"
 
 #if ENABLE_ANALYZER
 
@@ -72,16 +58,35 @@ custom_edge_info::update_state (program_state *state,
   return update_model (state->m_region_model, eedge, ctxt);
 }
 
+void
+custom_edge_info::get_dot_attrs (const char *&out_style,
+				 const char *&out_color) const
+{
+  out_color = "red";
+  out_style = "\"dotted\"";
+}
+
+/* Base implementation of custom_edge_info::create_enode vfunc.  */
+
+exploded_node *
+custom_edge_info::create_enode (exploded_graph &eg,
+				const program_point &point,
+				program_state &&state,
+				exploded_node *enode_for_diag,
+				region_model_context *) const
+{
+  return eg.get_or_create_node (point, state, enode_for_diag);
+}
+
 /* class call_info : public custom_edge_info.  */
 
-/* Implementation of custom_edge_info::print vfunc for call_info:
-   use get_desc to get a label_text, and print it to PP.  */
+/* Implementation of custom_edge_info::print vfunc for call_info.  */
 
 void
 call_info::print (pretty_printer *pp) const
 {
-  label_text desc (get_desc (pp_show_color (pp)));
-  pp_string (pp, desc.get ());
+  gcc_assert (pp);
+  print_desc (*pp);
 }
 
 /* Implementation of custom_edge_info::add_events_to_path vfunc for
@@ -90,7 +95,8 @@ call_info::print (pretty_printer *pp) const
 
 void
 call_info::add_events_to_path (checker_path *emission_path,
-			       const exploded_edge &eedge) const
+			       const exploded_edge &eedge,
+			       pending_diagnostic &) const
 {
   class call_event : public custom_event
   {
@@ -101,9 +107,9 @@ call_info::add_events_to_path (checker_path *emission_path,
       m_call_info (call_info)
     {}
 
-    label_text get_desc (bool can_colorize) const final override
+    void print_desc (pretty_printer &pp) const final override
     {
-      return m_call_info->get_desc (can_colorize);
+      m_call_info->print_desc (pp);
     }
 
   private:
@@ -116,10 +122,10 @@ call_info::add_events_to_path (checker_path *emission_path,
   const int stack_depth = src_point.get_stack_depth ();
 
   emission_path->add_event
-    (make_unique<call_event> (event_loc_info (get_call_stmt ()->location,
-					      caller_fndecl,
-					      stack_depth),
-			      this));
+    (std::make_unique<call_event> (event_loc_info (get_call_stmt ().location,
+						   caller_fndecl,
+						   stack_depth),
+				   this));
 }
 
 /* Recreate a call_details instance from this call_info.  */
@@ -143,15 +149,23 @@ call_info::call_info (const call_details &cd)
   gcc_assert (m_fndecl);
 }
 
+call_info::call_info (const call_details &cd,
+		      const function &called_fn)
+: m_call_stmt (cd.get_call_stmt ()),
+  m_fndecl (called_fn.decl)
+{
+  gcc_assert (m_fndecl);
+}
+
 /* class succeed_or_fail_call_info : public call_info.  */
 
-label_text
-succeed_or_fail_call_info::get_desc (bool can_colorize) const
+void
+succeed_or_fail_call_info::print_desc (pretty_printer &pp) const
 {
   if (m_success)
-    return make_label_text (can_colorize, "when %qE succeeds", get_fndecl ());
+    pp_printf (&pp, "when %qE succeeds", get_fndecl ());
   else
-    return make_label_text (can_colorize, "when %qE fails", get_fndecl ());
+    pp_printf (&pp, "when %qE fails", get_fndecl ());
 }
 
 } // namespace ana

@@ -52,6 +52,7 @@ int sys_read(int fd, void *buf, size_t count, ssize_t *bytes_read);
 [[gnu::weak]] int sys_readv(int fd, const struct iovec *iovs, int iovc, ssize_t *bytes_read);
 
 int sys_write(int fd, const void *buf, size_t count, ssize_t *bytes_written);
+[[gnu::weak]] int sys_writev(int fd, const struct iovec *iovs, int iovc, ssize_t *bytes_written);
 [[gnu::weak]] int sys_pread(int fd, void *buf, size_t n, off_t off, ssize_t *bytes_read);
 [[gnu::weak]] int sys_pwrite(int fd, const void *buf, size_t n, off_t off, ssize_t *bytes_read);
 
@@ -110,6 +111,7 @@ int sys_close(int fd);
 [[gnu::weak]] int sys_setpriority(int which, id_t who, int prio);
 [[gnu::weak]] int sys_getschedparam(void *tcb, int *policy, struct sched_param *param);
 [[gnu::weak]] int sys_setschedparam(void *tcb, int policy, const struct sched_param *param);
+[[gnu::weak]] int sys_getscheduler(pid_t pid, int *policy);
 [[gnu::weak]] int sys_getparam(pid_t pid, struct sched_param *param);
 [[gnu::weak]] int sys_setparam(pid_t pid, const struct sched_param *param);
 [[gnu::weak]] int sys_get_max_priority(int policy, int *out);
@@ -168,6 +170,8 @@ int sys_vm_unmap(void *pointer, size_t size);
 [[gnu::weak]] int sys_shutdown(int sockfd, int how);
 [[gnu::weak]] int sys_sigprocmask(int how, const sigset_t *__restrict set,
 		sigset_t *__restrict retrieve);
+[[gnu::weak]] int sys_thread_sigmask(int how, const sigset_t *__restrict set,
+		sigset_t *__restrict retrieve);
 [[gnu::weak]] int sys_sigaction(int, const struct sigaction *__restrict,
 		struct sigaction *__restrict);
 // NOTE: POSIX says that behavior of timeout = nullptr is unspecified. We treat this case
@@ -198,12 +202,14 @@ int sys_vm_unmap(void *pointer, size_t size);
 [[gnu::weak]] int sys_setgroups(size_t size, const gid_t *list);
 [[gnu::weak]] int sys_memfd_create(const char *name, int flags, int *fd);
 [[gnu::weak]] int sys_madvise(void *addr, size_t length, int advice);
+[[gnu::weak]] int sys_posix_madvise(void *addr, size_t length, int advice);
 [[gnu::weak]] int sys_msync(void *addr, size_t length, int flags);
 
 [[gnu::weak]] int sys_getitimer(int which, struct itimerval *curr_value);
 [[gnu::weak]] int sys_setitimer(int which, const struct itimerval *new_value, struct itimerval *old_value);
 [[gnu::weak]] int sys_timer_create(clockid_t clk, struct sigevent *__restrict evp, timer_t *__restrict res);
 [[gnu::weak]] int sys_timer_settime(timer_t t, int flags, const struct itimerspec *__restrict val, struct itimerspec *__restrict old);
+[[gnu::weak]] int sys_timer_gettime(timer_t t, struct itimerspec *val);
 [[gnu::weak]] int sys_timer_delete(timer_t t);
 [[gnu::weak]] int sys_times(struct tms *tms, clock_t *out);
 [[gnu::weak]] int sys_uname(struct utsname *buf);
@@ -215,8 +221,6 @@ int sys_vm_unmap(void *pointer, size_t size);
 [[gnu::weak]] int sys_getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid);
 [[gnu::weak]] int sys_setreuid(uid_t ruid, uid_t euid);
 [[gnu::weak]] int sys_setregid(gid_t rgid, gid_t egid);
-
-[[gnu::weak]] int sys_poll(struct pollfd *fds, nfds_t count, int timeout, int *num_events);
 
 [[gnu::weak]] int sys_if_indextoname(unsigned int index, char *name);
 [[gnu::weak]] int sys_if_nametoindex(const char *name, unsigned int *ret);
@@ -247,6 +251,12 @@ int sys_vm_unmap(void *pointer, size_t size);
 [[gnu::weak]] int sys_shmctl(int *idx, int shmid, int cmd, struct shmid_ds *buf);
 [[gnu::weak]] int sys_shmdt(const void *shmaddr);
 [[gnu::weak]] int sys_shmget(int *shm_id, key_t key, size_t size, int shmflg);
+
+[[gnu::weak]] int sys_inet_configured(bool *ipv4, bool *ipv6);
+
+[[gnu::weak]] int sys_nice(int nice, int *new_nice);
+
+[[gnu::weak]] int sys_openpt(int oflags, int *fd);
 
 } //namespace mlibc
 

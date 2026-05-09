@@ -1,10 +1,76 @@
-2023-07-27  Release Manager
+2026-04-30  Release Manager
 
-	* GCC 13.2.0 released.
+	* GCC 16.1.0 released.
 
-2023-04-26  Release Manager
+2025-12-29  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
 
-	* GCC 13.1.0 released.
+	* configure: Regenerate.
+
+2025-11-03  Sam James  <sam@gentoo.org>
+
+	* configure: Regenerate.
+
+2025-10-05  Sam James  <sam@gentoo.org>
+
+	* Makefile.in: Regenerate.
+	* aclocal.m4: Regenerate.
+	* configure: Regenerate.
+	* testsuite/Makefile.in: Regenerate.
+
+2025-05-09  David Malcolm  <dmalcolm@redhat.com>
+
+	PR other/116792
+	* testsuite/lib/libvtv-dg.exp: Add load_lib of scanhtml.exp.
+
+2024-11-18  David Malcolm  <dmalcolm@redhat.com>
+
+	* testsuite/lib/libvtv.exp: Add
+	"load_gcc_lib dg-test-cleanup.exp".
+
+2024-09-02  Alex Coplan  <alex.coplan@arm.com>
+
+	* testsuite/lib/libvtv.exp: Load scanltrans.exp instead of
+	scanltranstree.exp.
+
+2024-05-31  Rainer Orth  <ro@CeBiTec.Uni-Bielefeld.DE>
+
+	PR testsuite/115294
+	* testsuite/lib/libvtv.exp (libvtv_target_compile): Pass new
+	dg-additional-files-options args.
+
+2024-04-02  Jakub Jelinek  <jakub@redhat.com>
+
+	* vtv_rts.cc (vtv_fail): Fix duplicated words; to to -> to.
+	* vtv_fail.cc (vtv_fail): Likewise.
+
+2023-10-22  Iain Sandoe  <iain@sandoe.co.uk>
+
+	* configure: Regenerate.
+	* configure.ac: Handle Darwin rpaths.
+
+2023-08-07  Nick Alcock  <nick.alcock@oracle.com>
+
+	* configure: Regenerate.
+
+2023-08-07  Alexander von Gluck IV  <kallisti5@unixzen.com>
+
+	* configure: Regenerate.
+
+2023-08-07  Nick Alcock  <nick.alcock@oracle.com>
+
+	* configure: Regenerate.
+
+2023-08-07  Nick Alcock  <nick.alcock@oracle.com>
+
+	* configure: Regenerate.
+
+2023-08-07  H.J. Lu  <hjl.tools@gmail.com>
+
+	* configure: Regenerate.
+
+2023-08-07  H.J. Lu  <hjl.tools@gmail.com>
+
+	* configure: Regenerate.
 
 2023-01-07  LIU Hao  <lh_mouse@126.com>
 

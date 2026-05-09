@@ -1,5 +1,5 @@
 /* Header for array handling functions
-   Copyright (C) 2002-2023 Free Software Foundation, Inc.
+   Copyright (C) 2002-2026 Free Software Foundation, Inc.
    Contributed by Paul Brook
 
 This file is part of GCC.
@@ -20,8 +20,8 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Generate code to initialize and allocate an array.  Statements are added to
    se, which should contain an expression for the array descriptor.  */
-bool gfc_array_allocate (gfc_se *, gfc_expr *, tree, tree, tree, tree,
-			 tree, tree *, gfc_expr *, tree, bool);
+bool gfc_array_allocate (gfc_se *, gfc_expr *, tree, tree, tree, tree, tree,
+			 gfc_expr *, tree, bool, gfc_omp_namelist *, bool);
 
 /* Allow the bounds of a loop to be set from a callee's array spec.  */
 void gfc_set_loop_bounds_from_array_spec (gfc_interface_mapping *,
@@ -53,7 +53,8 @@ bool gfc_caf_is_dealloc_only (int);
 
 tree gfc_nullify_alloc_comp (gfc_symbol *, tree, int, int cm = 0);
 
-tree gfc_deallocate_alloc_comp (gfc_symbol *, tree, int, int cm = 0);
+tree gfc_deallocate_alloc_comp (gfc_symbol *, tree, int, int cm = 0,
+				bool no_finalization = false);
 tree gfc_bcast_alloc_comp (gfc_symbol *, gfc_expr *, int, tree,
 			   tree, tree, tree);
 tree gfc_deallocate_alloc_comp_no_caf (gfc_symbol *, tree, int,
@@ -88,7 +89,8 @@ gfc_ss *gfc_walk_expr (gfc_expr *);
 /* Workhorse for gfc_walk_expr.  */
 gfc_ss *gfc_walk_subexpr (gfc_ss *, gfc_expr *);
 /* Workhorse for gfc_walk_variable_expr.  */
-gfc_ss *gfc_walk_array_ref (gfc_ss *, gfc_expr *, gfc_ref * ref);
+gfc_ss *gfc_walk_array_ref (gfc_ss *, gfc_expr *, gfc_ref *ref,
+			    bool = true);
 /* Walk the arguments of an elemental function.  */
 gfc_ss *gfc_walk_elemental_function_args (gfc_ss *, gfc_actual_arglist *,
 					  gfc_intrinsic_sym *,
@@ -151,8 +153,9 @@ tree gfc_get_array_span (tree, gfc_expr *);
 /* Evaluate an array expression.  */
 void gfc_conv_expr_descriptor (gfc_se *, gfc_expr *);
 /* Convert an array for passing as an actual function parameter.  */
-void gfc_conv_array_parameter (gfc_se *, gfc_expr *, bool,
-			       const gfc_symbol *, const char *, tree *);
+void gfc_conv_array_parameter (gfc_se *, gfc_expr *, bool, const gfc_symbol *,
+			       const char *, tree *, tree * = nullptr,
+			       tree * = nullptr);
 
 /* These work with both descriptors and descriptorless arrays.  */
 tree gfc_conv_array_data (tree);
@@ -171,12 +174,12 @@ void gfc_get_descriptor_offsets_for_info (const_tree, tree *, tree *, tree *, tr
 					  tree *, tree *, tree *, tree *);
 
 tree gfc_conv_descriptor_data_get (tree);
-tree gfc_conv_descriptor_data_addr (tree);
 tree gfc_conv_descriptor_offset_get (tree);
 tree gfc_conv_descriptor_span_get (tree);
 tree gfc_conv_descriptor_dtype (tree);
 tree gfc_conv_descriptor_rank (tree);
 tree gfc_conv_descriptor_elem_len (tree);
+tree gfc_conv_descriptor_version (tree);
 tree gfc_conv_descriptor_attribute (tree);
 tree gfc_conv_descriptor_type (tree);
 tree gfc_get_descriptor_dimension (tree);

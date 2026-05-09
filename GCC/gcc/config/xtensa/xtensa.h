@@ -1,5 +1,5 @@
 /* Definitions of Tensilica's Xtensa target machine for GNU compiler.
-   Copyright (C) 2001-2023 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
    Contributed by Bob Wilson (bwilson@tensilica.com) at Tensilica.
 
 This file is part of GCC.
@@ -36,6 +36,7 @@ along with GCC; see the file COPYING3.  If not see
 #define TARGET_MINMAX		XCHAL_HAVE_MINMAX
 #define TARGET_SEXT		XCHAL_HAVE_SEXT
 #define TARGET_CLAMPS		XCHAL_HAVE_CLAMPS
+#define TARGET_DEPBITS		XCHAL_HAVE_DEPBITS
 #define TARGET_BOOLEANS		XCHAL_HAVE_BOOLEANS
 #define TARGET_HARD_FLOAT	XCHAL_HAVE_FP
 #define TARGET_HARD_FLOAT_DIV	XCHAL_HAVE_FP_DIV
@@ -54,6 +55,7 @@ along with GCC; see the file COPYING3.  If not see
 #define TARGET_WINDOWED_ABI	xtensa_windowed_abi
 #define TARGET_DEBUG		XCHAL_HAVE_DEBUG
 #define TARGET_L32R		XCHAL_HAVE_L32R
+#define TARGET_SALT		(XTENSA_MARCH_EARLIEST >= 270000)
 
 #define TARGET_DEFAULT (MASK_SERIALIZE_VOLATILE)
 
@@ -119,9 +121,6 @@ along with GCC; see the file COPYING3.  If not see
 #define SHORT_TYPE_SIZE 16
 #define LONG_TYPE_SIZE 32
 #define LONG_LONG_TYPE_SIZE 64
-#define FLOAT_TYPE_SIZE 32
-#define DOUBLE_TYPE_SIZE 64
-#define LONG_DOUBLE_TYPE_SIZE 64
 
 /* Allocation boundary (in *bits*) for storing pointers in memory.  */
 #define POINTER_BOUNDARY 32
@@ -143,7 +142,7 @@ along with GCC; see the file COPYING3.  If not see
 
 /* Set this nonzero if move instructions will actually fail to work
    when given unaligned data.  */
-#define STRICT_ALIGNMENT 1
+#define STRICT_ALIGNMENT (xtensa_strict_alignment)
 
 /* Promote integer modes smaller than a word to SImode.  Set UNSIGNEDP
    for QImode, because there is no 8-bit load from memory with sign
@@ -402,7 +401,7 @@ enum reg_class
 #define INDEX_REG_CLASS NO_REGS
 
 /* The small_register_classes_for_mode_p hook must always return true for
-   Xtrnase, because all of the 16 AR registers may be explicitly used in
+   Xtensa, because all of the 16 AR registers may be explicitly used in
    the RTL, as either incoming or outgoing arguments.  */
 #define TARGET_SMALL_REGISTER_CLASSES_FOR_MODE_P hook_bool_mode_true
 
@@ -523,6 +522,10 @@ typedef struct xtensa_args
 /* Stack pointer value doesn't matter at exit.  */
 #define EXIT_IGNORE_STACK 1
 
+/* The "return" pattern requires A0 register as return address, and is
+   also required so that restoring A0 in the epilogue is not dead code.  */
+#define EPILOGUE_USES(REGNO) ((REGNO) == A0_REG)
+
 /* Size in bytes of the trampoline, as an integer.  Make sure this is
    a multiple of TRAMPOLINE_ALIGNMENT to avoid -Wpadded warnings.  */
 #define TRAMPOLINE_SIZE (TARGET_WINDOWED_ABI ? \
@@ -584,15 +587,15 @@ typedef struct xtensa_args
    for use as a base or index register in operand addresses.  */
 
 #define REGNO_OK_FOR_INDEX_P(NUM) 0
-#define REGNO_OK_FOR_BASE_P(NUM) \
-  (GP_REG_P (NUM) || GP_REG_P ((unsigned) reg_renumber[NUM]))
+#define REGNO_OK_FOR_BASE_P(NUM) GP_REG_P (NUM)
 
 /* C expressions that are nonzero if X (assumed to be a `reg' RTX) is
    valid for use as a base or index register.  */
 
 #define BASE_REG_P(X, STRICT)						\
   ((!(STRICT) && ! HARD_REGISTER_P (X))					\
-   || REGNO_OK_FOR_BASE_P (REGNO (X)))
+   || regno_ok_for_base_p (REGNO (X), VOIDmode, ADDR_SPACE_GENERIC,	\
+			   UNKNOWN, UNKNOWN))
 
 /* Maximum number of registers that can appear in a valid memory address.  */
 #define MAX_REGS_PER_ADDRESS 1
@@ -601,17 +604,17 @@ typedef struct xtensa_args
    valid address.  This is defined to be the same as 'CONSTANT_P (X)',
    but rejecting CONST_DOUBLE.  */
 #define CONSTANT_ADDRESS_P(X)						\
-  ((GET_CODE (X) == LABEL_REF || GET_CODE (X) == SYMBOL_REF		\
-    || GET_CODE (X) == CONST_INT || GET_CODE (X) == HIGH		\
+  ((LABEL_REF_P (X) || SYMBOL_REF_P (X) || CONST_INT_P (X)		\
+    || (GET_CODE (X) == HIGH)						\
     || (GET_CODE (X) == CONST)))
 
 /* A C expression that is nonzero if X is a legitimate immediate
    operand on the target machine when generating position independent
    code.  */
 #define LEGITIMATE_PIC_OPERAND_P(X)					\
-  ((GET_CODE (X) != SYMBOL_REF						\
-    || (SYMBOL_REF_LOCAL_P (X) && !SYMBOL_REF_EXTERNAL_P (X)))		\
-   && GET_CODE (X) != LABEL_REF						\
+  ((! SYMBOL_REF_P (X)							\
+    || (SYMBOL_REF_LOCAL_P (X) && ! SYMBOL_REF_EXTERNAL_P (X)))		\
+   && ! LABEL_REF_P (X)							\
    && GET_CODE (X) != CONST)
 
 /* Specify the machine mode that this machine uses

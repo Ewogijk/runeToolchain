@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -19,10 +19,12 @@
 #ifndef RUST_PRIVACY_REPORTER_H
 #define RUST_PRIVACY_REPORTER_H
 
+#include "rust-hir-expr.h"
 #include "rust-hir-map.h"
 #include "rust-hir-visitor.h"
+#include "rust-hir-type-check.h"
 #include "rust-mapping-common.h"
-#include "rust-name-resolver.h"
+#include "rust-name-resolution-context.h"
 
 namespace Rust {
 namespace Privacy {
@@ -37,7 +39,7 @@ class PrivacyReporter : public HIR::HIRExpressionVisitor,
 {
 public:
   PrivacyReporter (Analysis::Mappings &mappings,
-		   Rust::Resolver::Resolver &resolver,
+		   const Resolver2_0::NameResolutionContext &resolver,
 		   const Rust::Resolver::TypeCheckContext &ty_ctx);
 
   /**
@@ -56,7 +58,7 @@ private:
    * @param locus Location of said expression/statement
    */
   void check_for_privacy_violation (const NodeId &use_id,
-				    const Location &locus);
+				    const location_t locus);
 
   /**
    * Internal function used by `check_type_privacy` when dealing with complex
@@ -65,7 +67,7 @@ types
    */
   void check_base_type_privacy (Analysis::NodeMapping &node_mappings,
 				const TyTy::BaseType *ty,
-				const Location &locus);
+				const location_t locus);
 
   /**
    * Check the privacy of an explicit type.
@@ -75,7 +77,7 @@ types
    * @param type Reference to an explicit type used in a statement, expression
    * 		or parameter
    */
-  void check_type_privacy (const HIR::Type *type);
+  void check_type_privacy (const HIR::Type &type);
 
   virtual void visit (HIR::StructExprFieldIdentifier &field);
   virtual void visit (HIR::StructExprFieldIdentifierValue &field);
@@ -106,6 +108,8 @@ types
   virtual void visit (HIR::MethodCallExpr &expr);
   virtual void visit (HIR::FieldAccessExpr &expr);
   virtual void visit (HIR::BlockExpr &expr);
+  virtual void visit (HIR::AnonConst &expr);
+  virtual void visit (HIR::ConstBlock &expr);
   virtual void visit (HIR::ContinueExpr &expr);
   virtual void visit (HIR::BreakExpr &expr);
   virtual void visit (HIR::RangeFromToExpr &expr);
@@ -119,18 +123,14 @@ types
   virtual void visit (HIR::LoopExpr &expr);
   virtual void visit (HIR::WhileLoopExpr &expr);
   virtual void visit (HIR::WhileLetLoopExpr &expr);
-  virtual void visit (HIR::ForLoopExpr &expr);
   virtual void visit (HIR::IfExpr &expr);
   virtual void visit (HIR::IfExprConseqElse &expr);
-  virtual void visit (HIR::IfExprConseqIf &expr);
-  virtual void visit (HIR::IfExprConseqIfLet &expr);
-  virtual void visit (HIR::IfLetExpr &expr);
-  virtual void visit (HIR::IfLetExprConseqElse &expr);
-  virtual void visit (HIR::IfLetExprConseqIf &expr);
-  virtual void visit (HIR::IfLetExprConseqIfLet &expr);
   virtual void visit (HIR::MatchExpr &expr);
   virtual void visit (HIR::AwaitExpr &expr);
   virtual void visit (HIR::AsyncBlockExpr &expr);
+  virtual void visit (HIR::InlineAsm &expr);
+  virtual void visit (HIR::LlvmInlineAsm &expr);
+  virtual void visit (HIR::OffsetOf &expr);
 
   virtual void visit (HIR::EnumItemTuple &);
   virtual void visit (HIR::EnumItemStruct &);
@@ -155,15 +155,14 @@ types
   virtual void visit (HIR::ExternBlock &block);
   virtual void visit (HIR::EmptyStmt &stmt);
   virtual void visit (HIR::LetStmt &stmt);
-  virtual void visit (HIR::ExprStmtWithoutBlock &stmt);
-  virtual void visit (HIR::ExprStmtWithBlock &stmt);
+  virtual void visit (HIR::ExprStmt &stmt);
 
   Analysis::Mappings &mappings;
-  Rust::Resolver::Resolver &resolver;
+  const Resolver2_0::NameResolutionContext &resolver;
   const Rust::Resolver::TypeCheckContext &ty_ctx;
 
   // `None` means we're in the root module - the crate
-  Optional<NodeId> current_module;
+  tl::optional<NodeId> current_module;
 };
 
 } // namespace Privacy

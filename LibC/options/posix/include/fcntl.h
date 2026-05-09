@@ -47,7 +47,7 @@ int posix_fadvise(int __fd, off_t __offset, off_t __size, int __advice);
 int posix_fallocate(int __fd, off_t __offset, off_t __size);
 
 #endif /* !__MLIBC_ABI_ONLY */
-#define _GNU_SOURCE //TODO is there another way to provide this?
+
 /* This is a linux extension */
 #ifdef _GNU_SOURCE
 struct file_handle {

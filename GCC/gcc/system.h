@@ -1,6 +1,6 @@
 /* Get common system includes and various definitions and declarations based
    on autoconf macros.
-   Copyright (C) 1998-2023 Free Software Foundation, Inc.
+   Copyright (C) 1998-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -56,8 +56,8 @@ along with GCC; see the file COPYING3.  If not see
    the names to 64bit capable functions for LARGE_FILES support. These
    redefs are pointless here so we can override them.  */
 
-#undef fopen 
-#undef freopen 
+#undef fopen
+#undef freopen
 
 #define fopen(PATH, MODE) fopen_unlocked (PATH, MODE)
 #define fdopen(FILDES, MODE) fdopen_unlocked (FILDES, MODE)
@@ -194,13 +194,46 @@ extern int fprintf_unlocked (FILE *, const char *, ...);
 #undef fread_unlocked
 #undef fwrite_unlocked
 
-/* Include <string> before "safe-ctype.h" to avoid GCC poisoning
-   the ctype macros through safe-ctype.h */
+/* Include C++ standard headers before "safe-ctype.h" to avoid GCC
+   poisoning the ctype macros through safe-ctype.h */
 
 #ifdef __cplusplus
+#if defined (INCLUDE_ALGORITHM) || !defined (HAVE_SWAP_IN_UTILITY)
+# include <algorithm>
+#endif
+#ifdef INCLUDE_DEQUE
+# include <deque>
+#endif
+#ifdef INCLUDE_LIST
+# include <list>
+#endif
+#ifdef INCLUDE_MAP
+# include <map>
+#endif
+#ifdef INCLUDE_SET
+# include <set>
+#endif
 #ifdef INCLUDE_STRING
 # include <string>
 #endif
+#ifdef INCLUDE_VECTOR
+# include <vector>
+#endif
+#ifdef INCLUDE_ARRAY
+# include <array>
+#endif
+#ifdef INCLUDE_FUNCTIONAL
+# include <functional>
+#endif
+#ifdef INCLUDE_SSTREAM
+# include <sstream>
+#endif
+# include <memory>
+# include <cstring>
+# include <initializer_list>
+# include <new>
+# include <utility>
+# include <type_traits>
 #endif
 
 /* There are an extraordinary number of issues with <ctype.h>.
@@ -214,35 +247,6 @@ extern int fprintf_unlocked (FILE *, const char *, ...);
 
 #if !defined (errno) && defined (HAVE_DECL_ERRNO) && !HAVE_DECL_ERRNO
 extern int errno;
-#endif
-
-#ifdef __cplusplus
-#if defined (INCLUDE_ALGORITHM) || !defined (HAVE_SWAP_IN_UTILITY)
-# include <algorithm>
-#endif
-#ifdef INCLUDE_LIST
-# include <list>
-#endif
-#ifdef INCLUDE_MAP
-# include <map>
-#endif
-#ifdef INCLUDE_SET
-# include <set>
-#endif
-#ifdef INCLUDE_VECTOR
-# include <vector>
-#endif
-#ifdef INCLUDE_ARRAY
-# include <array>
-#endif
-#ifdef INCLUDE_FUNCTIONAL
-# include <functional>
-#endif
-# include <cstring>
-# include <initializer_list>
-# include <new>
-# include <utility>
-# include <type_traits>
 #endif
 
 /* Some of glibc's string inlines cause warnings.  Plus we'd rather
@@ -403,7 +407,7 @@ extern int errno;
 
 /* This macro rounds x down to the y boundary.  */
 #define ROUND_DOWN(x,y) ((x) & ~((y) - 1))
- 	
+
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
 #endif
@@ -693,7 +697,7 @@ extern int vsnprintf (char *, size_t, const char *, va_list);
 # endif
 #endif
 
-#if defined (ENABLE_PLUGIN) && defined (HAVE_DLFCN_H)
+#if defined (INCLUDE_DLFCN_H) && defined (HAVE_DLFCN_H)
 /* If plugin support is enabled, we could use libdl.  */
 #include <dlfcn.h>
 #endif
@@ -701,6 +705,28 @@ extern int vsnprintf (char *, size_t, const char *, va_list);
 /* Do not introduce a gmp.h dependency on the build system.  */
 #ifndef GENERATOR_FILE
 #include <gmp.h>
+
+class auto_mpz
+{
+public:
+  auto_mpz () { mpz_init (m_mpz); }
+  ~auto_mpz () { mpz_clear (m_mpz); }
+
+  operator mpz_t& () { return m_mpz; }
+  mpz_ptr operator-> () { return m_mpz; }
+
+  auto_mpz (const auto_mpz &) = delete;
+  auto_mpz &operator= (const auto_mpz &) = delete;
+
+#if GCC_VERSION < 4008 || GCC_VERSION >= 5000
+  /* GCC 4.8 and 4.9 don't support this, only fixed in PR62101 for 5.0.  */
+  friend void mpz_clear (auto_mpz&) = delete;
+  friend void mpz_init (auto_mpz&) = delete;
+#endif
+
+private:
+  mpz_t m_mpz;
+};
 #endif
 
 /* Get libiberty declarations.  */
@@ -739,30 +765,15 @@ extern int vsnprintf (char *, size_t, const char *, va_list);
 #define LIKELY(x) (__builtin_expect ((x), 1))
 #define UNLIKELY(x) (__builtin_expect ((x), 0))
 
-/* Some of the headers included by <memory> can use "abort" within a
-   namespace, e.g. "_VSTD::abort();", which fails after we use the
-   preprocessor to redefine "abort" as "fancy_abort" below.  */
-
-#ifdef INCLUDE_MEMORY
-# include <memory>
-#endif
 
 #ifdef INCLUDE_MUTEX
 # include <mutex>
-#endif
-
-#ifdef INCLUDE_SSTREAM
-# include <sstream>
 #endif
 
 #ifdef INCLUDE_MALLOC_H
 #if defined(HAVE_MALLINFO) || defined(HAVE_MALLINFO2)
 #include <malloc.h>
 #endif
-#endif
-
-#ifdef INCLUDE_PTHREAD_H
-#include <pthread.h>
 #endif
 
 #ifdef INCLUDE_ISL
@@ -887,12 +898,6 @@ extern void fancy_abort (const char *, int, const char *)
 /* Some compilers do not allow the use of unsigned char in bitfields.  */
 #define BOOL_BITFIELD unsigned int
 
-/* GCC older than 4.4 have broken C++ value initialization handling, see
-   PR11309, PR30111, PR33916, PR82939 and PR84405 for more details.  */
-#if GCC_VERSION > 0 && GCC_VERSION < 4004 && !defined(__clang__)
-# define BROKEN_VALUE_INITIALIZATION
-#endif
-
 /* As the last action in this file, we poison the identifiers that
    shouldn't be used.  Note, luckily gcc-3.0's token-based integrated
    preprocessor won't trip on poisoned identifiers that arrive from
@@ -991,7 +996,8 @@ extern void fancy_abort (const char *, int, const char *)
 	HARD_REGNO_NREGS SECONDARY_MEMORY_NEEDED_MODE			\
 	SECONDARY_MEMORY_NEEDED CANNOT_CHANGE_MODE_CLASS		\
 	TRULY_NOOP_TRUNCATION FUNCTION_ARG_OFFSET CONSTANT_ALIGNMENT	\
-	STARTING_FRAME_OFFSET
+	STARTING_FRAME_OFFSET FLOAT_TYPE_SIZE DOUBLE_TYPE_SIZE		\
+	LONG_DOUBLE_TYPE_SIZE
 
 /* Target macros only used for code built for the target, that have
    moved to libgcc-tm.h or have never been present elsewhere.  */
@@ -1146,54 +1152,6 @@ extern void fancy_abort (const char *, int, const char *)
 
 #endif /* GCC >= 3.0 */
 
-/* This macro allows casting away const-ness to pass -Wcast-qual
-   warnings.  DO NOT USE THIS UNLESS YOU REALLY HAVE TO!  It should
-   only be used in certain specific cases.  One valid case is where
-   the C standard definitions or prototypes force you to.  E.g. if you
-   need to free a const object, or if you pass a const string to
-   execv, et al.  Another valid use would be in an allocation function
-   that creates const objects that need to be initialized.  In some
-   cases we have non-const functions that return the argument
-   (e.g. next_nonnote_insn).  Rather than create const shadow
-   functions, we can cast away const-ness in calling these interfaces
-   if we're careful to verify that the called function does indeed not
-   modify its argument and the return value is only used in a const
-   context.  (This can be somewhat dangerous as these assumptions can
-   change after the fact).  Beyond these uses, most other cases of
-   using this macro should be viewed with extreme caution.  */
-
-#ifdef __cplusplus
-#define CONST_CAST2(TOTYPE,FROMTYPE,X) (const_cast<TOTYPE> (X))
-#else
-#if defined(__GNUC__) && GCC_VERSION > 4000
-/* GCC 4.0.x has a bug where it may ICE on this expression,
-   so does GCC 3.4.x (PR17436).  */
-#define CONST_CAST2(TOTYPE,FROMTYPE,X) ((__extension__(union {FROMTYPE _q; TOTYPE _nq;})(X))._nq)
-#elif defined(__GNUC__)
-inline char *
-helper_const_non_const_cast (const char *p)
-{
-  union {
-    const char *const_c;
-    char *c;
-  } val;
-  val.const_c = p;
-  return val.c;
-}
-
-#define CONST_CAST2(TOTYPE,FROMTYPE,X) \
-	((TOTYPE) helper_const_non_const_cast ((const char *) (FROMTYPE) (X)))
-#else
-#define CONST_CAST2(TOTYPE,FROMTYPE,X) ((TOTYPE)(FROMTYPE)(X))
-#endif
-#endif
-#define CONST_CAST(TYPE,X) CONST_CAST2 (TYPE, const TYPE, (X))
-#define CONST_CAST_TREE(X) CONST_CAST (union tree_node *, (X))
-#define CONST_CAST_RTX(X) CONST_CAST (struct rtx_def *, (X))
-#define CONST_CAST_RTX_INSN(X) CONST_CAST (struct rtx_insn *, (X))
-#define CONST_CAST_BB(X) CONST_CAST (struct basic_block_def *, (X))
-#define CONST_CAST_GIMPLE(X) CONST_CAST (gimple *, (X))
-
 /* Activate certain diagnostics as warnings (not errors via the
    -Werror flag).  */
 #if GCC_VERSION >= 4003
@@ -1205,28 +1163,11 @@ helper_const_non_const_cast (const char *p)
 #endif
 
 #ifdef ENABLE_VALGRIND_ANNOTATIONS
-# ifdef HAVE_VALGRIND_MEMCHECK_H
-#  include <valgrind/memcheck.h>
-# elif defined HAVE_MEMCHECK_H
-#  include <memcheck.h>
-# else
-#  include <valgrind.h>
-# endif
-/* Compatibility macros to let valgrind 3.1 work.  */
-# ifndef VALGRIND_MAKE_MEM_NOACCESS
-#  define VALGRIND_MAKE_MEM_NOACCESS VALGRIND_MAKE_NOACCESS
-# endif
-# ifndef VALGRIND_MAKE_MEM_DEFINED
-#  define VALGRIND_MAKE_MEM_DEFINED VALGRIND_MAKE_READABLE
-# endif
-# ifndef VALGRIND_MAKE_MEM_UNDEFINED
-#  define VALGRIND_MAKE_MEM_UNDEFINED VALGRIND_MAKE_WRITABLE
-# endif
+#include <valgrind/memcheck.h>
 #else
-/* Avoid #ifdef:s when we can help it.  */
+/* VALGRIND_DISCARD unregisters the given block handle,
+   but our code misuses it for discarding annotations.  */
 #define VALGRIND_DISCARD(x)
-#define VALGRIND_MALLOCLIKE_BLOCK(w,x,y,z)
-#define VALGRIND_FREELIKE_BLOCK(x,y)
 #endif
 
 /* Macros to temporarily ignore some warnings.  */
@@ -1308,6 +1249,12 @@ void gcc_stablesort_r (void *, size_t, size_t, sort_r_cmp_fn *, void *data);
 #ifdef __cplusplus
 #undef NULL
 #define NULL nullptr
+#endif
+
+/* Workaround clang on PowerPC which has vec_step as reserved keyword
+   rather than function-like macro defined in <altivec.h>.  See PR114369.  */
+#if defined(__clang__) && defined(__powerpc__)
+#define vec_step vec_step_
 #endif
 
 /* Return true if STR string starts with PREFIX.  */

@@ -377,11 +377,8 @@ may have been set by a call to ``Ada.Command_Line.Set_Exit_Status``).
 *
   "The mechanisms for building and running partitions.  See 10.2(24)."
 
-GNAT itself supports programs with only a single partition. The GNATDIST
-tool provided with the GLADE package (which also includes an implementation
-of the PCS) provides a completely flexible method for building and running
-programs consisting of multiple partitions. See the separate GLADE manual
-for details.
+GNAT itself supports programs with only a single partition. The PolyORB product (which also includes an implementation of the PCS) provides a completely flexible method for building and running programs consisting of multiple partitions. **NB!** See the note in :ref:`polyORB` regarding the lifetime
+of this product.
 
 *
   "The details of program execution, including program
@@ -394,8 +391,7 @@ See separate section on compilation model.
   implementation.  See 10.2(28)."
 
 Passive partitions are supported on targets where shared memory is
-provided by the operating system. See the GLADE reference manual for
-further details.
+provided by the operating system. **NB!** See the note in :ref:`polyORB` regarding the lifetime of this product.
 
 *
   "The information returned by ``Exception_Message``.  See 11.4.1(10)."
@@ -467,7 +463,7 @@ Implementation-defined assertion_aspect_marks include Assert_And_Cut,
 Assume, Contract_Cases, Debug, Ghost, Initial_Condition, Loop_Invariant,
 Loop_Variant, Postcondition, Precondition, Predicate, Refined_Post,
 Statement_Assertions, and Subprogram_Variant. Implementation-defined
-policy_identifiers include Ignore and Suppressible.
+policy_identifiers include Disable and Suppressible.
 
 *
   "The default assertion policy.  See 11.4.2(10)."
@@ -478,11 +474,12 @@ via compiler switches such as "-gnata".
 *
   "Implementation-defined check names.  See 11.5(27)."
 
-The implementation defined check names include Alignment_Check,
-Atomic_Synchronization, Duplicated_Tag_Check, Container_Checks,
-Tampering_Check, Predicate_Check, and Validity_Check. In addition, a user
-program can add implementation-defined check names by means of the pragma
-Check_Name. See the description of pragma ``Suppress`` for full details.
+The implementation-defined check names include Alignment_Check,
+Container_Checks, Duplicated_Tag_Check, Predicate_Check,
+Raise_Check, Tampering_Check, and Validity_Check. In addition, a
+user program can add implementation-defined check names by means
+of the pragma Check_Name. See the description of pragma
+``Suppress`` for details.
 
 *
   "Existence and meaning of second parameter of pragma Unsuppress.
@@ -554,9 +551,7 @@ which contains a pointer to the dispatching table.
   "If ``Word_Size`` = ``Storage_Unit``, the default bit
   ordering.  See 13.5.3(5)."
 
-``Word_Size`` (32) is not the same as ``Storage_Unit`` (8) for this
-implementation, so no non-default bit ordering is supported.  The default
-bit ordering corresponds to the natural endianness of the target architecture.
+``Word_Size`` does not equal ``Storage_Unit`` in this implementation.
 
 *
   "The contents of the visible part of package ``System``.  See 13.7(2)."
@@ -820,7 +815,7 @@ This definition is determined by the underlying operating system.
   "The circumstances where an environment variable cannot be defined.
   See A.17(16)."
 
-  There are no such implementation-defined circumstances.
+There are no such implementation-defined circumstances.
 
 *
   "Environment names for which Set has the effect of Clear.  See A.17(17)."
@@ -1154,8 +1149,8 @@ Execution is erroneous in that case.
 * "Whether the use of pragma Restrictions results in a reduction in program
   code or data size or execution time.  See D.7(20)."
 
-  Yes it can, but the precise circumstances and properties of such reductions
-  are difficult to characterize.
+Yes it can, but the precise circumstances and properties of such reductions
+are difficult to characterize.
 
 *
   "The value of Barrier_Limit'Last in Synchronous_Barriers.  See D.10.1(4)."
@@ -1189,28 +1184,30 @@ Unknown.
   "The means for creating and executing distributed
   programs.  See E(5)."
 
-The GLADE package provides a utility GNATDIST for creating and executing
-distributed programs. See the GLADE reference manual for further details.
+The PolyORB product provides means creating and executing
+distributed programs. **NB!** See the note in :ref:`polyORB` regarding the lifetime of this product.
 
 *
   "Any events that can result in a partition becoming
   inaccessible.  See E.1(7)."
 
-See the GLADE reference manual for full details on such events.
+See the PolyORB user guide for full details on such events.
+**NB!** Consider the note in :ref:`polyORB` regarding the lifetime
+of this product.
 
 *
   "The scheduling policies, treatment of priorities, and management of
   shared resources between partitions in certain cases.  See E.1(11)."
 
-See the GLADE reference manual for full details on these aspects of
-multi-partition execution.
+See the PolyORB user guide for full details on these aspects of
+multi-partition execution. **NB!** Consider the note in :ref:`polyORB` regarding the lifetime of this product.
 
 *
   "Whether the execution of the remote subprogram is
   immediately aborted as a result of cancellation.  See E.4(13)."
 
-See the GLADE reference manual for details on the effect of abort in
-a distributed application.
+See the PolyORB user guide for details on the effect of abort in
+a distributed application.  **NB!** Consider the note in :ref:`polyORB` regarding the lifetime of this product.
 
 *
   "The range of type System.RPC.Partition_Id.  See E.5(14)."
@@ -1220,8 +1217,8 @@ System.RPC.Partition_ID'Last is Integer'Last. See source file :file:`s-rpc.ads`.
 *
   "Implementation-defined interfaces in the PCS.  See E.5(26)."
 
-See the GLADE reference manual for a full description of all
-implementation defined interfaces.
+See the PolyORB user guide for a full description of all
+implementation defined interfaces.  **NB!** See the note in :ref:`polyORB` regarding the lifetime of this product.
 
 *
   "The values of named numbers in the package

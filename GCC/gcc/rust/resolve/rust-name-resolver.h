@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -55,9 +55,9 @@ public:
 
   // this takes the relative paths of items within a compilation unit for lookup
   void insert_name (
-    const CanonicalPath &path, NodeId id, Location locus, bool shadow,
+    const CanonicalPath &path, NodeId id, location_t locus, bool shadow,
     ItemType type,
-    std::function<void (const CanonicalPath &, NodeId, Location)> dup_cb);
+    std::function<void (const CanonicalPath &, NodeId, location_t)> dup_cb);
 
   bool lookup_canonical_path (const NodeId &id, CanonicalPath *ident);
   bool lookup_name (const CanonicalPath &ident, NodeId *id);
@@ -71,14 +71,14 @@ public:
 
   CrateNum get_crate_num () const { return crate_num; }
   NodeId get_node_id () const { return node_id; }
-  std::map<NodeId, Location> &get_declarations () { return decls_within_rib; }
+  std::map<NodeId, location_t> &get_declarations () { return decls_within_rib; }
 
 private:
   CrateNum crate_num;
   NodeId node_id;
   std::map<CanonicalPath, NodeId> path_mappings;
   std::map<NodeId, CanonicalPath> reverse_path_mappings;
-  std::map<NodeId, Location> decls_within_rib;
+  std::map<NodeId, location_t> decls_within_rib;
   std::map<NodeId, std::set<NodeId>> references;
   std::map<NodeId, ItemType> decl_type_mappings;
 };
@@ -88,12 +88,12 @@ class Scope
 public:
   Scope (CrateNum crate_num);
 
-  void
-  insert (const CanonicalPath &ident, NodeId id, Location locus, bool shadow,
-	  Rib::ItemType type,
-	  std::function<void (const CanonicalPath &, NodeId, Location)> dup_cb);
+  void insert (
+    const CanonicalPath &ident, NodeId id, location_t locus, bool shadow,
+    Rib::ItemType type,
+    std::function<void (const CanonicalPath &, NodeId, location_t)> dup_cb);
 
-  void insert (const CanonicalPath &ident, NodeId id, Location locus,
+  void insert (const CanonicalPath &ident, NodeId id, location_t locus,
 	       Rib::ItemType type = Rib::ItemType::Unknown);
   bool lookup (const CanonicalPath &ident, NodeId *id);
   bool lookup_decl_type (NodeId id, Rib::ItemType *type);
@@ -124,133 +124,17 @@ public:
   static Resolver *get ();
   ~Resolver () {}
 
-  // these builtin types
-  void insert_builtin_types (Rib *r);
-
-  // these will be required for type resolution passes to
-  // map back to tyty nodes
-  std::vector<AST::Type *> &get_builtin_types ();
-
-  void push_new_name_rib (Rib *r);
-  void push_new_type_rib (Rib *r);
-  void push_new_label_rib (Rib *r);
-  void push_new_macro_rib (Rib *r);
-
-  bool find_name_rib (NodeId id, Rib **rib);
-  bool find_type_rib (NodeId id, Rib **rib);
-  bool find_label_rib (NodeId id, Rib **rib);
-  bool find_macro_rib (NodeId id, Rib **rib);
-
   void insert_resolved_name (NodeId refId, NodeId defId);
   bool lookup_resolved_name (NodeId refId, NodeId *defId);
 
   void insert_resolved_type (NodeId refId, NodeId defId);
   bool lookup_resolved_type (NodeId refId, NodeId *defId);
 
-  void insert_resolved_label (NodeId refId, NodeId defId);
-  bool lookup_resolved_label (NodeId refId, NodeId *defId);
-
-  void insert_resolved_macro (NodeId refId, NodeId defId);
-  bool lookup_resolved_macro (NodeId refId, NodeId *defId);
-
   void insert_resolved_misc (NodeId refId, NodeId defId);
   bool lookup_resolved_misc (NodeId refId, NodeId *defId);
 
-  // proxy for scoping
-  Scope &get_name_scope () { return name_scope; }
-  Scope &get_type_scope () { return type_scope; }
-  Scope &get_label_scope () { return label_scope; }
-  Scope &get_macro_scope () { return macro_scope; }
-
-  NodeId get_global_type_node_id () { return global_type_node_id; }
-  void set_unit_type_node_id (NodeId id) { unit_ty_node_id = id; }
-  NodeId get_unit_type_node_id () { return unit_ty_node_id; }
-
-  void push_new_module_scope (NodeId module_id)
-  {
-    current_module_stack.push_back (module_id);
-  }
-
-  void pop_module_scope ()
-  {
-    rust_assert (!current_module_stack.empty ());
-    current_module_stack.pop_back ();
-  }
-
-  NodeId peek_current_module_scope () const
-  {
-    rust_assert (!current_module_stack.empty ());
-    return current_module_stack.back ();
-  }
-
-  NodeId peek_crate_module_scope () const
-  {
-    rust_assert (!current_module_stack.empty ());
-    return current_module_stack.front ();
-  }
-
-  NodeId peek_parent_module_scope () const
-  {
-    rust_assert (current_module_stack.size () > 1);
-    return current_module_stack.at (current_module_stack.size () - 2);
-  }
-
-  void push_closure_context (NodeId closure_expr_id);
-  void pop_closure_context ();
-  void insert_captured_item (NodeId id);
-  const std::set<NodeId> &get_captures (NodeId id) const;
-
-protected:
-  bool decl_needs_capture (NodeId decl_rib_node_id, NodeId closure_rib_node_id,
-			   const Scope &scope);
-
 private:
   Resolver ();
-
-  void generate_builtins ();
-  void setup_builtin (const std::string &name, TyTy::BaseType *tyty);
-
-  Analysis::Mappings *mappings;
-  TypeCheckContext *tyctx;
-
-  std::vector<AST::Type *> builtins;
-
-  Scope name_scope;
-  Scope type_scope;
-  Scope label_scope;
-  Scope macro_scope;
-
-  NodeId global_type_node_id;
-  NodeId unit_ty_node_id;
-
-  // map a AST Node to a Rib
-  std::map<NodeId, Rib *> name_ribs;
-  std::map<NodeId, Rib *> type_ribs;
-  std::map<NodeId, Rib *> label_ribs;
-  std::map<NodeId, Rib *> macro_ribs;
-
-  // Rust uses DefIds to namespace these under a crate_num
-  // but then it uses the def_collector to assign local_defids
-  // to each ast node as well. not sure if this is going to fit
-  // with gcc very well to compile a full crate in one go but we will
-  // see.
-
-  // these are of the form ref->Def-NodeId
-  // we need two namespaces one for names and ones for types
-  std::map<NodeId, NodeId> resolved_names;
-  std::map<NodeId, NodeId> resolved_types;
-  std::map<NodeId, NodeId> resolved_labels;
-  std::map<NodeId, NodeId> resolved_macros;
-
-  // misc
-  std::map<NodeId, NodeId> misc_resolved_items;
-
-  // keep track of the current module scope ids
-  std::vector<NodeId> current_module_stack;
-
-  // captured variables mappings
-  std::vector<NodeId> closure_context;
-  std::map<NodeId, std::set<NodeId>> closures_capture_mappings;
 };
 
 } // namespace Resolver

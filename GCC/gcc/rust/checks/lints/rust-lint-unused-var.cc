@@ -1,4 +1,4 @@
-// Copyright (C) 2021-2023 Free Software Foundation, Inc.
+// Copyright (C) 2021-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -17,10 +17,19 @@
 // <http://www.gnu.org/licenses/>.
 
 #include "rust-lint-unused-var.h"
-#include "print-tree.h"
+#include "rust-gcc.h"
 
 namespace Rust {
 namespace Analysis {
+
+static bool
+starts_with_underscore (const char *var_name)
+{
+  auto pos = std::string (var_name).find_last_of (':');
+  if (pos == std::string::npos)
+    return strncmp (var_name, "_", 1) == 0;
+  return strncmp (var_name + pos + 1, "_", 1) == 0;
+}
 
 static void
 check_decl (tree *t)
@@ -30,7 +39,8 @@ check_decl (tree *t)
 
   tree var_name = DECL_NAME (*t);
   const char *var_name_ptr = IDENTIFIER_POINTER (var_name);
-  bool starts_with_under_score = strncmp (var_name_ptr, "_", 1) == 0;
+  bool starts_with_under_score = starts_with_underscore (var_name_ptr);
+  bool is_self = strcmp (var_name_ptr, "self") == 0;
 
   bool is_constant = TREE_CODE (*t) == CONST_DECL;
   // if (!is_constant)
@@ -43,7 +53,8 @@ check_decl (tree *t)
   //       	  starts_with_under_score ? "true" : "false", var_name_ptr);
   //   }
 
-  if (!TREE_USED (*t) && !DECL_ARTIFICIAL (*t) && !starts_with_under_score)
+  if (!TREE_USED (*t) && !DECL_ARTIFICIAL (*t) && !starts_with_under_score
+      && !is_self)
     {
       warning_at (DECL_SOURCE_LOCATION (*t),
 		  is_constant ? OPT_Wunused_const_variable_
@@ -84,8 +95,8 @@ UnusedVariables::Lint (Compile::Context &ctx)
 
   for (auto &var : ctx.get_var_decls ())
     {
-      tree t = ctx.get_backend ()->var_expression (var, Location ());
-      check_decl (&t);
+      tree decl = var->get_decl ();
+      check_decl (&decl);
     }
 
   for (auto &const_decl : ctx.get_const_decls ())

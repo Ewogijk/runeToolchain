@@ -1,3 +1,10 @@
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
+
 struct Foo<T> {
     a: T,
 // { dg-warning "field is never read" "" { target *-*-* } .-1 }

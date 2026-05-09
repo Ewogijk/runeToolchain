@@ -1,6 +1,6 @@
 (* M2Error.mod error reporting interface.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -369,8 +369,8 @@ PROCEDURE WriteFormat3 (a: ARRAY OF CHAR; w1, w2, w3: ARRAY OF BYTE) ;
 VAR
    e: Error ;
 BEGIN
-   e := NewError(GetTokenNo()) ;
-   e^.s := DoFormat3(a, w1, w2, w3)
+   e := NewError (GetTokenNo ()) ;
+   e^.s := DoFormat3 (a, w1, w2, w3)
 END WriteFormat3 ;
 
 
@@ -394,14 +394,12 @@ END MoveError ;
 
 PROCEDURE NewError (AtTokenNo: CARDINAL) : Error ;
 VAR
-   e, f: Error ;
+   e: Error ;
 BEGIN
    IF AtTokenNo = UnknownTokenNo
    THEN
-      (* this could be used as a useful debugging hook as the front end
-         has forgotten the token no.  This can occur if a complex record
-         structure or array is used for example.  *)
-      AtTokenNo := GetTokenNo ()
+      (* This could be used as a useful debugging hook as the front end
+         has forgotten the token no.  *)
    END ;
    NEW(e) ;
    WITH e^ DO
@@ -416,18 +414,7 @@ BEGIN
    END ;
    (* Assert (scopeKind # noscope) ;  *)
    e^.scope := currentScope ;
-   IF (head=NIL) OR (head^.token>AtTokenNo)
-   THEN
-      e^.next := head ;
-      head    := e
-   ELSE
-      f := head ;
-      WHILE (f^.next#NIL) AND (f^.next^.token<AtTokenNo) DO
-         f := f^.next
-      END ;
-      e^.next := f^.next ;
-      f^.next := e
-   END ;
+   AddToList (e) ;
    RETURN( e )
 END NewError ;
 
@@ -462,6 +449,95 @@ BEGIN
    e^.note  := TRUE ;
    RETURN e
 END NewNote ;
+
+
+(*
+   AddToList - adds error e to the list of errors in token order.
+*)
+
+PROCEDURE AddToList (e: Error) ;
+VAR
+   f: Error ;
+BEGIN
+   IF (head=NIL) OR (head^.token > e^.token)
+   THEN
+      e^.next := head ;
+      head    := e
+   ELSE
+      f := head ;
+      WHILE (f^.next # NIL) AND (f^.next^.token < e^.token) DO
+         f := f^.next
+      END ;
+      e^.next := f^.next ;
+      f^.next := e
+   END ;
+END AddToList ;
+
+
+(*
+   SubFromList - remove e from the global list.
+*)
+
+PROCEDURE SubFromList (e: Error) ;
+VAR
+   f: Error ;
+BEGIN
+   IF head = e
+   THEN
+      head := head^.next
+   ELSE
+      f := head ;
+      WHILE (f # NIL) AND (f^.next # e) DO
+         f := f^.next
+      END ;
+      IF (f # NIL) AND (f^.next = e)
+      THEN
+         f^.next := e^.next
+      ELSE
+         InternalError ('expecting e to be on the global list')
+      END
+   END ;
+   DISPOSE (e)
+END SubFromList ;
+
+
+(*
+   WipeReferences - remove any reference to e from the global list.
+*)
+
+PROCEDURE WipeReferences (e: Error) ;
+VAR
+   f: Error ;
+BEGIN
+   f := head ;
+   WHILE f # NIL DO
+      IF f^.parent = e
+      THEN
+         f^.parent := NIL
+      END ;
+      IF f^.child = e
+      THEN
+         f^.child := NIL
+      END ;
+      f := f^.next
+   END
+END WipeReferences ;
+
+
+(*
+   KillError - remove error e from the error list and deallocate
+               memory associated with e.
+*)
+
+PROCEDURE KillError (VAR e: Error) ;
+BEGIN
+   IF head # NIL
+   THEN
+      SubFromList (e) ;
+      WipeReferences (e) ;
+      e := NIL
+   END
+END KillError ;
 
 
 (*
@@ -868,7 +944,8 @@ BEGIN
       implementation:   desc := InitString ("In implementation module") |
       program       :   desc := InitString ("In program module") |
       module        :   desc := InitString ("In inner module") |
-      procedure     :   desc := InitString ("In procedure")
+      procedure     :   desc := InitString ("In procedure") |
+      noscope       :   desc := InitString ("Unknown scope")
 
       END
    END ;

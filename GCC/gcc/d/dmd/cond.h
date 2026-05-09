@@ -1,6 +1,6 @@
 
 /* Compiler implementation of the D programming language
- * Copyright (C) 1999-2023 by The D Language Foundation, All Rights Reserved
+ * Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved
  * written by Walter Bright
  * https://www.digitalmars.com
  * Distributed under the Boost Software License, Version 1.0.
@@ -38,9 +38,8 @@ public:
     DYNCAST dyncast() const override final { return DYNCAST_CONDITION; }
 
     virtual Condition *syntaxCopy() = 0;
-    virtual int include(Scope *sc) = 0;
-    virtual DebugCondition *isDebugCondition() { return NULL; }
-    virtual VersionCondition *isVersionCondition() { return NULL; }
+    virtual DebugCondition *isDebugCondition() { return nullptr; }
+    virtual VersionCondition *isVersionCondition() { return nullptr; }
     void accept(Visitor *v) override { v->visit(this); }
 };
 
@@ -53,14 +52,11 @@ public:
     ForeachRangeStatement *rangefe;
 
     d_bool needExpansion;
-
-    StaticForeach *syntaxCopy();
 };
 
 class DVCondition : public Condition
 {
 public:
-    unsigned level;
     Identifier *ident;
     Module *mod;
 
@@ -73,8 +69,6 @@ class DebugCondition final : public DVCondition
 public:
     static void addGlobalIdent(const char *ident);
 
-    int include(Scope *sc) override;
-    DebugCondition *isDebugCondition() override { return this; }
     void accept(Visitor *v) override { v->visit(this); }
 };
 
@@ -84,8 +78,6 @@ public:
     static void addGlobalIdent(const char *ident);
     static void addPredefinedGlobalIdent(const char *ident);
 
-    int include(Scope *sc) override;
-    VersionCondition *isVersionCondition() override { return this; }
     void accept(Visitor *v) override { v->visit(this); }
 };
 
@@ -95,6 +87,5 @@ public:
     Expression *exp;
 
     StaticIfCondition *syntaxCopy() override;
-    int include(Scope *sc) override;
     void accept(Visitor *v) override { v->visit(this); }
 };

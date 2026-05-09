@@ -1,6 +1,6 @@
 /* m2decl.h header file for m2decl.cc.
 
-Copyright (C) 2012-2023 Free Software Foundation, Inc.
+Copyright (C) 2012-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius@glam.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -51,19 +51,13 @@ EXTERN tree m2decl_BuildConstLiteralNumber (location_t location,
 					    const char *str,
                                             unsigned int base,
 					    bool issueError);
-EXTERN bool m2decl_DetermineSizeOfConstant (location_t location,
-					    const char *str, unsigned int base,
-                                            bool *needsLong,
-                                            bool *needsUnsigned,
-					    bool issueError);
-EXTERN void m2decl_RememberVariables (tree l);
 
 EXTERN tree m2decl_BuildEndFunctionDeclaration (
     location_t location_begin, location_t location_end, const char *name,
     tree returntype, bool isexternal, bool isnested, bool ispublic,
     bool isnoreturn);
 EXTERN void m2decl_BuildStartFunctionDeclaration (bool uses_varargs);
-EXTERN tree m2decl_BuildParameterDeclaration (location_t location, char *name,
+EXTERN tree m2decl_BuildParameterDeclaration (location_t location, const char *name,
                                               tree type, bool isreference);
 EXTERN tree m2decl_DeclareKnownConstant (location_t location, tree type,
                                          tree value);

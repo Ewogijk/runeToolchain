@@ -1,5 +1,5 @@
 /* Callgraph based analysis of static variables.
-   Copyright (C) 2004-2023 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by Kenneth Zadeck <zadeck@naturalbridge.com>
 
 This file is part of GCC.
@@ -59,10 +59,13 @@ along with GCC; see the file COPYING3.  If not see
 #include "ssa.h"
 #include "alloc-pool.h"
 #include "symbol-summary.h"
+#include "sreal.h"
+#include "ipa-cp.h"
 #include "ipa-prop.h"
 #include "ipa-fnsummary.h"
 #include "symtab-thunks.h"
 #include "dbgcnt.h"
+#include "gcc-urlifier.h"
 
 /* Lattice values for const and pure functions.  Everything starts out
    being const, then may drop to pure and then neither depending on
@@ -197,11 +200,12 @@ function_always_visible_to_compiler_p (tree decl)
    by the function.  */
 
 static hash_set<tree> *
-suggest_attribute (int option, tree decl, bool known_finite,
+suggest_attribute (diagnostics::option_id option, tree decl, bool known_finite,
 		   hash_set<tree> *warned_about,
 		   const char * attrib_name)
 {
-  if (!option_enabled (option, lang_hooks.option_lang_mask (), &global_options))
+  if (!option_enabled (option.m_idx, lang_hooks.option_lang_mask (),
+		       &global_options))
     return warned_about;
   if (TREE_THIS_VOLATILE (decl)
       || (known_finite && function_always_visible_to_compiler_p (decl)))
@@ -212,6 +216,7 @@ suggest_attribute (int option, tree decl, bool known_finite,
   if (warned_about->contains (decl))
     return warned_about;
   warned_about->add (decl);
+  auto_urlify_attributes sentinel;
   warning_at (DECL_SOURCE_LOCATION (decl),
 	      option,
 	      known_finite
@@ -290,6 +295,15 @@ warn_function_cold (tree decl)
   warned_about
     = suggest_attribute (OPT_Wsuggest_attribute_cold, original_decl,
 			 true, warned_about, "cold");
+}
+
+void
+warn_function_returns_nonnull (tree decl)
+{
+  static hash_set<tree> *warned_about;
+  warned_about
+    = suggest_attribute (OPT_Wsuggest_attribute_returns_nonnull, decl,
+			 true, warned_about, "returns_nonnull");
 }
 
 /* Check to see if the use (or definition when CHECKING_WRITE is true)
@@ -757,8 +771,7 @@ check_stmt (gimple_stmt_iterator *gsip, funct_state local, bool ipa)
       print_gimple_stmt (dump_file, stmt, 0);
     }
 
-  if (gimple_has_volatile_ops (stmt)
-      && !gimple_clobber_p (stmt))
+  if (gimple_has_volatile_ops (stmt) && !gimple_clobber_p (stmt))
     {
       local->pure_const_state = IPA_NEITHER;
       if (dump_file)
@@ -767,11 +780,10 @@ check_stmt (gimple_stmt_iterator *gsip, funct_state local, bool ipa)
 
   /* Look for loads and stores.  */
   walk_stmt_load_store_ops (stmt, local,
-			    ipa ? check_ipa_load : check_load,
-			    ipa ? check_ipa_store :  check_store);
+			    ipa ? check_ipa_load  : check_load,
+			    ipa ? check_ipa_store : check_store);
 
-  if (gimple_code (stmt) != GIMPLE_CALL
-      && stmt_could_throw_p (cfun, stmt))
+  if (gimple_code (stmt) != GIMPLE_CALL && stmt_could_throw_p (cfun, stmt))
     {
       if (cfun->can_throw_non_call_exceptions)
 	{
@@ -1469,7 +1481,6 @@ skip_function_for_local_pure_const (struct cgraph_node *node)
   /* Save some work and do not analyze functions which are interposable and
      do not have any non-interposable aliases.  */
   if (node->get_availability () <= AVAIL_INTERPOSABLE
-      && !flag_lto
       && !node->has_aliases_p ())
     {
       if (dump_file)
@@ -2296,7 +2307,7 @@ make_pass_warn_function_noreturn (gcc::context *ctxt)
   return new pass_warn_function_noreturn (ctxt);
 }
 
-/* Simple local pass for pure const discovery reusing the analysis from
+/* Simple local pass for nothrow discovery reusing the analysis from
    ipa_pure_const.   This pass is effective when executed together with
    other optimization passes in early optimization pass queue.  */
 
@@ -2364,7 +2375,7 @@ pass_nothrow::execute (function *)
 						  callee_t))
 		  continue;
 	      }
-	
+
 	    if (dump_file)
 	      {
 		fprintf (dump_file, "Statement can throw: ");
@@ -2379,16 +2390,15 @@ pass_nothrow::execute (function *)
   bool cfg_changed = false;
   if (self_recursive_p (node))
     FOR_EACH_BB_FN (this_block, cfun)
-      if (gimple *g = last_stmt (this_block))
-	if (is_gimple_call (g))
-	  {
-	    tree callee_t = gimple_call_fndecl (g);
-	    if (callee_t
-		&& recursive_call_p (current_function_decl, callee_t)
-		&& maybe_clean_eh_stmt (g)
-		&& gimple_purge_dead_eh_edges (this_block))
-	      cfg_changed = true;
-	  }
+      if (gcall *g = safe_dyn_cast <gcall *> (*gsi_last_bb (this_block)))
+	{
+	  tree callee_t = gimple_call_fndecl (g);
+	  if (callee_t
+	      && recursive_call_p (current_function_decl, callee_t)
+	      && maybe_clean_eh_stmt (g)
+	      && gimple_purge_dead_eh_edges (this_block))
+	    cfg_changed = true;
+	}
 
   if (dump_file)
     fprintf (dump_file, "Function found to be nothrow: %s\n",

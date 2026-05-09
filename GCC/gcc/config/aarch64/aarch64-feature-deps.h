@@ -1,5 +1,5 @@
 /* Feature dependency helpers for AArch64.
-   Copyright (C) 2022-2023 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -56,7 +56,8 @@ get_enable (T1 i, Ts... args)
 
    - explicit_on: the transitive closure of the features that an
      explicit +FEATURE enables, including FLAG itself.  This is
-     always a superset of ENABLE
+     always a superset of ENABLE, except that the CRYPTO alias bit is
+     explicitly unset for consistency.
 
    Also define a function FEATURE () that returns an info<FEATURE>
    (which is an empty structure, since all members are static).
@@ -65,12 +66,22 @@ get_enable (T1 i, Ts... args)
    files are in topological order.  */
 template<aarch64_feature> struct info;
 
+  constexpr auto alias_flags = aarch64_feature_flags (0)
+#define AARCH64_OPT_EXTENSION_ALIAS(A, IDENT, C, D, E, F, G) | AARCH64_FL_##IDENT
+#define AARCH64_OPT_EXTENSION(A, IDENT, C, D, E, F)
+#include "config/aarch64/aarch64-option-extensions.def"
+;
+
 #define HANDLE(IDENT, REQUIRES, EXPLICIT_ON)				\
   template<> struct info<aarch64_feature::IDENT> {			\
     static constexpr auto flag = AARCH64_FL_##IDENT;			\
     static constexpr auto enable = flag | get_enable REQUIRES;		\
-    static constexpr auto explicit_on = enable | get_enable EXPLICIT_ON; \
+    static constexpr auto explicit_on					\
+      = (enable | get_enable EXPLICIT_ON) & ~alias_flags;		\
   };									\
+  constexpr aarch64_feature_flags info<aarch64_feature::IDENT>::flag;	\
+  constexpr aarch64_feature_flags info<aarch64_feature::IDENT>::enable;	\
+  constexpr aarch64_feature_flags info<aarch64_feature::IDENT>::explicit_on; \
   constexpr info<aarch64_feature::IDENT> IDENT ()			\
   {									\
     return info<aarch64_feature::IDENT> ();				\
@@ -94,9 +105,10 @@ template<aarch64_feature> struct info;
 constexpr aarch64_feature_flags
 get_flags_off (aarch64_feature_flags mask)
 {
-  return (0
+  return (aarch64_feature_flags (0)
 #define AARCH64_OPT_EXTENSION(A, IDENT, C, D, E, F) \
-	  | (feature_deps::IDENT ().enable & mask ? AARCH64_FL_##IDENT : 0)
+	  | (feature_deps::IDENT ().enable & mask ? AARCH64_FL_##IDENT \
+						  : aarch64_feature_flags (0))
 #include "config/aarch64/aarch64-option-extensions.def"
 	  );
 }
@@ -110,11 +122,25 @@ get_flags_off (aarch64_feature_flags mask)
 #include "config/aarch64/aarch64-option-extensions.def"
 
 /* Define cpu_<NAME> variables for each CPU, giving the transitive
-   closure of all the features that the CPU supports.  */
+   closure of all the features that the CPU supports.  The alias flags are
+   explicitly unset for consistency.  */
 #define AARCH64_CORE(A, CORE_IDENT, C, ARCH_IDENT, FEATURES, F, G, H, I) \
-  constexpr auto cpu_##CORE_IDENT = ARCH_IDENT ().enable | get_enable FEATURES;
+  constexpr auto cpu_##CORE_IDENT \
+    = (ARCH_IDENT ().enable | get_enable FEATURES) & ~alias_flags;
 #include "config/aarch64/aarch64-cores.def"
 
+/* Define fmv_deps_<NAME> variables for each FMV feature, giving the transitive
+   closure of all the features that the FMV feature enables.  */
+#define AARCH64_FMV_FEATURE(A, FEAT_NAME, OPT_FLAGS) \
+  constexpr auto fmv_deps_##FEAT_NAME = get_enable OPT_FLAGS;
+#include "config/aarch64/aarch64-option-extensions.def"
+
+#define AARCH64_OPT_EXTENSION_ALIAS(A, IDENT, OPT_FLAGS, D, E, \
+				    PREFER_FLAGS, G) \
+  constexpr auto alias_prefer_over_flags_##IDENT = get_flags PREFER_FLAGS;
+#define AARCH64_OPT_EXTENSION(A, IDENT, C, D, E, F) \
+  constexpr aarch64_feature_flags alias_prefer_over_flags_##IDENT = 0;
+#include "config/aarch64/aarch64-option-extensions.def"
 }
 }
 

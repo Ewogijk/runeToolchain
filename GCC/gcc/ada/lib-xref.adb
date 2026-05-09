@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1998-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1998-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -23,12 +23,14 @@
 --                                                                          --
 ------------------------------------------------------------------------------
 
+with Ada.Unchecked_Deallocation;
 with Atree;          use Atree;
 with Csets;          use Csets;
 with Einfo;          use Einfo;
 with Einfo.Utils;    use Einfo.Utils;
 with Elists;         use Elists;
 with Errout;         use Errout;
+with Exp_Tss;        use Exp_Tss;
 with Lib.Util;       use Lib.Util;
 with Nlists;         use Nlists;
 with Opt;            use Opt;
@@ -706,7 +708,7 @@ package body Lib.Xref is
             Set_Referenced (E);
 
          --  For the case where the entity is on the left hand side of an
-         --  assignment statment, we do nothing here.
+         --  assignment statement, we do nothing here.
 
          --  The processing for Analyze_Assignment_Statement will set the
          --  Referenced_As_LHS flag.
@@ -789,10 +791,15 @@ package body Lib.Xref is
          elsif Kind = E_In_Out_Parameter
            and then Is_Assignable (E)
          then
-            --  For sure this counts as a normal read reference
+            --  We count it as a read reference unless we're calling a
+            --  type support subprogram such as deep finalize.
 
-            Set_Referenced (E);
-            Set_Last_Assignment (E, Empty);
+            if not Is_Entity_Name (Name (Call))
+              or else Get_TSS_Name (Entity (Name (Call))) = TSS_Null
+            then
+               Set_Referenced (E);
+               Set_Last_Assignment (E, Empty);
+            end if;
 
             --  We count it as being referenced as an out parameter if the
             --  option is set to warn on all out parameters, except that we
@@ -1723,7 +1730,7 @@ package body Lib.Xref is
             --  entity because neither the entity nor its references will
             --  appear in the final tree.
 
-            if Is_Ignored_Ghost_Entity (Ent) then
+            if Is_Ignored_Ghost_Entity_In_Codegen (Ent) then
                goto Orphan_Continue;
             end if;
 
@@ -1821,7 +1828,16 @@ package body Lib.Xref is
          Nrefs : constant Nat := Xrefs.Last;
          --  Number of references in table
 
-         Rnums : array (0 .. Nrefs) of Nat;
+         type Refs_Numbers is array (0 .. Nrefs) of Nat;
+         type Refs_Numbers_Ptr is access Refs_Numbers;
+         --  Since the number of references can be large, we need to allocate
+         --  the sorting array on the heap.
+
+         procedure Free is
+           new Ada.Unchecked_Deallocation (Refs_Numbers, Refs_Numbers_Ptr);
+         --  Release memory allocated for the sorting array
+
+         Rnums : Refs_Numbers_Ptr := new Refs_Numbers;
          --  This array contains numbers of references in the Xrefs table.
          --  This list is sorted in output order. The extra 0'th entry is
          --  convenient for the call to sort. When we sort the table, we
@@ -2184,7 +2200,7 @@ package body Lib.Xref is
                --  entity because neither the entity nor its references will
                --  appear in the final tree.
 
-               if Is_Ignored_Ghost_Entity (Ent) then
+               if Is_Ignored_Ghost_Entity_In_Codegen (Ent) then
                   goto Continue;
                end if;
 
@@ -2702,6 +2718,8 @@ package body Lib.Xref is
          <<Continue>>
             null;
          end loop;
+
+         Free (Rnums);
 
          Write_Info_EOL;
       end Output_Refs;

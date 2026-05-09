@@ -1,7 +1,15 @@
 /* { dg-output "Hello World 123\r*\n" }*/
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+
 extern "C" {
     fn printf(s: *const i8, ...);
 }
+
+#[lang = "sized"]
+pub trait Sized {}
 
 struct Foo<T>(T);
 

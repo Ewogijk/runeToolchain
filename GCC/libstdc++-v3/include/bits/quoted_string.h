@@ -1,6 +1,6 @@
 // Helpers for quoted stream manipulators -*- C++ -*-
 
-// Copyright (C) 2013-2023 Free Software Foundation, Inc.
+// Copyright (C) 2013-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -30,7 +30,9 @@
 #ifndef _GLIBCXX_QUOTED_STRING_H
 #define _GLIBCXX_QUOTED_STRING_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #if __cplusplus < 201103L
 # include <bits/c++0x_warning.h>
@@ -59,6 +61,23 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	_Quoted_string&
 	operator=(_Quoted_string&) = delete;
 
+	// Friends for ADL with module std.
+	template<typename _CharT2, typename _Traits>
+	friend std::basic_ostream<_CharT2, _Traits>&
+	operator<<(std::basic_ostream<_CharT2, _Traits>& __os,
+		   const _Quoted_string<const _CharT2*, _CharT2>& __str);
+
+	template<typename _CharT2, typename _Traits, typename _String2>
+	friend std::basic_ostream<_CharT2, _Traits>&
+	operator<<(std::basic_ostream<_CharT2, _Traits>& __os,
+		   const _Quoted_string<_String2, _CharT2>& __str);
+
+	template<typename _CharT2, typename _Traits, typename _Alloc>
+	friend std::basic_istream<_CharT2, _Traits>&
+	operator>>(std::basic_istream<_CharT2, _Traits>& __is,
+		   const _Quoted_string<basic_string<_CharT2, _Traits, _Alloc>&,
+		   _CharT2>& __str);
+
 	_String _M_string;
 	_CharT _M_delim;
 	_CharT _M_escape;
@@ -75,6 +94,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	_Quoted_string&
 	operator=(_Quoted_string&) = delete;
+
+	// Friend for ADL with module std.
+	template<typename _CharT2, typename _Traits2, typename _String2>
+	friend std::basic_ostream<_CharT2, _Traits2>&
+	operator<<(std::basic_ostream<_CharT2, _Traits2>& __os,
+		   const _Quoted_string<_String2, _CharT2>& __str);
 
 	basic_string_view<_CharT, _Traits> _M_string;
 	_CharT _M_delim;

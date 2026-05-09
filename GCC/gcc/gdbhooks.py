@@ -1,5 +1,5 @@
 # Python hooks for gdb for debugging GCC
-# Copyright (C) 2013-2023 Free Software Foundation, Inc.
+# Copyright (C) 2013-2026 Free Software Foundation, Inc.
 
 # Contributed by David Malcolm <dmalcolm@redhat.com>
 
@@ -389,6 +389,32 @@ class CfgEdgePrinter:
         return result
 
 ######################################################################
+# Pretty-printers for -fanalyzer (namespace ana)
+######################################################################
+
+class AnaSupernodePrinter:
+    def __init__(self, gdbval):
+        self.gdbval = gdbval
+
+    def to_string (self):
+        result = '<ana::supernode 0x%x' % intptr(self.gdbval)
+        if intptr(self.gdbval):
+            result += ' (SN %i)' % intptr(self.gdbval['m_id'])
+        result += '>'
+        return result
+
+class AnaExplodedNodePrinter:
+    def __init__(self, gdbval):
+        self.gdbval = gdbval
+
+    def to_string (self):
+        result = '<ana::exploded_node 0x%x' % intptr(self.gdbval)
+        if intptr(self.gdbval):
+            result += ' (EN %i)' % intptr(self.gdbval['m_index'])
+        result += '>'
+        return result
+
+######################################################################
 
 class Rtx:
     def __init__(self, gdbval):
@@ -453,6 +479,30 @@ class PassPrinter:
 
 ######################################################################
 
+VEC_KIND_EMBED = 0
+VEC_KIND_PTR = 1
+
+"""
+Given a vec or pointer to vec, return its layout (embedded or space
+efficient).
+"""
+def get_vec_kind(val):
+    typ = val.type
+    if typ.code == gdb.TYPE_CODE_PTR:
+        typ = typ.target()
+    kind = typ.template_argument(2).name
+    if kind == "vl_embed":
+        return VEC_KIND_EMBED
+    elif kind == "vl_ptr":
+        return VEC_KIND_PTR
+    else:
+        assert False, f"unexpected vec kind {kind}"
+
+def strip_ref(gdbval):
+    if gdbval.type.code == gdb.TYPE_CODE_REF:
+        return gdbval.referenced_value ()
+    return gdbval
+
 class VecPrinter:
     #    -ex "up" -ex "p bb->preds"
     def __init__(self, gdbval):
@@ -464,14 +514,19 @@ class VecPrinter:
     def to_string (self):
         # A trivial implementation; prettyprinting the contents is done
         # by gdb calling the "children" method below.
-        return '0x%x' % intptr(self.gdbval)
+        return '0x%x' % intptr(strip_ref(self.gdbval))
 
     def children (self):
-        if intptr(self.gdbval) == 0:
+        val = strip_ref(self.gdbval)
+        if intptr(val) != 0 and get_vec_kind(val) == VEC_KIND_PTR:
+            val = val['m_vec']
+
+        if intptr(val) == 0:
             return
-        m_vecpfx = self.gdbval['m_vecpfx']
+
+        assert get_vec_kind(val) == VEC_KIND_EMBED
+        m_vecpfx = val['m_vecpfx']
         m_num = m_vecpfx['m_num']
-        val = self.gdbval
         typ = val.type
         if typ.code == gdb.TYPE_CODE_PTR:
             typ = typ.target()
@@ -596,6 +651,13 @@ def build_pretty_printer():
     pp.add_printer_for_types(['basic_block', 'basic_block_def *'],
                              'basic_block',
                              BasicBlockPrinter)
+    pp.add_printer_for_types(['ana::supernode *', 'const ana::supernode *'],
+                             'ana::supernode',
+                             AnaSupernodePrinter)
+    pp.add_printer_for_types(['ana::exploded_node *',
+                              'dedge<ana::eg_traits>::node_t *'],
+                             'ana::exploded_node',
+                             AnaExplodedNodePrinter)
     pp.add_printer_for_types(['edge', 'edge_def *'],
                              'edge',
                              CfgEdgePrinter)
@@ -642,7 +704,7 @@ class PassNames:
         self.names = []
         with open(os.path.join(srcdir, 'passes.def')) as f:
             for line in f:
-                m = re.match('\s*NEXT_PASS \(([^,]+).*\);', line)
+                m = re.match(r'\s*NEXT_PASS \(([^,]+).*\);', line)
                 if m:
                     self.names.append(m.group(1))
 
@@ -783,6 +845,18 @@ class DumpFn(gdb.Command):
 
 DumpFn()
 
+class GCCDotCmd(gdb.Parameter):
+    """
+    This parameter controls the command used to render dot files within
+    GCC's dot-fn command.  It will be invoked as gcc-dot-cmd <dot-file>.
+    """
+    def __init__(self):
+        super(GCCDotCmd, self).__init__('gcc-dot-cmd',
+                gdb.COMMAND_NONE, gdb.PARAM_STRING)
+        self.value = "dot -Tx11"
+
+gcc_dot_cmd = GCCDotCmd()
+
 class DotFn(gdb.Command):
     """
     A custom command to show a gimple/rtl function control flow graph.
@@ -848,8 +922,17 @@ class DotFn(gdb.Command):
             return
 
         # Show graph in temp file
-        os.system("( dot -Tx11 \"%s\"; rm \"%s\" ) &" % (filename, filename))
+        dot_cmd = gcc_dot_cmd.value
+        os.system("( %s \"%s\"; rm \"%s\" ) &" % (dot_cmd, filename, filename))
 
 DotFn()
+
+# Try and invoke the user-defined command "on-gcc-hooks-load".  Doing
+# this allows users to customize the GCC extensions once they've been
+# loaded by defining the hook in their .gdbinit.
+try:
+    gdb.execute('on-gcc-hooks-load')
+except gdb.error:
+    pass
 
 print('Successfully loaded GDB hooks for GCC')

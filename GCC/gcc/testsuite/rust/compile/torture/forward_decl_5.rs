@@ -1,3 +1,10 @@
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
+
 pub fn main() {
     let a;
     a = foo { a: 123, b: 456f32 };

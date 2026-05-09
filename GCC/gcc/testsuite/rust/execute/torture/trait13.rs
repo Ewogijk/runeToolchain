@@ -1,14 +1,21 @@
 /* { dg-output "123\r*\n456\r*\n" } */
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+
 extern "C" {
     fn printf(s: *const i8, ...);
 }
+
+#[lang = "sized"]
+pub trait Sized {}
 
 struct Foo(i32);
 trait Bar {
     fn baz(&self);
 
     fn qux(&self) {
-        // { dg-warning "unused name" "" { target *-*-* } .-1 }
         unsafe {
             let a = "%i\n\0";
             let b = a as *const str;

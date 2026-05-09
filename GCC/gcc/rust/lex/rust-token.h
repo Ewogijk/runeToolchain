@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -21,9 +21,14 @@
 
 #include "rust-system.h"
 #include "rust-linemap.h"
-#include "rust-codepoint.h"
+#include "rust-unicode.h"
+#include "rust-diagnostics.h"
 
 namespace Rust {
+
+// used by Rust::Token::make_identifier
+class Identifier;
+
 // "Primitive core types" in Rust - the different int and float types, as well
 // as some others
 enum PrimitiveCoreType
@@ -58,8 +63,8 @@ enum PrimitiveCoreType
 };
 
 // RS_TOKEN(name, description)
-// RS_TOKEN_KEYWORD(name, identifier)
-//
+// RS_TOKEN_KEYWORD_{2015,2018}(name, identifier)
+
 // Keep RS_TOKEN_KEYWORD sorted
 
 /* note that abstract, async, become, box, do, final, macro, override, priv,
@@ -119,8 +124,6 @@ enum PrimitiveCoreType
   RS_TOKEN (SCOPE_RESOLUTION, "::") /* dodgy */                                \
   RS_TOKEN (SINGLE_QUOTE, "'") /* should i differentiate from lifetime? */     \
   RS_TOKEN (DOUBLE_QUOTE, "\"")                                                \
-  RS_TOKEN (UNDERSCORE,                                                        \
-	    "_") /* TODO: treat as reserved word like mrustc instead? */       \
   RS_TOKEN (IDENTIFIER, "identifier")                                          \
   RS_TOKEN (INT_LITERAL,                                                       \
 	    "integer literal") /* do different int and float types need        \
@@ -129,6 +132,7 @@ enum PrimitiveCoreType
   RS_TOKEN (STRING_LITERAL, "string literal")                                  \
   RS_TOKEN (CHAR_LITERAL, "character literal")                                 \
   RS_TOKEN (BYTE_STRING_LITERAL, "byte string literal")                        \
+  RS_TOKEN (RAW_STRING_LITERAL, "raw string literal")                          \
   RS_TOKEN (BYTE_CHAR_LITERAL, "byte character literal")                       \
   RS_TOKEN (LIFETIME, "lifetime") /* TODO: improve token type */               \
   /* Have "interpolated" tokens (whatever that means)? identifer, path, type,  \
@@ -146,68 +150,71 @@ enum PrimitiveCoreType
   /* Doc Comments */                                                           \
   RS_TOKEN (INNER_DOC_COMMENT, "#![doc]")                                      \
   RS_TOKEN (OUTER_DOC_COMMENT, "#[doc]")                                       \
-  /* have "weak" union and 'static keywords? */                                \
-  RS_TOKEN_KEYWORD (ABSTRACT, "abstract") /* unused */                         \
-  RS_TOKEN_KEYWORD (AS, "as")                                                  \
-  RS_TOKEN_KEYWORD (ASYNC, "async")   /* unused */                             \
-  RS_TOKEN_KEYWORD (BECOME, "become") /* unused */                             \
-  RS_TOKEN_KEYWORD (BOX, "box")	      /* unused */                             \
-  RS_TOKEN_KEYWORD (BREAK, "break")                                            \
-  RS_TOKEN_KEYWORD (CONST, "const")                                            \
-  RS_TOKEN_KEYWORD (CONTINUE, "continue")                                      \
-  RS_TOKEN_KEYWORD (CRATE, "crate")                                            \
-  /* FIXME: Do we need to add $crate (DOLLAR_CRATE) as a reserved kw? */       \
-  RS_TOKEN_KEYWORD (DO, "do") /* unused */                                     \
-  RS_TOKEN_KEYWORD (DYN, "dyn")                                                \
-  RS_TOKEN_KEYWORD (ELSE, "else")                                              \
-  RS_TOKEN_KEYWORD (ENUM_TOK, "enum")                                          \
-  RS_TOKEN_KEYWORD (EXTERN_TOK, "extern")                                      \
-  RS_TOKEN_KEYWORD (FALSE_LITERAL, "false")                                    \
-  RS_TOKEN_KEYWORD (FINAL_TOK, "final") /* unused */                           \
-  RS_TOKEN_KEYWORD (FN_TOK, "fn")                                              \
-  RS_TOKEN_KEYWORD (FOR, "for")                                                \
-  RS_TOKEN_KEYWORD (IF, "if")                                                  \
-  RS_TOKEN_KEYWORD (IMPL, "impl")                                              \
-  RS_TOKEN_KEYWORD (IN, "in")                                                  \
-  RS_TOKEN_KEYWORD (LET, "let")                                                \
-  RS_TOKEN_KEYWORD (LOOP, "loop")                                              \
-  RS_TOKEN_KEYWORD (MACRO, "macro")                                            \
-  RS_TOKEN_KEYWORD (MATCH_TOK, "match")                                        \
-  RS_TOKEN_KEYWORD (MOD, "mod")                                                \
-  RS_TOKEN_KEYWORD (MOVE, "move")                                              \
-  RS_TOKEN_KEYWORD (MUT, "mut")                                                \
-  RS_TOKEN_KEYWORD (OVERRIDE_TOK, "override") /* unused */                     \
-  RS_TOKEN_KEYWORD (PRIV, "priv")	      /* unused */                     \
-  RS_TOKEN_KEYWORD (PUB, "pub")                                                \
-  RS_TOKEN_KEYWORD (REF, "ref")                                                \
-  RS_TOKEN_KEYWORD (RETURN_TOK, "return")                                      \
-  RS_TOKEN_KEYWORD (SELF_ALIAS,                                                \
-		    "Self") /* mrustc does not treat this as a reserved word*/ \
-  RS_TOKEN_KEYWORD (SELF, "self")                                              \
-  RS_TOKEN_KEYWORD (STATIC_TOK, "static")                                      \
-  RS_TOKEN_KEYWORD (STRUCT_TOK, "struct")                                      \
-  RS_TOKEN_KEYWORD (SUPER, "super")                                            \
-  RS_TOKEN_KEYWORD (TRAIT, "trait")                                            \
-  RS_TOKEN_KEYWORD (TRUE_LITERAL, "true")                                      \
-  RS_TOKEN_KEYWORD (TRY, "try") /* unused */                                   \
-  RS_TOKEN_KEYWORD (TYPE, "type")                                              \
-  RS_TOKEN_KEYWORD (TYPEOF, "typeof") /* unused */                             \
-  RS_TOKEN_KEYWORD (UNSAFE, "unsafe")                                          \
-  RS_TOKEN_KEYWORD (UNSIZED, "unsized") /* unused */                           \
-  RS_TOKEN_KEYWORD (USE, "use")                                                \
-  RS_TOKEN_KEYWORD (VIRTUAL, "virtual") /* unused */                           \
-  RS_TOKEN_KEYWORD (WHERE, "where")                                            \
-  RS_TOKEN_KEYWORD (WHILE, "while")                                            \
-  RS_TOKEN_KEYWORD (YIELD, "yield") /* unused */                               \
+  RS_TOKEN_KEYWORD_2015 (ABSTRACT, "abstract") /* unused */                    \
+  RS_TOKEN_KEYWORD_2015 (AS, "as")                                             \
+  RS_TOKEN_KEYWORD_2018 (ASYNC, "async") /* unused */                          \
+  RS_TOKEN_KEYWORD_2015 (AUTO, "auto")                                         \
+  RS_TOKEN_KEYWORD_2018 (AWAIT, "await")                                       \
+  RS_TOKEN_KEYWORD_2015 (BECOME, "become") /* unused */                        \
+  RS_TOKEN_KEYWORD_2015 (BOX, "box")	   /* unused */                        \
+  RS_TOKEN_KEYWORD_2015 (BREAK, "break")                                       \
+  RS_TOKEN_KEYWORD_2015 (CONST, "const")                                       \
+  RS_TOKEN_KEYWORD_2015 (CONTINUE, "continue")                                 \
+  RS_TOKEN_KEYWORD_2015 (CRATE, "crate")                                       \
+  RS_TOKEN_KEYWORD_2015 (DO, "do") /* unused */                                \
+  RS_TOKEN_KEYWORD_2018 (DYN, "dyn")                                           \
+  RS_TOKEN_KEYWORD_2015 (ELSE, "else")                                         \
+  RS_TOKEN_KEYWORD_2015 (ENUM_KW, "enum")                                      \
+  RS_TOKEN_KEYWORD_2015 (EXTERN_KW, "extern")                                  \
+  RS_TOKEN_KEYWORD_2015 (FALSE_LITERAL, "false")                               \
+  RS_TOKEN_KEYWORD_2015 (FINAL_KW, "final") /* unused */                       \
+  RS_TOKEN_KEYWORD_2015 (FN_KW, "fn")                                          \
+  RS_TOKEN_KEYWORD_2015 (FOR, "for")                                           \
+  RS_TOKEN_KEYWORD_2015 (IF, "if")                                             \
+  RS_TOKEN_KEYWORD_2015 (IMPL, "impl")                                         \
+  RS_TOKEN_KEYWORD_2015 (IN, "in")                                             \
+  RS_TOKEN_KEYWORD_2015 (LET, "let")                                           \
+  RS_TOKEN_KEYWORD_2015 (LOOP, "loop")                                         \
+  RS_TOKEN_KEYWORD_2015 (MACRO, "macro")                                       \
+  RS_TOKEN_KEYWORD_2015 (MATCH_KW, "match")                                    \
+  RS_TOKEN_KEYWORD_2015 (MOD, "mod")                                           \
+  RS_TOKEN_KEYWORD_2015 (MOVE, "move")                                         \
+  RS_TOKEN_KEYWORD_2015 (MUT, "mut")                                           \
+  RS_TOKEN_KEYWORD_2015 (OVERRIDE_KW, "override") /* unused */                 \
+  RS_TOKEN_KEYWORD_2015 (PRIV, "priv")		  /* unused */                 \
+  RS_TOKEN_KEYWORD_2015 (PUB, "pub")                                           \
+  RS_TOKEN_KEYWORD_2015 (REF, "ref")                                           \
+  RS_TOKEN_KEYWORD_2015 (RETURN_KW, "return")                                  \
+  RS_TOKEN_KEYWORD_2015 (                                                      \
+    SELF_ALIAS, "Self") /* mrustc does not treat this as a reserved word*/     \
+  RS_TOKEN_KEYWORD_2015 (SELF, "self")                                         \
+  RS_TOKEN_KEYWORD_2015 (STATIC_KW, "static")                                  \
+  RS_TOKEN_KEYWORD_2015 (STRUCT_KW, "struct")                                  \
+  RS_TOKEN_KEYWORD_2015 (SUPER, "super")                                       \
+  RS_TOKEN_KEYWORD_2015 (TRAIT, "trait")                                       \
+  RS_TOKEN_KEYWORD_2015 (TRUE_LITERAL, "true")                                 \
+  RS_TOKEN_KEYWORD_2015 (TRY, "try") /* unused */                              \
+  RS_TOKEN_KEYWORD_2015 (TYPE, "type")                                         \
+  RS_TOKEN_KEYWORD_2015 (TYPEOF, "typeof") /* unused */                        \
+  RS_TOKEN_KEYWORD_2015 (UNDERSCORE, "_")                                      \
+  RS_TOKEN_KEYWORD_2015 (UNSAFE, "unsafe")                                     \
+  RS_TOKEN_KEYWORD_2015 (UNSIZED, "unsized") /* unused */                      \
+  RS_TOKEN_KEYWORD_2015 (USE, "use")                                           \
+  RS_TOKEN_KEYWORD_2015 (VIRTUAL, "virtual") /* unused */                      \
+  RS_TOKEN_KEYWORD_2015 (WHERE, "where")                                       \
+  RS_TOKEN_KEYWORD_2015 (WHILE, "while")                                       \
+  RS_TOKEN_KEYWORD_2015 (YIELD, "yield") /* unused */                          \
   RS_TOKEN (LAST_TOKEN, "<last-token-marker>")
 
 // Contains all token types. Crappy implementation via x-macros.
 enum TokenId
 {
 #define RS_TOKEN(name, _) name,
-#define RS_TOKEN_KEYWORD(x, y) RS_TOKEN (x, y)
+#define RS_TOKEN_KEYWORD_2015(x, y) RS_TOKEN (x, y)
+#define RS_TOKEN_KEYWORD_2018 RS_TOKEN_KEYWORD_2015
   RS_TOKEN_LIST
-#undef RS_TOKEN_KEYWORD
+#undef RS_TOKEN_KEYWORD_2015
+#undef RS_TOKEN_KEYWORD_2018
 #undef RS_TOKEN
 };
 
@@ -219,15 +226,20 @@ typedef std::shared_ptr<Token> TokenPtr;
 typedef std::shared_ptr<const Token> const_TokenPtr;
 
 // Hackily defined way to get token description for enum value using x-macros
-const char *
-get_token_description (TokenId id);
+const char *get_token_description (TokenId id);
 /* Hackily defined way to get token description as a string for enum value using
  * x-macros */
-const char *
-token_id_to_str (TokenId id);
+const char *token_id_to_str (TokenId id);
+/* checks if a token is a keyword */
+bool token_id_is_keyword (TokenId id);
+/* gets the string associated with a keyword */
+const std::string &token_id_keyword_string (TokenId id);
 // Get type hint description as a string.
-const char *
-get_type_hint_string (PrimitiveCoreType type);
+const char *get_type_hint_string (PrimitiveCoreType type);
+
+/* Normalize string if a token is a identifier */
+std::string nfc_normalize_token_string (location_t loc, TokenId id,
+					const std::string &str);
 
 // Represents a single token. Create using factory static methods.
 class Token
@@ -236,45 +248,52 @@ private:
   // Token kind.
   TokenId token_id;
   // Token location.
-  Location locus;
+  location_t locus;
   // Associated text (if any) of token.
-  std::unique_ptr<std::string> str;
+  std::string str;
   // TODO: maybe remove issues and just store std::string as value?
   /* Type hint for token based on lexer data (e.g. type suffix). Does not exist
    * for most tokens. */
   PrimitiveCoreType type_hint;
 
   // Token constructor from token id and location. Has a null string.
-  Token (TokenId token_id, Location location)
-    : token_id (token_id), locus (location), str (nullptr),
-      type_hint (CORETYPE_UNKNOWN)
+  Token (TokenId token_id, location_t location)
+    : token_id (token_id), locus (location), type_hint (CORETYPE_UNKNOWN)
   {}
 
   // Token constructor from token id, location, and a string.
-  Token (TokenId token_id, Location location, std::string &&paramStr)
-    : token_id (token_id), locus (location),
-      str (new std::string (std::move (paramStr))), type_hint (CORETYPE_UNKNOWN)
-  {}
+  Token (TokenId token_id, location_t location, std::string paramStr)
+    : token_id (token_id), locus (location), type_hint (CORETYPE_UNKNOWN)
+  {
+    // Normalize identifier tokens
+    str = nfc_normalize_token_string (location, token_id, std::move (paramStr));
+  }
 
   // Token constructor from token id, location, and a char.
-  Token (TokenId token_id, Location location, char paramChar)
-    : token_id (token_id), locus (location),
-      str (new std::string (1, paramChar)), type_hint (CORETYPE_UNKNOWN)
-  {}
+  Token (TokenId token_id, location_t location, char paramChar)
+    : token_id (token_id), locus (location), str (1, paramChar),
+      type_hint (CORETYPE_UNKNOWN)
+  {
+    // Do not need to normalize 1byte char
+  }
 
   // Token constructor from token id, location, and a "codepoint".
-  Token (TokenId token_id, Location location, Codepoint paramCodepoint)
-    : token_id (token_id), locus (location),
-      str (new std::string (paramCodepoint.as_string ())),
-      type_hint (CORETYPE_UNKNOWN)
-  {}
+  Token (TokenId token_id, location_t location, Codepoint paramCodepoint)
+    : token_id (token_id), locus (location), type_hint (CORETYPE_UNKNOWN)
+  {
+    // Normalize identifier tokens
+    str = nfc_normalize_token_string (location, token_id,
+				      paramCodepoint.as_string ());
+  }
 
   // Token constructor from token id, location, a string, and type hint.
-  Token (TokenId token_id, Location location, std::string &&paramStr,
+  Token (TokenId token_id, location_t location, std::string paramStr,
 	 PrimitiveCoreType parType)
-    : token_id (token_id), locus (location),
-      str (new std::string (std::move (paramStr))), type_hint (parType)
-  {}
+    : token_id (token_id), locus (location), type_hint (parType)
+  {
+    // Normalize identifier tokens
+    str = nfc_normalize_token_string (location, token_id, std::move (paramStr));
+  }
 
 public:
   // No default constructor.
@@ -293,21 +312,23 @@ public:
    * private constructor */
 
   // Makes and returns a new TokenPtr (with null string).
-  static TokenPtr make (TokenId token_id, Location locus)
+  static TokenPtr make (TokenId token_id, location_t locus)
   {
     // return std::make_shared<Token> (token_id, locus);
     return TokenPtr (new Token (token_id, locus));
   }
 
   // Makes and returns a new TokenPtr of type IDENTIFIER.
-  static TokenPtr make_identifier (Location locus, std::string &&str)
+  static TokenPtr make_identifier (location_t locus, std::string str)
   {
     // return std::make_shared<Token> (IDENTIFIER, locus, str);
     return TokenPtr (new Token (IDENTIFIER, locus, std::move (str)));
   }
 
+  static TokenPtr make_identifier (const Identifier &ident);
+
   // Makes and returns a new TokenPtr of type INT_LITERAL.
-  static TokenPtr make_int (Location locus, std::string &&str,
+  static TokenPtr make_int (location_t locus, std::string str,
 			    PrimitiveCoreType type_hint = CORETYPE_UNKNOWN)
   {
     // return std::make_shared<Token> (INT_LITERAL, locus, str, type_hint);
@@ -316,7 +337,7 @@ public:
   }
 
   // Makes and returns a new TokenPtr of type FLOAT_LITERAL.
-  static TokenPtr make_float (Location locus, std::string &&str,
+  static TokenPtr make_float (location_t locus, std::string str,
 			      PrimitiveCoreType type_hint = CORETYPE_UNKNOWN)
   {
     // return std::make_shared<Token> (FLOAT_LITERAL, locus, str, type_hint);
@@ -325,7 +346,7 @@ public:
   }
 
   // Makes and returns a new TokenPtr of type STRING_LITERAL.
-  static TokenPtr make_string (Location locus, std::string &&str)
+  static TokenPtr make_string (location_t locus, std::string str)
   {
     // return std::make_shared<Token> (STRING_LITERAL, locus, str,
     // CORETYPE_STR);
@@ -334,40 +355,46 @@ public:
   }
 
   // Makes and returns a new TokenPtr of type CHAR_LITERAL.
-  static TokenPtr make_char (Location locus, Codepoint char_lit)
+  static TokenPtr make_char (location_t locus, Codepoint char_lit)
   {
     // return std::make_shared<Token> (CHAR_LITERAL, locus, char_lit);
     return TokenPtr (new Token (CHAR_LITERAL, locus, char_lit));
   }
 
   // Makes and returns a new TokenPtr of type BYTE_CHAR_LITERAL.
-  static TokenPtr make_byte_char (Location locus, char byte_char)
+  static TokenPtr make_byte_char (location_t locus, char byte_char)
   {
     // return std::make_shared<Token> (BYTE_CHAR_LITERAL, locus, byte_char);
     return TokenPtr (new Token (BYTE_CHAR_LITERAL, locus, byte_char));
   }
 
   // Makes and returns a new TokenPtr of type BYTE_STRING_LITERAL (fix).
-  static TokenPtr make_byte_string (Location locus, std::string &&str)
+  static TokenPtr make_byte_string (location_t locus, std::string str)
   {
     // return std::make_shared<Token> (BYTE_STRING_LITERAL, locus, str);
     return TokenPtr (new Token (BYTE_STRING_LITERAL, locus, std::move (str)));
   }
 
+  // Makes and returns a new TokenPtr of type RAW_STRING_LITERAL.
+  static TokenPtr make_raw_string (location_t locus, std::string str)
+  {
+    return TokenPtr (new Token (RAW_STRING_LITERAL, locus, std::move (str)));
+  }
+
   // Makes and returns a new TokenPtr of type INNER_DOC_COMMENT.
-  static TokenPtr make_inner_doc_comment (Location locus, std::string &&str)
+  static TokenPtr make_inner_doc_comment (location_t locus, std::string str)
   {
     return TokenPtr (new Token (INNER_DOC_COMMENT, locus, std::move (str)));
   }
 
   // Makes and returns a new TokenPtr of type OUTER_DOC_COMMENT.
-  static TokenPtr make_outer_doc_comment (Location locus, std::string &&str)
+  static TokenPtr make_outer_doc_comment (location_t locus, std::string str)
   {
     return TokenPtr (new Token (OUTER_DOC_COMMENT, locus, std::move (str)));
   }
 
   // Makes and returns a new TokenPtr of type LIFETIME.
-  static TokenPtr make_lifetime (Location locus, std::string &&str)
+  static TokenPtr make_lifetime (location_t locus, std::string str)
   {
     // return std::make_shared<Token> (LIFETIME, locus, str);
     return TokenPtr (new Token (LIFETIME, locus, std::move (str)));
@@ -377,19 +404,24 @@ public:
   TokenId get_id () const { return token_id; }
 
   // Gets location of the token.
-  Location get_locus () const { return locus; }
+  location_t get_locus () const { return locus; }
+
+  // Set location of the token.
+  void set_locus (location_t locus) { this->locus = locus; }
 
   // Gets string description of the token.
-  const std::string &
-  get_str () const; /*{
-// FIXME: put in header again when fix null problem
-//gcc_assert(str != nullptr);
-if (str == nullptr) {
-error_at(get_locus(), "attempted to get string for '%s', which has no string.
-returning empty string instead.", get_token_description()); return "";
-}
-return *str;
-}*/
+  const std::string &get_str () const
+  {
+    if (token_id_is_keyword (token_id))
+      return token_id_keyword_string (token_id);
+
+    if (!should_have_str ())
+      rust_internal_error_at (
+	locus, "attempting to get string for %qs, which should have no string",
+	get_token_description ());
+
+    return str;
+  }
 
   // Gets token's type hint info.
   PrimitiveCoreType get_type_hint () const
@@ -424,25 +456,47 @@ return *str;
       case STRING_LITERAL:
       case BYTE_CHAR_LITERAL:
       case BYTE_STRING_LITERAL:
+      case RAW_STRING_LITERAL:
 	return true;
       default:
 	return false;
       }
   }
 
-  /* Returns whether the token actually has a string (regardless of whether it
-   * should or not). */
-  bool has_str () const { return str != nullptr; }
-
   // Returns whether the token should have a string.
   bool should_have_str () const
   {
-    return is_literal () || token_id == IDENTIFIER || token_id == LIFETIME;
+    switch (token_id)
+      {
+      case IDENTIFIER:
+      case LIFETIME:
+      case INNER_DOC_COMMENT:
+      case OUTER_DOC_COMMENT:
+	return true;
+      default:
+	return is_literal ();
+      }
   }
 
   // Returns whether the token is a pure decimal int literal
   bool is_pure_decimal () const { return type_hint == CORETYPE_PURE_DECIMAL; }
+
+  // Return the token representation as someone would find it in the original
+  // source code file.
+  std::string as_string () const;
 };
 } // namespace Rust
+
+namespace std {
+template <> struct hash<Rust::PrimitiveCoreType>
+{
+  size_t operator() (const Rust::PrimitiveCoreType &coretype) const noexcept
+  {
+    return hash<std::underlying_type<Rust::PrimitiveCoreType>::type> () (
+      static_cast<std::underlying_type<Rust::PrimitiveCoreType>::type> (
+	coretype));
+  }
+};
+} // namespace std
 
 #endif

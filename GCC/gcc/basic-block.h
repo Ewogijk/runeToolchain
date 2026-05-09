@@ -1,5 +1,5 @@
 /* Define control flow data structures for the CFG.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -224,7 +224,7 @@ enum cfg_bb_flags
 /* For iterating over insns in basic block when we might remove the
    current insn.  */
 #define FOR_BB_INSNS_SAFE(BB, INSN, CURR)			\
-  for ((INSN) = BB_HEAD (BB), (CURR) = (INSN) ? NEXT_INSN ((INSN)): NULL;	\
+  for ((INSN) = BB_HEAD (BB), (CURR) = (INSN) ? NEXT_INSN ((INSN)) : NULL;	\
        (INSN) && (INSN) != NEXT_INSN (BB_END (BB));	\
        (INSN) = (CURR), (CURR) = (INSN) ? NEXT_INSN ((INSN)) : NULL)
 
@@ -292,11 +292,6 @@ enum cfg_bb_flags
 
 /* Return expected execution frequency of the edge E.  */
 #define EDGE_FREQUENCY(e)		e->count ().to_frequency (cfun)
-
-/* Compute a scale factor (or probability) suitable for scaling of
-   gcov_type values via apply_probability() and apply_scale().  */
-#define GCOV_COMPUTE_SCALE(num,den) \
-  ((den) ? RDIV ((num) * REG_BR_PROB_BASE, (den)) : REG_BR_PROB_BASE)
 
 /* Return nonzero if edge is critical.  */
 #define EDGE_CRITICAL_P(e)		(EDGE_COUNT ((e)->src->succs) >= 2 \
@@ -563,7 +558,7 @@ check_probability (int prob)
   gcc_checking_assert (prob >= 0 && prob <= REG_BR_PROB_BASE);
 }
 
-/* Given PROB1 and PROB2, return PROB1*PROB2/REG_BR_PROB_BASE. 
+/* Given PROB1 and PROB2, return PROB1*PROB2/REG_BR_PROB_BASE.
    Used to combine BB probabilities.  */
 
 inline int

@@ -1,5 +1,5 @@
 /* Loop unswitching.
-   Copyright (C) 2004-2023 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -136,20 +136,21 @@ struct unswitch_predicate
     tree rhs = gimple_cond_rhs (stmt);
     enum tree_code code = gimple_cond_code (stmt);
     condition = build2 (code, boolean_type_node, lhs, rhs);
-    count = EDGE_SUCC (bb, 0)->count ().max (EDGE_SUCC (bb, 1)->count ());
+    count = profile_count::max_prefer_initialized (EDGE_SUCC (bb, 0)->count (),
+						   EDGE_SUCC (bb, 1)->count ());
     if (irange::supports_p (TREE_TYPE (lhs)))
       {
-	auto range_op = range_op_handler (code, TREE_TYPE (lhs));
+	auto range_op = range_op_handler (code);
 	int_range<2> rhs_range (TREE_TYPE (rhs));
 	if (CONSTANT_CLASS_P (rhs))
-	  rhs_range.set (rhs, rhs);
+	  {
+	    wide_int w = wi::to_wide (rhs);
+	    rhs_range.set (TREE_TYPE (rhs), w, w);
+	  }
 	if (!range_op.op1_range (true_range, TREE_TYPE (lhs),
-				 int_range<2> (boolean_true_node,
-					       boolean_true_node), rhs_range)
+				 range_true (), rhs_range)
 	    || !range_op.op1_range (false_range, TREE_TYPE (lhs),
-				    int_range<2> (boolean_false_node,
-						  boolean_false_node),
-				    rhs_range))
+				    range_false (), rhs_range))
 	  {
 	    true_range.set_varying (TREE_TYPE (lhs));
 	    false_range.set_varying (TREE_TYPE (lhs));
@@ -236,7 +237,7 @@ static void clean_up_after_unswitching (int);
 static vec<unswitch_predicate *> &
 get_predicates_for_bb (basic_block bb)
 {
-  gimple *last = last_stmt (bb);
+  gimple *last = last_nondebug_stmt (bb);
   return (*bb_predicates)[last == NULL ? 0 : gimple_uid (last)];
 }
 
@@ -245,7 +246,7 @@ get_predicates_for_bb (basic_block bb)
 static void
 set_predicates_for_bb (basic_block bb, vec<unswitch_predicate *> predicates)
 {
-  gimple_set_uid (last_stmt (bb), bb_predicates->length ());
+  gimple_set_uid (last_nondebug_stmt (bb), bb_predicates->length ());
   bb_predicates->safe_push (predicates);
 }
 
@@ -283,7 +284,7 @@ init_loop_unswitch_info (class loop *&loop, unswitch_predicate *&hottest,
       else
 	{
 	  candidates.release ();
-	  gimple *last = last_stmt (bbs[i]);
+	  gimple *last = last_nondebug_stmt (bbs[i]);
 	  if (last != NULL)
 	    gimple_set_uid (last, 0);
 	}
@@ -305,7 +306,7 @@ init_loop_unswitch_info (class loop *&loop, unswitch_predicate *&hottest,
       /* No predicates to unswitch on in the outer loops.  */
       if (!flow_bb_inside_loop_p (loop, bbs[i]))
 	{
-	  gimple *last = last_stmt (bbs[i]);
+	  gimple *last = last_nondebug_stmt (bbs[i]);
 	  if (last != NULL)
 	    gimple_set_uid (last, 0);
 	}
@@ -328,6 +329,7 @@ tree_ssa_unswitch_loops (function *fun)
   bool changed_unswitch = false;
   bool changed_hoist = false;
   auto_edge_flag ignored_edge_flag (fun);
+  mark_ssa_maybe_undefs ();
 
   ranger = enable_ranger (fun);
 
@@ -426,65 +428,7 @@ is_maybe_undefined (const tree name, gimple *stmt, class loop *loop)
   if (gimple_bb (stmt) == loop->header)
     return false;
 
-  auto_bitmap visited_ssa;
-  auto_vec<tree> worklist;
-  worklist.safe_push (name);
-  bitmap_set_bit (visited_ssa, SSA_NAME_VERSION (name));
-  while (!worklist.is_empty ())
-    {
-      tree t = worklist.pop ();
-
-      /* If it's obviously undefined, avoid further computations.  */
-      if (ssa_undefined_value_p (t, true))
-	return true;
-
-      if (ssa_defined_default_def_p (t))
-	continue;
-
-      gimple *def = SSA_NAME_DEF_STMT (t);
-
-      /* Check that all the PHI args are fully defined.  */
-      if (gphi *phi = dyn_cast <gphi *> (def))
-	{
-	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
-	    {
-	      tree t = gimple_phi_arg_def (phi, i);
-	      /* If an SSA has already been seen, it may be a loop,
-		 but we can continue and ignore this use.  Otherwise,
-		 add the SSA_NAME to the queue and visit it later.  */
-	      if (TREE_CODE (t) == SSA_NAME
-		  && bitmap_set_bit (visited_ssa, SSA_NAME_VERSION (t)))
-		worklist.safe_push (t);
-	    }
-	  continue;
-	}
-
-      /* Uses in stmts always executed when the region header executes
-	 are fine.  */
-      if (dominated_by_p (CDI_DOMINATORS, loop->header, gimple_bb (def)))
-	continue;
-
-      /* Handle calls and memory loads conservatively.  */
-      if (!is_gimple_assign (def)
-	  || (gimple_assign_single_p (def)
-	      && gimple_vuse (def)))
-	return true;
-
-      /* Check that any SSA names used to define NAME are also fully
-	 defined.  */
-      use_operand_p use_p;
-      ssa_op_iter iter;
-      FOR_EACH_SSA_USE_OPERAND (use_p, def, iter, SSA_OP_USE)
-	{
-	  tree t = USE_FROM_PTR (use_p);
-	  /* If an SSA has already been seen, it may be a loop,
-	     but we can continue and ignore this use.  Otherwise,
-	     add the SSA_NAME to the queue and visit it later.  */
-	  if (bitmap_set_bit (visited_ssa, SSA_NAME_VERSION (t)))
-	    worklist.safe_push (t);
-	}
-    }
-  return false;
+  return ssa_name_maybe_undef_p (name);
 }
 
 /* Checks whether we can unswitch LOOP on condition at end of BB -- one of its
@@ -506,7 +450,7 @@ find_unswitching_predicates_for_bb (basic_block bb, class loop *loop,
   ssa_op_iter iter;
 
   /* BB must end in a simple conditional jump.  */
-  last = last_stmt (bb);
+  last = *gsi_last_bb (bb);
   if (!last)
     return;
 
@@ -605,12 +549,13 @@ find_unswitching_predicates_for_bb (basic_block bb, class loop *loop,
 	      tree cmp1 = fold_build2 (GE_EXPR, boolean_type_node, idx, low);
 	      tree cmp2 = fold_build2 (LE_EXPR, boolean_type_node, idx, high);
 	      cmp = fold_build2 (BIT_AND_EXPR, boolean_type_node, cmp1, cmp2);
-	      lab_range.set (low, high);
+	      lab_range.set (idx_type, wi::to_wide (low), wi::to_wide (high));
 	    }
 	  else
 	    {
 	      cmp = fold_build2 (EQ_EXPR, boolean_type_node, idx, low);
-	      lab_range.set (low, low);
+	      wide_int w = wi::to_wide (low);
+	      lab_range.set (idx_type, w, w);
 	    }
 
 	  /* Combine the expression with the existing one.  */
@@ -762,8 +707,8 @@ evaluate_control_stmt_using_entry_checks (gimple *stmt,
 	    continue;
 
 	  int_range_max r;
-	  if (!ranger->gori ().outgoing_edge_range_p (r, e, idx,
-						      *get_global_range_query ()))
+	  if (!ranger->gori ().edge_range_p (r, e, idx,
+					     *get_global_range_query ()))
 	    continue;
 	  r.intersect (path_range);
 	  if (r.undefined_p ())
@@ -805,7 +750,7 @@ simplify_loop_version (class loop *loop, predicate_vector &predicate_path,
       if (predicates.is_empty ())
 	continue;
 
-      gimple *stmt = last_stmt (bbs[i]);
+      gimple *stmt = *gsi_last_bb (bbs[i]);
       tree folded = evaluate_control_stmt_using_entry_checks (stmt,
 							      predicate_path,
 							      ignored_edge_flag,
@@ -885,7 +830,7 @@ evaluate_bbs (class loop *loop, predicate_vector *predicate_path,
       if (visit (bb))
 	break;
 
-      gimple *last = last_stmt (bb);
+      gimple *last = *gsi_last_bb (bb);
       if (gcond *cond = safe_dyn_cast <gcond *> (last))
 	{
 	  if (gimple_cond_true_p (cond))
@@ -1217,7 +1162,7 @@ find_loop_guard (class loop *loop, vec<gimple *> &dbg_to_reset)
 	next = single_succ (header);
       else
 	{
-	  cond = safe_dyn_cast <gcond *> (last_stmt (header));
+	  cond = safe_dyn_cast <gcond *> (*gsi_last_bb (header));
 	  if (! cond)
 	    return NULL;
 	  extract_true_false_edges_from_block (header, &te, &fe);
@@ -1311,7 +1256,11 @@ find_loop_guard (class loop *loop, vec<gimple *> &dbg_to_reset)
 	  guard_edge = NULL;
 	  goto end;
 	}
-      if (!empty_bb_without_guard_p (loop, bb, dbg_to_reset))
+      /* If any of the not skipped blocks has side-effects or defs with
+	 uses outside of the loop we cannot hoist the guard.  */
+      if (!dominated_by_p (CDI_DOMINATORS,
+			   bb, guard_edge == te ? fe->dest : te->dest)
+	  && !empty_bb_without_guard_p (loop, bb, dbg_to_reset))
 	{
 	  if (dump_enabled_p ())
 	    dump_printf_loc (MSG_MISSED_OPTIMIZATION, loc,
@@ -1454,10 +1403,7 @@ hoist_guard (class loop *loop, edge guard)
   cond_stmt = as_a <gcond *> (stmt);
   extract_true_false_edges_from_block (guard_bb, &te, &fe);
   /* Insert guard to PRE_HEADER.  */
-  if (!empty_block_p (pre_header))
-    gsi = gsi_last_bb (pre_header);
-  else
-    gsi = gsi_start_bb (pre_header);
+  gsi = gsi_last_bb (pre_header);
   /* Create copy of COND_STMT.  */
   new_cond_stmt = gimple_build_cond (gimple_cond_code (cond_stmt),
 				     gimple_cond_lhs (cond_stmt),
@@ -1471,7 +1417,7 @@ hoist_guard (class loop *loop, edge guard)
     gimple_cond_make_true (cond_stmt);
   update_stmt (cond_stmt);
   /* Create new loop pre-header.  */
-  e = split_block (pre_header, last_stmt (pre_header));
+  e = split_block (pre_header, last_nondebug_stmt (pre_header));
 
   dump_user_location_t loc = find_loop_location (loop);
 
@@ -1513,7 +1459,8 @@ hoist_guard (class loop *loop, edge guard)
 
   if (skip_count > e->count ())
     {
-      fprintf (dump_file, "  Capping count; expect profile inconsistency\n");
+      if (dump_file && (dump_flags & TDF_DETAILS))
+	fprintf (dump_file, "  Capping count; expect profile inconsistency\n");
       skip_count = e->count ();
     }
   if (dump_enabled_p ())
@@ -1637,7 +1584,7 @@ clean_up_after_unswitching (int ignored_edge_flag)
 
   FOR_EACH_BB_FN (bb, cfun)
     {
-      gswitch *stmt= safe_dyn_cast <gswitch *> (last_stmt (bb));
+      gswitch *stmt= safe_dyn_cast <gswitch *> (*gsi_last_bb (bb));
       if (stmt && !CONSTANT_CLASS_P (gimple_switch_index (stmt)))
 	{
 	  unsigned nlabels = gimple_switch_num_labels (stmt);

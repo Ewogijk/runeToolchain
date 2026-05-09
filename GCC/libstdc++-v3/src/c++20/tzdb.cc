@@ -35,10 +35,25 @@
 #include <atomic>     // atomic<T*>, atomic<int>
 #include <memory>     // atomic<shared_ptr<T>>
 #include <mutex>      // mutex
-#include <filesystem> // filesystem::read_symlink
+#include <iomanip>    // quoted
+#if defined __GTHREADS && ! defined _GLIBCXX_HAS_GTHREADS
+# include <ext/concurrence.h> // __gnu_cxx::__mutex
+#endif
 
-#ifndef _AIX
+#if defined(_GLIBCXX_HAVE_READLINK) && defined(_GLIBCXX_HAVE_UNISTD_H)
+# include <unistd.h>  // readlink
+#endif
+
+#ifdef _AIX
 # include <cstdlib>   // getenv
+#endif
+
+#if _GLIBCXX_HAVE_WINDOWS_H
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+# include <psapi.h>
+
+# include <array>
 #endif
 
 #if defined __GTHREADS && ATOMIC_POINTER_LOCK_FREE == 2
@@ -70,8 +85,9 @@ namespace __gnu_cxx
 #else
   [[gnu::weak]] const char* zoneinfo_dir_override();
 
-#if defined(__APPLE__) || defined(__hpux__)
-  // Need a weak definition for Mach-O.
+#if defined(__APPLE__) || defined(__hpux__) \
+  || (defined(__VXWORKS__) && !defined(__RTP__))
+  // Need a weak definition for Mach-O et al.
   [[gnu::weak]] const char* zoneinfo_dir_override()
   {
 #ifdef _GLIBCXX_ZONEINFO_DIR
@@ -96,11 +112,18 @@ namespace std::chrono
 {
   namespace
   {
-#if ! USE_ATOMIC_SHARED_PTR
 #ifndef __GTHREADS
     // Dummy no-op mutex type for single-threaded targets.
     struct mutex { void lock() { } void unlock() { } };
+#elif ! defined _GLIBCXX_HAS_GTHREADS
+    // Use __gnu_cxx::__mutex if std::mutex isn't available.
+    using mutex = __gnu_cxx::__mutex;
+# if ! USE_ATOMIC_SHARED_PTR && defined __GTHREAD_MUTEX_INIT
+#  error "TODO: __gnu_cxx::__mutex can't be initialized with 'constinit'"
+# endif
 #endif
+
+#if ! USE_ATOMIC_SHARED_PTR
     inline mutex& list_mutex()
     {
 #ifdef __GTHREAD_MUTEX_INIT
@@ -132,6 +155,8 @@ namespace std::chrono
     // of this type gives them access to the private members of time_zone
     // and tzdb, without needing them declared in the <chrono> header.
 
+    // The tzdb_list singleton. This doesn't contain the actual linked list,
+    // but it has member functions that give access to it.
     static tzdb_list _S_the_list;
 
 #if USE_ATOMIC_SHARED_PTR
@@ -176,15 +201,16 @@ namespace std::chrono
   // Implementation of the private constructor used for the singleton object.
   constexpr tzdb_list::tzdb_list(nullptr_t) { }
 
-  // The tzdb_list singleton. This doesn't contain the actual linked list,
-  // but it has member functions that give access to it.
+#pragma GCC diagnostic ignored "-Wprio-ctor-dtor"
+
+  [[gnu::init_priority(98)]]
   constinit tzdb_list tzdb_list::_Node::_S_the_list(nullptr);
 
-  // Shared pointer to the first Node in the list.
+  [[gnu::init_priority(98)]]
   constinit tzdb_list::_Node::head_ptr tzdb_list::_Node::_S_head_owner{nullptr};
 
 #if USE_ATOMIC_LIST_HEAD
-  // Lock-free access to the first Node in the list.
+  [[gnu::init_priority(98)]]
   constinit atomic<tzdb_list::_Node*> tzdb_list::_Node::_S_head_cache{nullptr};
 #endif
 
@@ -250,11 +276,14 @@ namespace std::chrono
       // If not, indic is unchanged. Callers should set a default first.
       friend istream& operator>>(istream& in, Indicator& indic)
       {
-	auto [val, yes] = at_time::is_indicator(in.peek());
-	if (yes)
+	if (!in.eof())
 	  {
-	    in.ignore(1);
-	    indic = val;
+	    auto [val, yes] = at_time::is_indicator(in.peek());
+	    if (yes)
+	      {
+		in.ignore(1);
+		indic = val;
+	      }
 	  }
 	return in;
       }
@@ -341,51 +370,103 @@ namespace std::chrono
       friend istream& operator>>(istream&, on_day&);
     };
 
-    // Wrapper for chrono::year that reads a year, or one of the keywords
-    // "minimum" or "maximum", or an unambiguous prefix of a keyword.
-    struct minmax_year
+    // Wrapper for two chrono::year values, which reads the FROM and TO
+    // fields of a Rule line. The FROM field is a year and TO is a year or
+    // one of the keywords "maximum" or "only" (or an abbreviation of those).
+    // For backwards compatibility, the keyword "minimum" is recognized
+    // for FROM and interpreted as 1900.
+    struct years_from_to
     {
-      year& y;
+      year& from;
+      year& to;
 
-      friend istream& operator>>(istream& in, minmax_year&& y)
+      friend istream& operator>>(istream& in, years_from_to&& yy)
       {
-	if (ws(in).peek() == 'm') // keywords "minimum" or "maximum"
+	string s;
+	auto c = ws(in).peek();
+	if (c == 'm') [[unlikely]] // keyword "minimum"
 	  {
-	    string s;
-	    in >> s; // extract the rest of the word, but only look at s[1]
-	    if (s[1] == 'a')
-	      y.y = year::max();
-	    else if (s[1] == 'i')
-	      y.y = year::min();
-	    else
-	      in.setstate(ios::failbit);
+	    in >> s; // extract the rest of the word
+	    yy.from = year(1900);
+	  }
+	else if (int num = 0; in >> num) [[likely]]
+	  yy.from = year{num};
+
+	c = ws(in).peek();
+	if (c == 'm') // keyword "maximum"
+	  {
+	    in >> s; // extract the rest of the word
+	    yy.to = year::max();
+	  }
+	else if (c == 'o') // keyword "only"
+	  {
+	    in >> s; // extract the rest of the word
+	    yy.to = yy.from;
 	  }
 	else if (int num = 0; in >> num)
-	  y.y = year{num};
+	  yy.to = year{num};
+
 	return in;
       }
     };
 
-    // As above for minmax_year, but also supports the keyword "only",
-    // meaning that the TO year is the same as the FROM year.
-    struct minmax_year2
+    bool
+    select_std_or_dst_abbrev(string& abbrev, minutes save)
     {
-      minmax_year to;
-      year from;
+      if (size_t pos = abbrev.find('/'); pos != string::npos)
+	{
+	  // Select one of "STD/DST" for standard or daylight.
+	  if (save == 0min)
+	    abbrev.erase(pos);
+	  else
+	    abbrev.erase(0, pos + 1);
+	  return true;
+	}
+      return false;
+    }
 
-      friend istream& operator>>(istream& in, minmax_year2&& y)
-      {
-	if (ws(in).peek() == 'o') // keyword "only"
-	  {
-	    string s;
-	    in >> s; // extract the whole keyword
-	    y.to.y = y.from;
-	  }
-	else
-	  in >> std::move(y.to);
-	return in;
-      }
-    };
+    // Set the sys_info::abbrev string by expanding any placeholders.
+    void
+    format_abbrev_str(sys_info& info, string_view letters = {})
+    {
+      if (size_t pos = info.abbrev.find('%'); pos != string::npos)
+	{
+	  if (info.abbrev[pos + 1] == 's')
+	    {
+	      // Expand "%s" to the variable part, given by Rule::letters.
+	      if (letters == "-")
+		info.abbrev.erase(pos, 2);
+	      else
+		info.abbrev.replace(pos, 2, letters);
+	    }
+	  else if (info.abbrev[pos + 1] == 'z')
+	    {
+	      // Expand "%z" to the UT offset as +/-hh, +/-hhmm, or +/-hhmmss.
+	      hh_mm_ss<seconds> t(info.offset);
+	      string z(1, "+-"[t.is_negative()]);
+	      long val = t.hours().count();
+	      int digits = 2;
+	      if (int m = t.minutes().count())
+		{
+		  digits = 4;
+		  val *= 100;
+		  val += m;
+		  if (int s = t.seconds().count())
+		    {
+		      digits = 6;
+		      val *= 100;
+		      val += s;
+		    }
+		}
+	      auto sval = std::to_string(val);
+	      z += string(digits - sval.size(), '0');
+	      z += sval;
+	      info.abbrev.replace(pos, 2, z);
+	    }
+	}
+      else
+	select_std_or_dst_abbrev(info.abbrev, info.save);
+    }
 
     // A time zone information record.
     // Zone  NAME        STDOFF  RULES   FORMAT  [UNTIL]
@@ -461,6 +542,7 @@ namespace std::chrono
 	info.offset = offset();
 	info.save = minutes(m_save);
 	info.abbrev = format();
+	format_abbrev_str(info); // expand %z
 	return true;
       }
 
@@ -468,12 +550,9 @@ namespace std::chrono
       friend class time_zone;
 
       void
-      set_abbrev(const string& abbrev)
+      set_abbrev(string abbrev)
       {
-	// In practice, the FORMAT field never needs expanding here.
-	if (abbrev.find_first_of("/%") != abbrev.npos)
-	  __throw_runtime_error("std::chrono::time_zone: invalid data");
-	m_buf = abbrev;
+	m_buf = std::move(abbrev);
 	m_pos = 0;
 	m_expanded = true;
       }
@@ -543,9 +622,7 @@ namespace std::chrono
 
 	// Rule  NAME  FROM  TO  TYPE  IN  ON  AT  SAVE  LETTER/S
 
-	in >> quoted(rule.name)
-	   >> minmax_year{rule.from}
-	   >> minmax_year2{rule.to, rule.from};
+	in >> quoted(rule.name) >> years_from_to{rule.from, rule.to};
 
 	if (char type; in >> type && type != '-')
 	  in.setstate(ios::failbit);
@@ -556,7 +633,7 @@ namespace std::chrono
 	if (save_time.indicator != at_time::Wall)
 	  {
 	    // We don't actually store the save_time.indicator, because we
-	    // assume that it's always deducable from the actual offset value.
+	    // assume that it's always deducible from the offset value.
 	    auto expected = save_time.time == 0s
 			      ? at_time::Standard
 			      : at_time::Daylight;
@@ -566,8 +643,6 @@ namespace std::chrono
 	rule.save = save_time.time;
 
 	in >> rule.letters;
-	if (rule.letters == "-")
-	  rule.letters.clear();
 	return in;
       }
 
@@ -651,7 +726,7 @@ namespace std::chrono
     template<typename _Tp> requires _Tp::is_always_lock_free
       struct RulesCounter<_Tp>
       {
-	atomic_signed_lock_free counter{0};
+	_Tp counter{0};
 
 	void
 	increment()
@@ -703,7 +778,12 @@ namespace std::chrono
       };
 #endif // __GTHREADS && __cpp_lib_atomic_wait
 
+#if __cpp_lib_atomic_lock_free_type_aliases
     RulesCounter<atomic_signed_lock_free> rules_counter;
+#else
+    RulesCounter<void> rules_counter;
+#endif
+
 #else // TZDB_DISABLED
     _Impl(weak_ptr<tzdb_list::_Node>) { }
     struct {
@@ -712,58 +792,6 @@ namespace std::chrono
     } infos;
 #endif // TZDB_DISABLED
   };
-
-#ifndef TZDB_DISABLED
-  namespace
-  {
-    bool
-    select_std_or_dst_abbrev(string& abbrev, minutes save)
-    {
-      if (size_t pos = abbrev.find('/'); pos != string::npos)
-	{
-	  // Select one of "STD/DST" for standard or daylight.
-	  if (save == 0min)
-	    abbrev.erase(pos);
-	  else
-	    abbrev.erase(0, pos + 1);
-	  return true;
-	}
-      return false;
-    }
-
-    // Set the sys_info::abbrev string by expanding any placeholders.
-    void
-    format_abbrev_str(sys_info& info, string_view letters = {})
-    {
-      if (size_t pos = info.abbrev.find("%s"); pos != string::npos)
-	{
-	  // Expand "%s" to the variable part, given by Rule::letters.
-	  info.abbrev.replace(pos, 2, letters);
-	}
-      else if (size_t pos = info.abbrev.find("%z"); pos != string::npos)
-	{
-	  // Expand "%z" to the UT offset as +/-hh, +/-hhmm, or +/-hhmmss.
-	  hh_mm_ss<seconds> t(info.offset);
-	  string z(1, "+-"[t.is_negative()]);
-	  long val = t.hours().count();
-	  if (minutes m = t.minutes(); m != m.zero())
-	    {
-	      val *= 100;
-	      val += m.count();
-	      if (seconds s = t.seconds(); s != s.zero())
-		{
-		  val *= 100;
-		  val += s.count();
-		}
-	    }
-	  z += std::to_string(val);
-	  info.abbrev.replace(pos, 2, z);
-	}
-      else
-	select_std_or_dst_abbrev(info.abbrev, info.save);
-    }
-  }
-#endif // TZDB_DISABLED
 
   // Implementation of std::chrono::time_zone::get_info(const sys_time<D>&)
   sys_info
@@ -833,12 +861,76 @@ namespace std::chrono
     info.abbrev = ri.format();
 
     string_view letters;
-    if (i != infos.begin())
+    if (i != infos.begin() && i[-1].expanded())
+      letters = i[-1].next_letters();
+
+    if (letters.empty())
       {
-	if (i[-1].expanded())
-	  letters = i[-1].next_letters();
-	// XXX else need to find Rule active before this time and use it
-	// to know the initial offset, save, and letters.
+	sys_seconds t = info.begin - seconds(1);
+	const year_month_day date(chrono::floor<days>(t));
+
+	// Try to find a Rule active before this time, to get initial
+	// SAVE and LETTERS values. There may not be a Rule for the period
+	// before the first DST transition, so find the earliest DST->STD
+	// transition and use the LETTERS from that.
+	const Rule* active_rule = nullptr;
+	sys_seconds active_rule_start = sys_seconds::min();
+	const Rule* first_std = nullptr;
+	for (const auto& rule : rules)
+	  {
+	    if (rule.save == minutes(0))
+	      {
+		if (!first_std)
+		  first_std = &rule;
+		else if (rule.from < first_std->from)
+		  first_std = &rule;
+		else if (rule.from == first_std->from)
+		  {
+		    if (rule.start_time(rule.from, {})
+			  < first_std->start_time(first_std->from, {}))
+		      first_std = &rule;
+		  }
+	      }
+
+	    year y = date.year();
+
+	    if (y > rule.to) // rule no longer applies at time t
+	      continue;
+	    if (y < rule.from) // rule doesn't apply yet at time t
+	      continue;
+
+	    sys_seconds rule_start;
+
+	    seconds offset{}; // appropriate for at_time::Universal
+	    if (rule.when.indicator == at_time::Wall)
+	      offset = info.offset;
+	    else if (rule.when.indicator == at_time::Standard)
+	      offset = ri.offset();
+
+	    // Time the rule takes effect this year:
+	    rule_start = rule.start_time(y, offset);
+
+	    if (rule_start >= t && rule.from < y)
+	      {
+		// Try this rule in the previous year.
+		rule_start = rule.start_time(--y, offset);
+	      }
+
+	    if (active_rule_start < rule_start && rule_start < t)
+	      {
+		active_rule_start = rule_start;
+		active_rule = &rule;
+	      }
+	  }
+
+	if (active_rule)
+	  {
+	    info.offset = ri.offset() + active_rule->save;
+	    info.save = chrono::duration_cast<minutes>(active_rule->save);
+	    letters = active_rule->letters;
+	  }
+	else if (first_std)
+	  letters = first_std->letters;
       }
 
     const Rule* curr_rule = nullptr;
@@ -1072,14 +1164,42 @@ namespace std::chrono
       else
 	path = _GLIBCXX_ZONEINFO_DIR;
 #endif
+#ifdef _GLIBCXX_HAVE_WINDOWS_H
+      if (path.empty())
+	{
+	  HMODULE dll_module;
+	  if (GetModuleHandleExA(
+		  GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+		      | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		  reinterpret_cast<const char *>(&zoneinfo_file), &dll_module))
+	    {
+	      char dll_path[MAX_PATH];
+	      if (GetModuleFileNameA(dll_module, dll_path, MAX_PATH) != 0)
+		{
+		  string_view dll_path_view = dll_path;
+		  auto pos = dll_path_view.find_last_of('\\');
+		  dll_path_view = dll_path_view.substr(0, pos);
+		  if (dll_path_view.ends_with("\\bin"))
+		    {
+		      constexpr string_view remaining_path = "share\\zoneinfo";
+		      dll_path_view.remove_suffix(3); // Remove bin
+		      path.reserve(dll_path_view.size()
+				   + remaining_path.size());
+		      path = dll_path_view;
+		      path += remaining_path;
+		    }
+		}
+	    }
+	}
+#endif
       if (!path.empty())
 	path.append(filename);
       return path;
     }
 
     // N.B. Leading slash as required by zoneinfo_file function.
-    const string tzdata_file = "/tzdata.zi";
-    const string leaps_file = "/leapseconds";
+    const string_view tzdata_file = "/tzdata.zi";
+    const string_view leaps_file = "/leapseconds";
 
 #ifdef _GLIBCXX_STATIC_TZDATA
 // Static copy of tzdata.zi embedded in the library as tzdata_chars[]
@@ -1136,8 +1256,8 @@ namespace std::chrono
   pair<vector<leap_second>, bool>
   tzdb_list::_Node::_S_read_leap_seconds()
   {
-    // This list is valid until at least 2023-12-28 00:00:00 UTC.
-    auto expires = sys_days{2023y/12/28};
+    // This list is valid until at least 2026-12-28 00:00:00 UTC.
+    constexpr auto expires = sys_days{2026y/12/28};
     vector<leap_second> leaps
     {
       (leap_second)  78796800, // 1 Jul 1972
@@ -1593,7 +1713,7 @@ namespace std::chrono
     const time_zone*
     do_locate_zone(const vector<time_zone>& zones,
 		   const vector<time_zone_link>& links,
-		   string_view tz_name) noexcept
+		   string_view tz_name)
     {
       // Lambda mangling changed between -fabi-version=2 and -fabi-version=18
       auto search = []<class Vec>(const Vec& v, string_view name) {
@@ -1604,14 +1724,155 @@ namespace std::chrono
 	return ptr;
       };
 
+      // Search zones first.
       if (auto tz = search(zones, tz_name))
 	return tz;
 
+      // Search links second.
       if (auto tz_l = search(links, tz_name))
-	return search(zones, tz_l->target());
+	{
+	  // Handle the common case of a link that has a zone as the target.
+	  if (auto tz = search(zones, tz_l->target())) [[likely]]
+	    return tz;
 
-      return nullptr;
+	  // Either tz_l->target() doesn't exist, or we have a chain of links.
+	  // Use Floyd's cycle-finding algorithm to avoid infinite loops,
+	  // at the cost of extra lookups. In the common case we expect a
+	  // chain of links to be short so the loop won't run many times.
+	  // In particular, the duplicate lookups to move the tortoise
+	  // never happen unless the chain has four or more links.
+	  // When a chain contains a cycle we do multiple duplicate lookups,
+	  // but that case should never happen with correct tzdata.zi,
+	  // so there's no need to optimize cycle detection.
+
+	  const time_zone_link* tortoise = tz_l;
+	  const time_zone_link* hare = search(links, tz_l->target());
+	  while (hare)
+	    {
+	      // Chains should be short, so first check if it ends here:
+	      if (auto tz = search(zones, hare->target())) [[likely]]
+		return tz;
+
+	      // Otherwise follow the chain:
+	      hare = search(links, hare->target());
+	      if (!hare)
+		break;
+
+	      // Again, first check if the chain ends at a zone here:
+	      if (auto tz = search(zones, hare->target())) [[likely]]
+		return tz;
+
+	      // Follow the chain again:
+	      hare = search(links, hare->target());
+
+	      if (hare == tortoise)
+		{
+		  string_view err = "std::chrono::tzdb: link cycle: ";
+		  string str;
+		  str.reserve(err.size() + tz_name.size());
+		  str += err;
+		  str += tz_name;
+		  __throw_runtime_error(str.c_str());
+		}
+	      // Plod along the chain one step:
+	      tortoise = search(links, tortoise->target());
+	    }
+	}
+
+      return nullptr; // not found
     }
+
+#ifdef _GLIBCXX_HAVE_WINDOWS_H
+    string_view
+    detect_windows_zone() noexcept
+    {
+      DYNAMIC_TIME_ZONE_INFORMATION information{};
+      if (GetDynamicTimeZoneInformation(&information) == TIME_ZONE_ID_INVALID)
+	return {};
+
+      constexpr SYSTEMTIME all_zero_time{};
+      const wstring_view zone_name{ information.TimeZoneKeyName };
+      auto equal = [](const SYSTEMTIME &lhs, const SYSTEMTIME &rhs) noexcept
+	{ return memcmp(&lhs, &rhs, sizeof(SYSTEMTIME)) == 0; };
+      // The logic is copied from icu, couldn't find the source.
+      // Detect if DST is disabled.
+      if (information.DynamicDaylightTimeDisabled
+	  && equal(information.StandardDate, information.DaylightDate)
+	  && ((!zone_name.empty()
+	       && equal(information.StandardDate, all_zero_time))
+	      || (zone_name.empty()
+		  && !equal(information.StandardDate, all_zero_time))))
+	{
+	  if (information.Bias == 0)
+	    return "Etc/UTC";
+
+	  if (information.Bias % 60 != 0)
+	    // If the offset is not in full hours, we can't do anything really.
+	    return {};
+
+	  const auto raw_index = information.Bias / 60;
+
+	  // The bias added to the local time equals UTC. And GMT+X corresponds
+	  // to UTC-X, the sign is negated. Thus we can use the hourly bias as
+	  // an index into an array.
+	  if (raw_index < 0 && raw_index >= -14)
+	    {
+	      static constexpr array<string_view, 14> table{
+		"Etc/GMT-1",  "Etc/GMT-2",  "Etc/GMT-3",  "Etc/GMT-4",
+		"Etc/GMT-5",  "Etc/GMT-6",  "Etc/GMT-7",  "Etc/GMT-8",
+		"Etc/GMT-9",  "Etc/GMT-10", "Etc/GMT-11", "Etc/GMT-12",
+		"Etc/GMT-13", "Etc/GMT-14"
+	      };
+	      return table[-raw_index - 1];
+	    }
+	  else if (raw_index > 0 && raw_index <= 12)
+	    {
+	      static constexpr array<string_view, 12> table{
+		"Etc/GMT+1", "Etc/GMT+2",  "Etc/GMT+3",	 "Etc/GMT+4",
+		"Etc/GMT+5", "Etc/GMT+6",  "Etc/GMT+7",	 "Etc/GMT+8",
+		"Etc/GMT+9", "Etc/GMT+10", "Etc/GMT+11", "Etc/GMT+12"
+	      };
+	      return table[raw_index - 1];
+	    }
+	  return {};
+	}
+
+#include "windows_zones-map.h"
+#ifndef _GLIBCXX_WINDOWS_ZONES_MAP_COMPLETE
+# error "Invalid windows_zones map"
+#endif
+
+      const auto zone_range
+	  = ranges::equal_range(windows_zone_map, zone_name, {},
+				&windows_zone_map_entry::windows_name);
+
+      const auto size = ranges::size(zone_range);
+      if (size == 0)
+	// Unknown zone, we can't detect anything.
+	return {};
+
+      if (size == 1)
+	// Some zones have only one territory, use the quick path.
+	return zone_range.front().iana_name;
+
+      const auto geo_id = GetUserGeoID(GEOCLASS_NATION);
+      // We ask for a 2-letter country code plus the zero terminator. "001" is
+      // only contained in the zone map, not returned by GetGeoInfoW.
+      wchar_t territory[3] = {};
+      if (GetGeoInfoW(geo_id, GEO_ISO2, territory, 3, 0) == 0)
+	// Couldn't detect the territory, fallback to "001", which is the first
+	// entry.
+	return zone_range.front().iana_name;
+
+      const auto iter = ranges::lower_bound(
+	  zone_range, +territory, {}, &windows_zone_map_entry::territory);
+      if (iter == zone_range.end() || iter->territory != territory)
+	// Territory not within the the map, use "001".
+	return zone_range.front().iana_name;
+
+      return iter->iana_name;
+    }
+#endif
   } // namespace
 
   // Implementation of std::chrono::tzdb::locate_zone(string_view).
@@ -1620,7 +1881,7 @@ namespace std::chrono
   {
     if (auto tz = do_locate_zone(zones, links, tz_name))
       return tz;
-    string_view err = "tzdb: cannot locate zone: ";
+    string_view err = "std::chrono::tzdb: cannot locate zone: ";
     string str;
     str.reserve(err.size() + tz_name.size());
     str += err;
@@ -1633,26 +1894,89 @@ namespace std::chrono
   tzdb::current_zone() const
   {
     // TODO cache this function's result?
+    // Could check the modification time of /etc/localtime, and not re-read
+    // it if it hasn't changed. reload_tzdb() could clear the cache too,
+    // to have a way to force a re-read.
 
-#ifndef _AIX
-    error_code ec;
-    // This should be a symlink to e.g. /usr/share/zoneinfo/Europe/London
-    auto path = filesystem::read_symlink("/etc/localtime", ec);
-    if (!ec)
+#if !defined(_AIX) && !defined(_GLIBCXX_HAVE_WINDOWS_H)
+#if defined(_GLIBCXX_HAVE_READLINK) && defined(_GLIBCXX_HAVE_UNISTD_H)
+    string_view str;
+    char buf[128]; // strlen("../usr/share/zoneinfo/...") is usually < 55
+    string dynbuf;
+    // /etc/localtime should be a symlink that ends with a zone name,
+    // e.g. /etc/localtime -> /usr/share/zoneinfo/Europe/London
+    // https://www.freedesktop.org/software/systemd/man/latest/localtime.html
+    // This should work on GNU/Linux, macOS, NetBSD, and OpenBSD.
+    // Some FreeBSD systems also use a symlink for /etc/localtime.
+    // Use readlink directly to avoid std::filesystem overhead.
+    if (auto n = ::readlink("/etc/localtime", buf, sizeof(buf)); n > 0)
       {
-	auto first = path.begin(), last = path.end();
-	if (std::distance(first, last) > 2)
+	if (static_cast<size_t>(n) < sizeof(buf))
+	  str = string_view(buf, n);
+	else [[unlikely]]
 	  {
-	    --last;
-	    string name = last->string();
-	    if (auto tz = do_locate_zone(this->zones, this->links, name))
-	      return tz;
-	    --last;
-	    name = last->string() + '/' + name;
-	    if (auto tz = do_locate_zone(this->zones, this->links, name))
-	      return tz;
+	    // We read the symlink but it didn't fit in buf[], use dynbuf.
+	    do
+	      {
+		n *= 2;
+		dynbuf.__resize_and_overwrite(n, [](char* p, size_t len) {
+		  auto n2 = ::readlink("/etc/localtime", p, len);
+		  if (n2 == -1) // symlink removed or replaced by file?!
+		    __throw_runtime_error("tzdb: error reading /etc/localtime");
+		  const size_t r = n2;
+		  return r < len ? r : 0;
+		});
+	      }
+	    while (dynbuf.empty());
+	    str = dynbuf;
 	  }
       }
+
+    if (!str.empty())
+      {
+	// Remove any redundant slashes so we can match zone names.
+	// e.g. /usr/share/zoneinfo/Europe//London is a valid symlink,
+	// but won't match against "Europe/London".
+	if (auto pos = str.rfind("//"); pos != str.npos) [[unlikely]]
+	  {
+	    if (str.data() != dynbuf.data())
+	      dynbuf = str;
+	    string::size_type spos = pos;
+	    do
+	      {
+		dynbuf.erase(spos, 1);
+		spos = dynbuf.rfind("//", spos);
+	      }
+	    while (spos != dynbuf.npos);
+	    str = dynbuf;
+	  }
+
+	// Check the trailing components of the path against known zone names.
+	// Valid IANA times zones can have one, two, or three parts, e.g.
+	// "UTC", "Europe/London", and "America/Indiana/Indianapolis".
+	// Custom tzdata.zi files could in theory use four or more parts.
+
+	auto pos = str.rfind('/');
+	while (pos != str.npos && pos != 0)
+	  {
+	    if (auto tz = do_locate_zone(this->zones, this->links,
+					 str.substr(pos + 1)))
+	      return tz;
+	    pos = str.rfind('/', pos - 1);
+	  }
+	// If we didn't match yet, try once more so that we will match
+	// a symlink to a relative path such as "Europe/London"
+	// or symlink to an absolute path such as "/Europe/London".
+	// Both cases seem unlikely because it would require either
+	// /etc/Europe or /Europe to be a directory (or a symlink to one)
+	// containing the TZif files, but it's theoretically possible.
+	// If pos==npos then pos+1 wraps to 0 and we use the whole string.
+	// If pos==0 then substr(1) discards the leading slash.
+	if (auto tz = do_locate_zone(this->zones, this->links,
+				     str.substr(pos + 1)))
+	  return tz;
+      }
+#endif
     // Otherwise, look for a file naming the time zone.
     string_view files[] {
       "/etc/timezone",    // Debian derivates
@@ -1687,7 +2011,16 @@ namespace std::chrono
 		  return tz;
 	      }
       }
-#else
+
+    // FIXME: For DragonFly BSD /etc/localtime is a copy of one of the
+    // zone files in /usr/share/zoneinfo so we need to compare its contents
+    // to each one until we find a match.
+
+#elif defined(_GLIBCXX_HAVE_WINDOWS_H)
+    if (auto tz
+	= do_locate_zone(this->zones, this->links, detect_windows_zone()))
+      return tz;
+#else // defined(_AIX)
     // AIX stores current zone in $TZ in /etc/environment but the value
     // is typically a POSIX time zone name, not IANA zone.
     // https://developer.ibm.com/articles/au-aix-posix/
@@ -1924,10 +2257,11 @@ namespace std::chrono
     istream& operator>>(istream& in, at_time& at)
     {
       int sign = 1;
-      if (in.peek() == '-')
+      if (ws(in).peek() == '-')
 	{
 	  in.ignore(1);
-	  if (auto [val, yes] = at_time::is_indicator(in.peek()); yes)
+	  if (auto [val, yes] = at_time::is_indicator(in.peek());
+	      in.eof() || yes)
 	    {
 	      in.ignore(1);
 	      at.time = 0s;
@@ -1946,11 +2280,11 @@ namespace std::chrono
 	  in.ignore(1); // discard the colon.
 	  in >> i;
 	  m = minutes{i};
-	  if (in.peek() == ':')
+	  if (!in.eof() && in.peek() == ':')
 	    {
 	      in.ignore(1); // discard the colon.
 	      in >> i;
-	      if (in.peek() == '.')
+	      if (!in.eof() && in.peek() == '.')
 		{
 		  double frac;
 		  in >> frac;
@@ -2010,9 +2344,11 @@ namespace std::chrono
 	      istringstream in2(std::move(rules));
 	      in2 >> rules_time;
 	      inf.m_save = duration_cast<minutes>(rules_time.time);
+	      // If the FORMAT is "STD/DST" then we can choose the right one
+	      // now, so that we store a shorter string.
 	      select_std_or_dst_abbrev(fmt, inf.m_save);
 	    }
-	  inf.set_abbrev(fmt);
+	  inf.set_abbrev(std::move(fmt));
 	}
 
       // YEAR [MONTH [DAY [TIME]]]
@@ -2023,8 +2359,20 @@ namespace std::chrono
 	  abbrev_month m{January};
 	  int d = 1;
 	  at_time t{};
+	  // XXX DAY should support ON format, e.g. lastSun or Sun>=8
 	  in >> m >> d >> t;
 	  inf.m_until = sys_days(year(y)/m.m/day(d)) + seconds(t.time);
+	  if (t.indicator != at_time::Universal)
+	    { // UNTIL uses "the rules in effect just before the transition"
+	      // adjust by STDOFF
+	      inf.m_until -= seconds(inf.m_offset);
+	      if (t.indicator != at_time::Standard)
+		{
+		  if (inf.m_expanded) // Not a named Rule, SAVE is known now.
+		    inf.m_until -= inf.m_save;
+		  // else Named Rule, SAVE is unknown. FIXME: PR 116110
+		}
+	    }
 	}
       else
 	inf.m_until = sys_days(year::max()/December/31);

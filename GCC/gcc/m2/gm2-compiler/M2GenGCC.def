@@ -1,6 +1,6 @@
 (* M2GenGCC.def convert the quadruples into GCC trees.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -32,12 +32,8 @@ DEFINITION MODULE M2GenGCC ;
 *)
 
 FROM M2GCCDeclare IMPORT WalkAction ;
-FROM m2tree IMPORT Tree ;
-FROM m2linemap IMPORT location_t ;
-EXPORT QUALIFIED ConvertQuadsToTree, ResolveConstantExpressions,
-                 GetHighFromUnbounded, StringToChar,
-                 LValueToGenericPtr, ZConstToTypedConst,
-                 DoCopyString ;
+FROM gcctypes IMPORT location_t, tree ;
+FROM M2BasicBlock IMPORT BasicBlock ;
 
 
 (*
@@ -55,7 +51,7 @@ PROCEDURE ConvertQuadsToTree (Start, End: CARDINAL) ;
                                 p(sym) is invoked.
 *)
 
-PROCEDURE ResolveConstantExpressions (p: WalkAction; start, end: CARDINAL) : BOOLEAN ;
+PROCEDURE ResolveConstantExpressions (p: WalkAction; bb: BasicBlock) : BOOLEAN ;
 
 
 (*
@@ -63,7 +59,7 @@ PROCEDURE ResolveConstantExpressions (p: WalkAction; start, end: CARDINAL) : BOO
                           param.HIGH.
 *)
 
-PROCEDURE GetHighFromUnbounded (location: location_t; dim, param: CARDINAL) : Tree ;
+PROCEDURE GetHighFromUnbounded (location: location_t; dim, param: CARDINAL) : tree ;
 
 
 (*
@@ -71,7 +67,7 @@ PROCEDURE GetHighFromUnbounded (location: location_t; dim, param: CARDINAL) : Tr
                   then convert the string into a character constant.
 *)
 
-PROCEDURE StringToChar (t: Tree; type, str: CARDINAL) : Tree ;
+PROCEDURE StringToChar (t: tree; type, str: CARDINAL) : tree ;
 
 
 (*
@@ -79,7 +75,7 @@ PROCEDURE StringToChar (t: Tree; type, str: CARDINAL) : Tree ;
                         It coerces a lvalue into an internal pointer type
 *)
 
-PROCEDURE LValueToGenericPtr (location: location_t; sym: CARDINAL) : Tree ;
+PROCEDURE LValueToGenericPtr (location: location_t; sym: CARDINAL) : tree ;
 
 
 (*
@@ -87,17 +83,26 @@ PROCEDURE LValueToGenericPtr (location: location_t; sym: CARDINAL) : Tree ;
                         coerces, t, appropriately.
 *)
 
-PROCEDURE ZConstToTypedConst (t: Tree; op1, op2: CARDINAL) : Tree ;
+PROCEDURE ZConstToTypedConst (t: tree; op1, op2: CARDINAL) : tree ;
 
 
 (*
-   DoCopyString - returns trees:
-                  t    number of bytes to be copied (including the nul)
-                  op3t the string with the extra nul character
-                       providing it fits.
+   PrepareCopyString - returns two trees:
+                       length    number of bytes to be copied (including the nul if room)
+                       srcTreeType the new string type (with the extra nul character).
+
+                       Pre condition:  destStrType the dest type string.
+                                       src is the original string (without a nul)
+                                       to be copied.
+                       Post condition: TRUE or FALSE is returned.
+                                       if true length and srcTreeType will be assigned
+                                       else length is set to the maximum length to be
+                                            copied and srcTree is set to the max length
+                                            which fits in dest.
 *)
 
-PROCEDURE DoCopyString (tokenno: CARDINAL; VAR length, op3t: Tree; op1t, op3: CARDINAL) ;
+PROCEDURE PrepareCopyString (tokenno: CARDINAL; VAR length, srcTree: tree;
+                             src, destStrType: CARDINAL) : BOOLEAN ;
 
 
 END M2GenGCC.

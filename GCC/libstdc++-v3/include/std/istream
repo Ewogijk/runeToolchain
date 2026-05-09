@@ -1,6 +1,6 @@
 // Input streams -*- C++ -*-
 
-// Copyright (C) 1997-2023 Free Software Foundation, Inc.
+// Copyright (C) 1997-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -33,12 +33,18 @@
 #ifndef _GLIBCXX_ISTREAM
 #define _GLIBCXX_ISTREAM 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #include <bits/requires_hosted.h> // iostreams
 
 #include <ios>
 #include <ostream>
+
+#if __cplusplus > 202302L
+#include <concepts>
+#endif
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -193,6 +199,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       { return _M_extract(__n); }
 
 #ifdef _GLIBCXX_USE_LONG_LONG
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wlong-long"
       __istream_type&
       operator>>(long long& __n)
       { return _M_extract(__n); }
@@ -200,6 +208,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       __istream_type&
       operator>>(unsigned long long& __n)
       { return _M_extract(__n); }
+#pragma GCC diagnostic pop
 #endif
       ///@}
 
@@ -532,7 +541,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
        *    is extracted); note that this condition will never occur if
        *    @a __delim equals @c traits::eof().
        *
-       *  NB: Provide three overloads, instead of the single function
+       *  NB: Provide four overloads, instead of the single function
        *  (with defaults) mandated by the Standard: this leads to a
        *  better performing implementation, while still conforming to
        *  the Standard.
@@ -545,6 +554,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
       __istream_type&
       ignore();
+
+#if __cplusplus > 202302L
+      [[__gnu__::__always_inline__]]
+      __istream_type&
+      ignore(streamsize __n, char __delim) requires same_as<_CharT, char>
+      { return ignore(__n, traits_type::to_int_type(__delim)); }
+#endif
 
       /**
        *  @brief  Looking ahead in the stream
@@ -909,7 +925,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  __n /= sizeof(_CharT);
 	  streamsize __w = __in.width();
 	  std::__istream_extract(__in, __s, __n);
-	  if (__in.good() && (__w <= 0 || __n < __w))
+	  if (__in.good() && (__w <= 0 || __n < (size_t)__w))
 	    {
 	      // Stopped extracting early to avoid overflowing the buffer,
 	      // but might have stopped anyway (and set eofbit) if at EOF.
@@ -1069,7 +1085,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   // 2328. Rvalue stream extraction should use perfect forwarding
   // 1203. More useful rvalue stream insertion
 
-#if __cpp_lib_concepts
+#if __cpp_concepts >= 201907L && __glibcxx_type_trait_variable_templates
   template<typename _Is, typename _Tp>
     requires __derived_from_ios_base<_Is>
       && requires (_Is& __is, _Tp&& __t) { __is >> std::forward<_Tp>(__t); }

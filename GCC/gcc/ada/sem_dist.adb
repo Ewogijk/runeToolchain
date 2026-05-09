@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -25,7 +25,6 @@
 
 with Atree;          use Atree;
 with Casing;         use Casing;
-with Einfo;          use Einfo;
 with Einfo.Entities; use Einfo.Entities;
 with Einfo.Utils;    use Einfo.Utils;
 with Errout;         use Errout;
@@ -42,7 +41,6 @@ with Sem_Disp;       use Sem_Disp;
 with Sem_Eval;       use Sem_Eval;
 with Sem_Res;        use Sem_Res;
 with Sem_Util;       use Sem_Util;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Stand;          use Stand;
@@ -649,8 +647,7 @@ package body Sem_Dist is
                       Make_Defining_Identifier (Loc, Name_Ras),
                     Component_Definition =>
                       Make_Component_Definition (Loc,
-                        Aliased_Present     => False,
-                        Subtype_Indication  =>
+                        Subtype_Indication =>
                           New_Occurrence_Of (RACW_Type, Loc)))))));
 
       Set_Equivalent_Type (User_Type, Fat_Type);

@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -474,7 +474,11 @@ package body Namet is
 
             P := 1;
             while P < Temp.Length loop
-               if Temp.Chars (P + 1) in 'A' .. 'Z' then
+               --  Cheap test for the common case of no encoding
+
+               if Temp.Chars (P + 1) in 'A' .. 'Z'
+                 and then Temp.Chars (P + 1) /= 'W'
+               then
                   P := P + 1;
 
                --  Uhh encoding
@@ -1293,27 +1297,9 @@ package body Namet is
    -- Present --
    -------------
 
-   function Present (Nam : File_Name_Type) return Boolean is
-   begin
-      return Nam /= No_File;
-   end Present;
-
-   -------------
-   -- Present --
-   -------------
-
    function Present (Nam : Name_Id) return Boolean is
    begin
       return Nam /= No_Name;
-   end Present;
-
-   -------------
-   -- Present --
-   -------------
-
-   function Present (Nam : Unit_Name_Type) return Boolean is
-   begin
-      return Nam /= No_Unit_Name;
    end Present;
 
    ------------------
@@ -1519,6 +1505,17 @@ package body Namet is
    begin
       return Buf.Chars (1 .. Buf.Length);
    end To_String;
+
+   ----------------------
+   -- Unlock_If_Locked --
+   ----------------------
+
+   procedure Unlock_If_Locked is
+   begin
+      if Name_Chars.Locked then
+         Unlock;
+      end if;
+   end Unlock_If_Locked;
 
    ------------
    -- Unlock --

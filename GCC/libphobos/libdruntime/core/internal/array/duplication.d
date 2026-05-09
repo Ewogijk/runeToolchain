@@ -8,8 +8,6 @@ Source: $(DRUNTIMESRC core/internal/_array/_duplication.d)
 */
 module core.internal.array.duplication;
 
-private extern (C) void[] _d_newarrayU(const scope TypeInfo ti, size_t length) pure nothrow;
-
 U[] _dup(T, U)(scope T[] a) pure nothrow @trusted if (__traits(isPOD, T))
 {
     if (__ctfe)
@@ -22,21 +20,41 @@ U[] _dup(T, U)(scope T[] a) pure nothrow @trusted if (__traits(isPOD, T))
     else
     {
         import core.stdc.string : memcpy;
-        auto arr = _d_newarrayU(typeid(T[]), a.length);
-        memcpy(arr.ptr, cast(const(void)*) a.ptr, T.sizeof * a.length);
-        return *cast(U[]*) &arr;
+        import core.internal.array.construction: _d_newarrayUPureNothrow;
+        auto arr = _d_newarrayUPureNothrow!U(a.length, is(U == shared));
+        memcpy(cast(void*) arr.ptr, cast(const(void)*) a.ptr, T.sizeof * a.length);
+        return arr;
     }
 }
 
 U[] _dupCtfe(T, U)(scope T[] a)
 {
+    import core.internal.traits : Unqual;
+
     static if (is(T : void))
         assert(0, "Cannot dup a void[] array at compile time.");
     else
     {
         U[] res;
-        foreach (ref e; a)
-            res ~= e;
+        static if (is(T == shared SharedPayload, SharedPayload))
+        {
+            // CTFE still needs a low-level element copy path for shared POD
+            // arrays because `.dup` models the runtime bitcopy before any
+            // synchronization policy is applied to the duplicated slice.
+            Unqual!U[] tmp;
+            foreach (i; 0 .. a.length)
+                // This cast is only to make the CTFE path express the same raw
+                // element copy that the runtime POD implementation performs
+                // with memcpy; it is not meant as a synchronized access pattern
+                // for published shared data.
+                tmp ~= (cast(Unqual!T[]) a)[i];
+            res = cast(typeof(res)) tmp;
+        }
+        else
+        {
+            foreach (ref e; a)
+                res ~= e;
+        }
         return res;
     }
 }
@@ -55,8 +73,9 @@ U[] _dup(T, U)(T[] a) if (!__traits(isPOD, T))
     else
     {
         import core.lifetime: copyEmplace;
+        import core.internal.array.construction: _d_newarrayU;
         U[] res = () @trusted {
-            auto arr = cast(U*) _d_newarrayU(typeid(T[]), a.length);
+            auto arr = cast(U*) _d_newarrayU!T(a.length, is(T == shared));
             size_t i;
             scope (failure)
             {
@@ -327,9 +346,9 @@ U[] _dup(T, U)(T[] a) if (!__traits(isPOD, T))
         {
             if (l != 0xDEADBEEF)
             {
-                import core.stdc.stdio;
+                import core.stdc.stdio : fflush, printf;
                 printf("Unexpected value: %lld\n", l);
-                fflush(stdout);
+                fflush(null);
                 assert(false);
             }
         }
@@ -357,4 +376,14 @@ U[] _dup(T, U)(T[] a) if (!__traits(isPOD, T))
 
     static assert(test!Copy());
     assert(test!Copy());
+}
+
+// https://issues.dlang.org/show_bug.cgi?id=24453
+@safe unittest
+{
+    static inout(char)[] foo(return ref scope inout(char)[] s)
+    {
+        auto bla = s.idup;
+        return s;
+    }
 }

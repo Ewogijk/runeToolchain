@@ -1,4 +1,10 @@
+#![feature(no_core)]
+#![no_core]
+
 #![feature(intrinsics)]
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
 
 extern "rust-intrinsic" {
     pub fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: usize);

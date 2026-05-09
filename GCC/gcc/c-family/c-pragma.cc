@@ -1,5 +1,5 @@
 /* Handle #pragma, system V.4 style.  Supports #pragma weak and #pragma pack.
-   Copyright (C) 1992-2023 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -781,7 +781,7 @@ public:
       PK_IGNORED_ATTRIBUTES,
       PK_DIAGNOSTIC,
     } pd_kind;
-  diagnostic_t diagnostic_kind;
+  enum diagnostics::kind diagnostic_kind;
   const char *kind_str;
   const char *option_str;
   bool own_option_str;
@@ -792,7 +792,7 @@ public:
     valid = false;
     loc_kind = loc_option = UNKNOWN_LOCATION;
     pd_kind = PK_INVALID;
-    diagnostic_kind = DK_UNSPECIFIED;
+    diagnostic_kind = diagnostics::kind::unspecified;
     kind_str = option_str = nullptr;
     own_option_str = false;
   }
@@ -808,7 +808,7 @@ public:
     kind_str = kind_string;
 
     pd_kind = PK_INVALID;
-    diagnostic_kind = DK_UNSPECIFIED;
+    diagnostic_kind = diagnostics::kind::unspecified;
     if (strcmp (kind_str, "push") == 0)
       pd_kind = PK_PUSH;
     else if (strcmp (kind_str, "pop") == 0)
@@ -818,17 +818,17 @@ public:
     else if (strcmp (kind_str, "error") == 0)
       {
 	pd_kind = PK_DIAGNOSTIC;
-	diagnostic_kind = DK_ERROR;
+	diagnostic_kind = diagnostics::kind::error;
       }
     else if (strcmp (kind_str, "warning") == 0)
       {
 	pd_kind = PK_DIAGNOSTIC;
-	diagnostic_kind = DK_WARNING;
+	diagnostic_kind = diagnostics::kind::warning;
       }
     else if (strcmp (kind_str, "ignored") == 0)
       {
 	pd_kind = PK_DIAGNOSTIC;
-	diagnostic_kind = DK_IGNORED;
+	diagnostic_kind = diagnostics::kind::ignored;
       }
   }
 
@@ -840,11 +840,11 @@ public:
 
 };
 
-/* When compiling normally, use pragma_lex () to obtain the needed tokens.
-   This will call into either the C or C++ frontends as appropriate.  */
+/* This will call into either the C or C++ frontends as appropriate to get
+   tokens from libcpp for the pragma.  */
 
 static void
-pragma_diagnostic_lex_normal (pragma_diagnostic_data *result)
+pragma_diagnostic_lex (pragma_diagnostic_data *result)
 {
   result->clear ();
   tree x;
@@ -866,46 +866,6 @@ pragma_diagnostic_lex_normal (pragma_diagnostic_data *result)
   result->valid = true;
 }
 
-/* When preprocessing only, pragma_lex () is not available, so obtain the
-   tokens directly from libcpp.  We also need to inform the token streamer
-   about all tokens we lex ourselves here, so it outputs them too; this is
-   done by calling c_pp_stream_token () for each.
-
-   ???  If we need to support more pragmas in the future, maybe initialize
-   this_parser with the pragma tokens and call pragma_lex () instead?  */
-
-static void
-pragma_diagnostic_lex_pp (pragma_diagnostic_data *result)
-{
-  result->clear ();
-
-  auto tok = cpp_get_token_with_location (parse_in, &result->loc_kind);
-  c_pp_stream_token (parse_in, tok, result->loc_kind);
-  if (!(tok->type == CPP_NAME || tok->type == CPP_KEYWORD))
-    return;
-  const unsigned char *const kind_u = cpp_token_as_text (parse_in, tok);
-  result->set_kind ((const char *)kind_u);
-  if (result->pd_kind == pragma_diagnostic_data::PK_INVALID)
-    return;
-
-  if (result->needs_option ())
-    {
-      tok = cpp_get_token_with_location (parse_in, &result->loc_option);
-      c_pp_stream_token (parse_in, tok, result->loc_option);
-      if (tok->type != CPP_STRING)
-	return;
-      cpp_string str;
-      if (!cpp_interpret_string_notranslate (parse_in, &tok->val.str, 1, &str,
-					     CPP_STRING)
-	  || !str.len)
-	return;
-      result->option_str = (const char *)str.text;
-      result->own_option_str = true;
-    }
-
-  result->valid = true;
-}
-
 /* Handle #pragma GCC diagnostic.  Early mode is used by frontends (such as C++)
    that do not process the deferred pragma while they are consuming tokens; they
    can use early mode to make sure diagnostics affecting the preprocessor itself
@@ -916,10 +876,7 @@ handle_pragma_diagnostic_impl ()
   static const bool want_diagnostics = (is_pp || !early);
 
   pragma_diagnostic_data data;
-  if (is_pp)
-    pragma_diagnostic_lex_pp (&data);
-  else
-    pragma_diagnostic_lex_normal (&data);
+  pragma_diagnostic_lex (&data);
 
   if (!data.kind_str)
     {
@@ -1006,7 +963,8 @@ handle_pragma_diagnostic_impl ()
   /* option_string + 1 to skip the initial '-' */
   unsigned int option_index = find_opt (data.option_str + 1, lang_mask);
 
-  if (early && !c_option_is_from_cpp_diagnostics (option_index))
+  if (early && !(c_option_is_from_cpp_diagnostics (option_index)
+		 || option_index == OPT_Wunknown_pragmas))
     return;
 
   if (option_index == OPT_SPECIAL_unknown)
@@ -1058,7 +1016,8 @@ handle_pragma_diagnostic_impl ()
      what we used to do here before and changing it breaks e.g.
      PR69543 and PR69558.  */
   control_warning_option (option_index, (int) data.diagnostic_kind,
-			  arg, data.diagnostic_kind != DK_IGNORED,
+			  arg,
+			  data.diagnostic_kind != diagnostics::kind::ignored,
 			  input_location, lang_mask, &handlers,
 			  &global_options, &global_options_set,
 			  global_dc);
@@ -1250,7 +1209,7 @@ handle_pragma_push_options (cpp_reader *)
   token = pragma_lex (&x);
   if (token != CPP_EOF)
     {
-      warning (OPT_Wpragmas, "junk at end of %<#pragma push_options%>");
+      warning (OPT_Wpragmas, "junk at end of %<#pragma GCC push_options%>");
       return;
     }
 
@@ -1287,7 +1246,7 @@ handle_pragma_pop_options (cpp_reader *)
   token = pragma_lex (&x);
   if (token != CPP_EOF)
     {
-      warning (OPT_Wpragmas, "junk at end of %<#pragma pop_options%>");
+      warning (OPT_Wpragmas, "junk at end of %<#pragma GCC pop_options%>");
       return;
     }
 
@@ -1331,24 +1290,16 @@ handle_pragma_pop_options (cpp_reader *)
   current_optimize_pragma = p->optimize_strings;
 }
 
-/* Handle #pragma GCC reset_options to restore the current target and
-   optimization options to the original options used on the command line.  */
+/* This is mostly a helper for handle_pragma_reset_options () to do the actual
+   work, but the C++ frontend, for example, needs an external interface to
+   perform this operation, since it processes target pragmas twice.  (Once for
+   preprocessing purposes, and then again during compilation.)  */
 
-static void
-handle_pragma_reset_options (cpp_reader *)
+void
+c_reset_target_pragmas ()
 {
-  enum cpp_ttype token;
-  tree x = 0;
   tree new_optimize = optimization_default_node;
   tree new_target = target_option_default_node;
-
-  token = pragma_lex (&x);
-  if (token != CPP_EOF)
-    {
-      warning (OPT_Wpragmas, "junk at end of %<#pragma reset_options%>");
-      return;
-    }
-
   if (new_target != target_option_current_node)
     {
       (void) targetm.target_option.pragma_parse (NULL_TREE, new_target);
@@ -1366,6 +1317,19 @@ handle_pragma_reset_options (cpp_reader *)
 
   current_target_pragma = NULL_TREE;
   current_optimize_pragma = NULL_TREE;
+}
+
+/* Handle #pragma GCC reset_options to restore the current target and
+   optimization options to the original options used on the command line.  */
+
+static void
+handle_pragma_reset_options (cpp_reader *)
+{
+  tree x;
+  if (pragma_lex (&x) != CPP_EOF)
+    warning (OPT_Wpragmas, "junk at end of %<#pragma reset_options%>");
+  else
+    c_reset_target_pragmas ();
 }
 
 /* Print a plain user-specified message.  */
@@ -1524,17 +1488,15 @@ handle_pragma_float_const_decimal64 (cpp_reader *)
 
 /* A vector of registered pragma callbacks, which is never freed.   */
 
-static vec<internal_pragma_handler> registered_pragmas;
 
-struct pragma_pp_data
+struct pragma_data
 {
   const char *space;
   const char *name;
-  pragma_handler_1arg early_handler;
+  struct internal_pragma_handler ihandler;
 };
 
-
-static vec<pragma_pp_data> registered_pp_pragmas;
+static vec<pragma_data> registered_pragmas;
 
 struct omp_pragma_def { const char *name; unsigned int id; };
 static const struct omp_pragma_def oacc_pragmas[] = {
@@ -1563,9 +1525,13 @@ static const struct omp_pragma_def omp_pragmas[] = {
   { "cancellation", PRAGMA_OMP_CANCELLATION_POINT },
   { "critical", PRAGMA_OMP_CRITICAL },
   { "depobj", PRAGMA_OMP_DEPOBJ },
+  { "dispatch", PRAGMA_OMP_DISPATCH },
   { "error", PRAGMA_OMP_ERROR },
   { "end", PRAGMA_OMP_END },
   { "flush", PRAGMA_OMP_FLUSH },
+  { "groupprivate", PRAGMA_OMP_GROUPPRIVATE },
+  { "interop", PRAGMA_OMP_INTEROP },
+  { "metadirective", PRAGMA_OMP_METADIRECTIVE },
   { "nothing", PRAGMA_OMP_NOTHING },
   { "requires", PRAGMA_OMP_REQUIRES },
   { "scope", PRAGMA_OMP_SCOPE },
@@ -1593,6 +1559,8 @@ static const struct omp_pragma_def omp_pragmas_simd[] = {
   { "target", PRAGMA_OMP_TARGET },
   { "taskloop", PRAGMA_OMP_TASKLOOP },
   { "teams", PRAGMA_OMP_TEAMS },
+  { "tile", PRAGMA_OMP_TILE },
+  { "unroll", PRAGMA_OMP_UNROLL },
 };
 
 void
@@ -1600,8 +1568,7 @@ c_pp_lookup_pragma (unsigned int id, const char **space, const char **name)
 {
   const int n_oacc_pragmas = ARRAY_SIZE (oacc_pragmas);
   const int n_omp_pragmas = ARRAY_SIZE (omp_pragmas);
-  const int n_omp_pragmas_simd = sizeof (omp_pragmas_simd)
-				 / sizeof (*omp_pragmas);
+  const int n_omp_pragmas_simd = ARRAY_SIZE (omp_pragmas_simd);
   int i;
 
   for (i = 0; i < n_oacc_pragmas; ++i)
@@ -1629,10 +1596,10 @@ c_pp_lookup_pragma (unsigned int id, const char **space, const char **name)
       }
 
   if (id >= PRAGMA_FIRST_EXTERNAL
-      && (id < PRAGMA_FIRST_EXTERNAL + registered_pp_pragmas.length ()))
+      && (id < PRAGMA_FIRST_EXTERNAL + registered_pragmas.length ()))
     {
-      *space = registered_pp_pragmas[id - PRAGMA_FIRST_EXTERNAL].space;
-      *name = registered_pp_pragmas[id - PRAGMA_FIRST_EXTERNAL].name;
+      *space = registered_pragmas[id - PRAGMA_FIRST_EXTERNAL].space;
+      *name = registered_pragmas[id - PRAGMA_FIRST_EXTERNAL].name;
       return;
     }
 
@@ -1648,31 +1615,24 @@ c_register_pragma_1 (const char *space, const char *name,
 {
   unsigned id;
 
-  if (flag_preprocess_only)
-    {
-      if (cpp_get_options (parse_in)->directives_only
-	  || !(allow_expansion || ihandler.early_handler.handler_1arg))
-	return;
+  pragma_data data;
+  data.space = space;
+  data.name = name;
 
-      pragma_pp_data pp_data;
-      pp_data.space = space;
-      pp_data.name = name;
-      pp_data.early_handler = ihandler.early_handler.handler_1arg;
-      registered_pp_pragmas.safe_push (pp_data);
-      id = registered_pp_pragmas.length ();
-      id += PRAGMA_FIRST_EXTERNAL - 1;
-    }
-  else
-    {
-      registered_pragmas.safe_push (ihandler);
-      id = registered_pragmas.length ();
-      id += PRAGMA_FIRST_EXTERNAL - 1;
+  if (flag_preprocess_only
+      && (cpp_get_options (parse_in)->directives_only
+	|| !(allow_expansion || ihandler.early_handler.handler_1arg)))
+    return;
 
-      /* The C front end allocates 8 bits in c_token.  The C++ front end
-	 keeps the pragma kind in the form of INTEGER_CST, so no small
-	 limit applies.  At present this is sufficient.  */
-      gcc_assert (id < 256);
-    }
+  data.ihandler = ihandler;
+  registered_pragmas.safe_push (data);
+  id = registered_pragmas.length ();
+  id += PRAGMA_FIRST_EXTERNAL - 1;
+
+  /* The C front end allocates 8 bits in c_token.  The C++ front end
+     keeps the pragma kind in the form of INTEGER_CST, so no small
+     limit applies.  At present this is sufficient.  */
+  gcc_assert (id < 256);
 
   cpp_register_deferred_pragma (parse_in, space, name, id,
 				allow_expansion, false);
@@ -1766,7 +1726,7 @@ c_invoke_pragma_handler (unsigned int id)
   pragma_handler_2arg handler_2arg;
 
   id -= PRAGMA_FIRST_EXTERNAL;
-  ihandler = &registered_pragmas[id];
+  ihandler = &registered_pragmas[id].ihandler;
   if (ihandler->extra_data)
     {
       handler_2arg = ihandler->handler.handler_2arg;
@@ -1788,7 +1748,7 @@ c_invoke_early_pragma_handler (unsigned int id)
   pragma_handler_2arg handler_2arg;
 
   id -= PRAGMA_FIRST_EXTERNAL;
-  ihandler = &registered_pragmas[id];
+  ihandler = &registered_pragmas[id].ihandler;
   if (ihandler->extra_data)
     {
       handler_2arg = ihandler->early_handler.handler_2arg;
@@ -1806,9 +1766,13 @@ c_invoke_early_pragma_handler (unsigned int id)
 void
 c_pp_invoke_early_pragma_handler (unsigned int id)
 {
-  const auto data = &registered_pp_pragmas[id - PRAGMA_FIRST_EXTERNAL];
-  if (data->early_handler)
-    data->early_handler (parse_in);
+  const auto data = &registered_pragmas[id - PRAGMA_FIRST_EXTERNAL];
+  pragma_handler_1arg handler = data->ihandler.early_handler.handler_1arg;
+  if (handler)
+    {
+      handler (parse_in);
+      pragma_lex_discard_to_eol ();
+    }
 }
 
 /* Set up front-end pragmas.  */
@@ -1839,8 +1803,7 @@ init_pragma (void)
 	}
       if (flag_openmp || flag_openmp_simd)
 	{
-	  const int n_omp_pragmas_simd
-	    = sizeof (omp_pragmas_simd) / sizeof (*omp_pragmas);
+	  const int n_omp_pragmas_simd = ARRAY_SIZE (omp_pragmas_simd);
 	  int i;
 
 	  for (i = 0; i < n_omp_pragmas_simd; ++i)
@@ -1862,6 +1825,10 @@ init_pragma (void)
     cpp_register_deferred_pragma (parse_in, "GCC", "unroll", PRAGMA_UNROLL,
 				  false, false);
 
+  if (!flag_preprocess_only)
+    cpp_register_deferred_pragma (parse_in, "GCC", "novector", PRAGMA_NOVECTOR,
+				  false, false);
+
 #ifdef HANDLE_PRAGMA_PACK_WITH_EXPANSION
   c_register_pragma_with_expansion (0, "pack", handle_pragma_pack);
 #else
@@ -1879,11 +1846,21 @@ init_pragma (void)
     c_register_pragma_with_early_handler ("GCC", "diagnostic",
 					  handle_pragma_diagnostic,
 					  handle_pragma_diagnostic_early);
-  c_register_pragma ("GCC", "target", handle_pragma_target);
-  c_register_pragma ("GCC", "optimize", handle_pragma_optimize);
-  c_register_pragma ("GCC", "push_options", handle_pragma_push_options);
-  c_register_pragma ("GCC", "pop_options", handle_pragma_pop_options);
-  c_register_pragma ("GCC", "reset_options", handle_pragma_reset_options);
+  c_register_pragma_with_early_handler ("GCC", "target",
+					handle_pragma_target,
+					handle_pragma_target);
+  c_register_pragma_with_early_handler ("GCC", "optimize",
+					handle_pragma_optimize,
+					handle_pragma_optimize);
+  c_register_pragma_with_early_handler ("GCC", "push_options",
+					handle_pragma_push_options,
+					handle_pragma_push_options);
+  c_register_pragma_with_early_handler ("GCC", "pop_options",
+					handle_pragma_pop_options,
+					handle_pragma_pop_options);
+  c_register_pragma_with_early_handler ("GCC", "reset_options",
+					handle_pragma_reset_options,
+					handle_pragma_reset_options);
 
   c_register_pragma (0, "region", handle_pragma_ignore);
   c_register_pragma (0, "endregion", handle_pragma_ignore);
@@ -1901,7 +1878,7 @@ init_pragma (void)
 #endif
 
   global_sso = default_sso;
-  c_register_pragma (0, "scalar_storage_order", 
+  c_register_pragma (0, "scalar_storage_order",
 		     handle_pragma_scalar_storage_order);
 
   /* Allow plugins to register their own pragmas. */

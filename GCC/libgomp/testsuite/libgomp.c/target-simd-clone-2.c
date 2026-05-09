@@ -1,5 +1,6 @@
 /* { dg-do link { target { offload_target_amdgcn } } } */
 /* { dg-additional-options "-foffload-options=-fdump-ipa-simdclone-details -foffload-options=-fno-openmp-target-simd-clone" } */
+/* { dg-additional-options -Wno-deprecated-openmp } */
 
 /* Test that simd clones for the offload processor are not generated for
    functions with "declare target" when explicitly disabled.  */
@@ -36,4 +37,4 @@ int main (void)
   return 0;
 }
 
-/* { dg-final { scan-offload-ipa-dump-not "Generated .* clone" "simdclone" } } */
+/* { dg-final { only_for_offload_target amdgcn-amdhsa scan-offload-ipa-dump-not "Generated .* clone" "simdclone" } } */

@@ -1,3 +1,10 @@
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
+
 pub enum Either<L, R> {
     Left(L),
     Right(R),

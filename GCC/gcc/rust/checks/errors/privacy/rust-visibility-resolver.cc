@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -20,12 +20,14 @@
 #include "rust-ast.h"
 #include "rust-hir.h"
 #include "rust-hir-item.h"
+#include "rust-name-resolution-context.h"
 
 namespace Rust {
 namespace Privacy {
 
-VisibilityResolver::VisibilityResolver (Analysis::Mappings &mappings,
-					Resolver::Resolver &resolver)
+VisibilityResolver::VisibilityResolver (
+  Analysis::Mappings &mappings,
+  const Resolver2_0::NameResolutionContext &resolver)
   : mappings (mappings), resolver (resolver)
 {}
 
@@ -37,7 +39,7 @@ VisibilityResolver::go (HIR::Crate &crate)
 
   current_module = crate.get_mappings ().get_defid ();
 
-  for (auto &item : crate.items)
+  for (auto &item : crate.get_items ())
     {
       if (item->get_hir_kind () == HIR::Node::VIS_ITEM)
 	{
@@ -60,8 +62,12 @@ VisibilityResolver::resolve_module_path (const HIR::SimplePath &restriction,
     = Error (restriction.get_locus (),
 	     "cannot use non-module path as privacy restrictor");
 
-  NodeId ref_node_id = UNKNOWN_NODEID;
-  if (!resolver.lookup_resolved_name (ast_node_id, &ref_node_id))
+  NodeId ref_node_id;
+  if (auto id = resolver.lookup (ast_node_id))
+    {
+      ref_node_id = *id;
+    }
+  else
     {
       invalid_path.emit ();
       return false;
@@ -71,20 +77,29 @@ VisibilityResolver::resolve_module_path (const HIR::SimplePath &restriction,
   // TODO: For the hint, can we point to the original item's definition if
   // present?
 
-  HirId ref;
-  rust_assert (mappings.lookup_node_to_hir (ref_node_id, &ref));
+  tl::optional<HirId> hid = mappings.lookup_node_to_hir (ref_node_id);
+  rust_assert (hid.has_value ());
+  auto ref = hid.value ();
 
-  auto module = mappings.lookup_module (ref);
-  if (!module)
+  auto crate = mappings.get_ast_crate (mappings.get_current_crate ());
+
+  // we may be dealing with pub(crate)
+  if (ref_node_id == crate.get_node_id ())
+    // FIXME: What do we do here? There isn't a DefId for the Crate, so can we
+    // actually do anything?
+    // We basically want to return true always but just when exporting export
+    // these items as private?
+    return true;
+
+  if (auto module = mappings.lookup_module (ref))
     {
-      invalid_path.emit ();
-      return false;
+      // Fill in the resolved `DefId`
+      id = module.value ()->get_mappings ().get_defid ();
+
+      return true;
     }
-
-  // Fill in the resolved `DefId`
-  id = module->get_mappings ().get_defid ();
-
-  return true;
+  invalid_path.emit ();
+  return false;
 }
 
 bool
@@ -99,7 +114,8 @@ VisibilityResolver::resolve_visibility (const HIR::Visibility &visibility,
     case HIR::Visibility::PUBLIC:
       to_resolve = ModuleVisibility::create_public ();
       return true;
-      case HIR::Visibility::RESTRICTED: {
+    case HIR::Visibility::RESTRICTED:
+      {
 	// FIXME: We also need to handle 2015 vs 2018 edition conflicts
 	auto id = UNKNOWN_DEFID;
 	auto result = resolve_module_path (visibility.get_path (), id);
@@ -107,7 +123,7 @@ VisibilityResolver::resolve_visibility (const HIR::Visibility &visibility,
 	return result;
       }
     default:
-      gcc_unreachable ();
+      rust_unreachable ();
       return false;
     }
 }
@@ -230,7 +246,7 @@ VisibilityResolver::visit (HIR::ImplBlock &impl)
 	  vis_item = static_cast<HIR::ConstantItem *> (item.get ());
 	  break;
 	default:
-	  gcc_unreachable ();
+	  rust_unreachable ();
 	  return;
 	}
       vis_item->accept_vis (*this);

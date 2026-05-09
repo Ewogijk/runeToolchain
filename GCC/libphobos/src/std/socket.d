@@ -15,7 +15,7 @@
 
 /**
  * Socket primitives.
- * Example: See $(SAMPLESRC listener.d) and $(SAMPLESRC htmlget.d)
+ * Example: See [listener.d](https://github.com/dlang/undeaD/blob/master/dmdsamples/listener.d) and [htmlget.d](https://github.com/dlang/undeaD/blob/master/dmdsamples/htmlget.d)
  * License: $(HTTP www.boost.org/LICENSE_1_0.txt, Boost License 1.0).
  * Authors: Christopher E. Miller, $(HTTP klickverbot.at, David Nadlinger),
  *      $(HTTP thecybershadow.net, Vladimir Panteleev)
@@ -54,6 +54,12 @@ version (Windows)
     enum socket_t : SOCKET { INVALID_SOCKET }
     private const int _SOCKET_ERROR = SOCKET_ERROR;
 
+    /**
+     * On Windows, there is no `SO_REUSEPORT`.
+     * However, `SO_REUSEADDR` is equivalent to `SO_REUSEPORT` there.
+     * $(LINK https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse)
+     */
+    private enum SO_REUSEPORT = SO_REUSEADDR;
 
     private int _lasterr() nothrow @nogc
     {
@@ -181,16 +187,13 @@ string formatSocketError(int err) @trusted
         return "Socket error " ~ to!string(err);
 }
 
-/// Retrieve the error message for the most recently encountered network error.
+/// Returns the error message of the most recently encountered network error.
 @property string lastSocketError()
 {
     return formatSocketError(_lasterr());
 }
 
-/**
- * Socket exceptions representing network errors reported by the operating
- * system.
- */
+/// Socket exception representing network errors reported by the operating system.
 class SocketOSException: SocketException
 {
     int errorCode;     /// Platform-specific error code.
@@ -234,14 +237,14 @@ class SocketOSException: SocketException
     }
 }
 
-/// Socket exceptions representing invalid parameters specified by user code.
+/// Socket exception representing invalid parameters specified by user code.
 class SocketParameterException: SocketException
 {
     mixin basicExceptionCtors;
 }
 
 /**
- * Socket exceptions representing attempts to use network capabilities not
+ * Socket exception representing attempts to use network capabilities not
  * available on the current system.
  */
 class SocketFeatureException: SocketException
@@ -254,7 +257,7 @@ class SocketFeatureException: SocketException
  * Returns:
  * `true` if the last socket operation failed because the socket
  * was in non-blocking mode and the operation would have blocked,
- * or if the socket is in blocking mode and set a SNDTIMEO or RCVTIMEO,
+ * or if the socket is in blocking mode and set a `SNDTIMEO` or `RCVTIMEO`,
  * and the operation timed out.
  */
 bool wouldHaveBlocked() nothrow @nogc
@@ -334,7 +337,7 @@ shared static ~this() @system nothrow @nogc
 enum AddressFamily: ushort
 {
     UNSPEC =     AF_UNSPEC,     /// Unspecified address family
-    UNIX =       AF_UNIX,       /// Local communication
+    UNIX =       AF_UNIX,       /// Local communication (Unix socket)
     INET =       AF_INET,       /// Internet Protocol version 4
     IPX =        AF_IPX,        /// Novell IPX
     APPLETALK =  AF_APPLETALK,  /// AppleTalk
@@ -374,7 +377,7 @@ enum ProtocolType: int
 
 
 /**
- * `Protocol` is a class for retrieving protocol information.
+ * Class for retrieving protocol information.
  *
  * Example:
  * ---
@@ -473,7 +476,7 @@ version (CRuntime_Bionic) {} else
 
 
 /**
- * `Service` is a class for retrieving service information.
+ * Class for retrieving service information.
  *
  * Example:
  * ---
@@ -618,7 +621,7 @@ class HostException: SocketOSException
 }
 
 /**
- * `InternetHost` is a class for resolving IPv4 addresses.
+ * Class for resolving IPv4 addresses.
  *
  * Consider using `getAddress`, `parseAddress` and `Address` methods
  * instead of using this class directly.
@@ -705,7 +708,7 @@ class InternetHost
         // must synchronize across all threads
         private bool getHost(string opMixin, T)(T param) @system
         {
-            synchronized(this.classinfo)
+            synchronized(typeid(this))
                 return getHostNoSync!(opMixin, T)(param);
         }
     }
@@ -1119,7 +1122,7 @@ Address[] getAddress(scope const(char)[] hostname, ushort port)
             // test via gethostbyname
             auto getaddrinfoPointerBackup = getaddrinfoPointer;
             cast() getaddrinfoPointer = null;
-            scope(exit) cast() getaddrinfoPointer = getaddrinfoPointerBackup;
+            scope(exit) () @trusted { cast() getaddrinfoPointer = getaddrinfoPointerBackup; }();
 
             addresses = getAddress("63.105.9.61");
             assert(addresses.length && addresses[0].toAddrString() == "63.105.9.61");
@@ -1199,7 +1202,7 @@ Address parseAddress(scope const(char)[] hostaddr, ushort port)
             // test via inet_addr
             auto getaddrinfoPointerBackup = getaddrinfoPointer;
             cast() getaddrinfoPointer = null;
-            scope(exit) cast() getaddrinfoPointer = getaddrinfoPointerBackup;
+            scope(exit) () @trusted { cast() getaddrinfoPointer = getaddrinfoPointerBackup; }();
 
             address = parseAddress("63.105.9.61");
             assert(address.toAddrString() == "63.105.9.61");
@@ -1220,7 +1223,7 @@ class AddressException: SocketOSException
 
 
 /**
- * `Address` is an abstract class for representing a socket addresses.
+ * Abstract class for representing a socket address.
  *
  * Example:
  * ---
@@ -1281,7 +1284,7 @@ abstract class Address
         // libraries shipped with DMD. Thus, we check for getnameinfo at
         // runtime in the shared module constructor, and use it if it's
         // available in the base class method. Classes for specific network
-        // families (e.g. InternetHost) override this method and use a
+        // families (e.g. InternetAddress) override this method and use a
         // deprecated, albeit commonly-available method when getnameinfo()
         // is not available.
         // http://technet.microsoft.com/en-us/library/aa450403.aspx
@@ -1402,7 +1405,7 @@ abstract class Address
 }
 
 /**
- * `UnknownAddress` encapsulates an unknown socket address.
+ * Encapsulates an unknown socket address.
  */
 class UnknownAddress: Address
 {
@@ -1431,7 +1434,7 @@ public:
 
 
 /**
- * `UnknownAddressReference` encapsulates a reference to an arbitrary
+ * Encapsulates a reference to an arbitrary
  * socket address.
  */
 class UnknownAddressReference: Address
@@ -1474,8 +1477,7 @@ public:
 
 
 /**
- * `InternetAddress` encapsulates an IPv4 (Internet Protocol version 4)
- * socket address.
+ * Encapsulates an IPv4 (Internet Protocol version 4) socket address.
  *
  * Consider using `getAddress`, `parseAddress` and `Address` methods
  * instead of using this class directly.
@@ -1624,7 +1626,8 @@ public:
     }
 
     /**
-     * Compares with another InternetAddress of same type for equality
+     * Provides support for comparing equality with another
+     * InternetAddress of the same type.
      * Returns: true if the InternetAddresses share the same address and
      * port number.
      */
@@ -1701,7 +1704,7 @@ public:
                 // test reverse lookup, via gethostbyaddr
                 auto getnameinfoPointerBackup = getnameinfoPointer;
                 cast() getnameinfoPointer = null;
-                scope(exit) cast() getnameinfoPointer = getnameinfoPointerBackup;
+                scope(exit) () @trusted { cast() getnameinfoPointer = getnameinfoPointerBackup; }();
 
                 assert(ia.toHostNameString() == "digitalmars.com");
             }
@@ -1719,7 +1722,7 @@ public:
             // test failing reverse lookup, via gethostbyaddr
             auto getnameinfoPointerBackup = getnameinfoPointer;
             cast() getnameinfoPointer = null;
-            scope(exit) cast() getnameinfoPointer = getnameinfoPointerBackup;
+            scope(exit) () @trusted { cast() getnameinfoPointer = getnameinfoPointerBackup; }();
 
             assert(ia.toHostNameString() is null);
         }
@@ -1728,8 +1731,7 @@ public:
 
 
 /**
- * `Internet6Address` encapsulates an IPv6 (Internet Protocol version 6)
- * socket address.
+ * Encapsulates an IPv6 (Internet Protocol version 6) socket address.
  *
  * Consider using `getAddress`, `parseAddress` and `Address` methods
  * instead of using this class directly.
@@ -1861,6 +1863,19 @@ public:
         sin6 = addr;
     }
 
+    version (Posix)
+    {
+        /// Human readable string representing the IPv6 address in RFC 2373 form.
+        override string toAddrString() @trusted const
+        {
+            char[INET6_ADDRSTRLEN] buf;
+            string addrString = to!string(
+                .inet_ntop(AddressFamily.INET6, &sin6.sin6_addr, buf.ptr, INET6_ADDRSTRLEN)
+            );
+            return addrString;
+        }
+    }
+
    /**
      * Parse an IPv6 host address string as described in RFC 2373, and return the
      * address.
@@ -1913,8 +1928,8 @@ version (StdDdoc)
     }
 
     /**
-     * `UnixAddress` encapsulates an address for a Unix domain socket
-     * (`AF_UNIX`), i.e. a socket bound to a path name in the file system.
+     * Encapsulates an address for a Unix domain socket (`AF_UNIX`),
+     * i.e. a socket bound to a path name in the file system.
      * Available only on supported systems.
      *
      * Linux also supports an abstract address namespace, in which addresses
@@ -1929,7 +1944,7 @@ version (StdDdoc)
      * auto abstractAddr = new UnixAddress("\0/tmp/dbus-OtHLWmCLPR");
      * ---
      *
-     * See_Also: $(HTTP http://man7.org/linux/man-pages/man7/unix.7.html, UNIX(7))
+     * See_Also: $(HTTP man7.org/linux/man-pages/man7/unix.7.html, UNIX(7))
      */
     class UnixAddress: Address
     {
@@ -2111,7 +2126,7 @@ static if (is(sockaddr_un))
 
 
 /**
- * Class for exceptions thrown by `Socket.accept`.
+ * Exception thrown by `Socket.accept`.
  */
 class SocketAcceptException: SocketOSException
 {
@@ -2127,7 +2142,7 @@ enum SocketShutdown: int
 }
 
 
-/// Flags may be OR'ed together:
+/// Socket flags that may be OR'ed together:
 enum SocketFlags: int
 {
     NONE =       0,                 /// no flags specified
@@ -2593,6 +2608,22 @@ enum SocketOption: int
     DEBUG =                SO_DEBUG,            /// Record debugging information
     BROADCAST =            SO_BROADCAST,        /// Allow transmission of broadcast messages
     REUSEADDR =            SO_REUSEADDR,        /// Allow local reuse of address
+    /**
+     * Allow local reuse of port
+     *
+     * On Windows, this is equivalent to `SocketOption.REUSEADDR`.
+     * There is in fact no option named `REUSEPORT`.
+     * However, `SocketOption.REUSEADDR` matches the behavior of
+     * `SocketOption.REUSEPORT` on other platforms. Further details on this
+     * topic can be found here:
+     * $(LINK https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse)
+     *
+     * On Linux, this ensures fair distribution of incoming connections accross threads.
+     *
+     * See_Also:
+     *   https://lwn.net/Articles/542629/
+     */
+    REUSEPORT =            SO_REUSEPORT,
     LINGER =               SO_LINGER,           /// Linger on close if unsent data is present
     OOBINLINE =            SO_OOBINLINE,        /// Receive out-of-band data in band
     SNDBUF =               SO_SNDBUF,           /// Send buffer size
@@ -2622,7 +2653,7 @@ enum SocketOption: int
 
 
 /**
- * `Socket` is a class that creates a network communication endpoint using
+ * Class that creates a network communication endpoint using
  * the Berkeley sockets interface.
  */
 class Socket
@@ -2935,6 +2966,43 @@ public:
         return newSocket;
     }
 
+    /**
+     * Accept an incoming connection and retrieve the peer `Address`. If the
+     * socket is blocking, `accept` waits for a connection request. Throws
+     * `SocketAcceptException` if unable to _accept. See `accepting` for use
+     * with derived classes.
+     */
+    Socket accept(out Address peerAddress) @trusted
+    {
+        Address addr = createAddress();
+        socklen_t nameLen = addr.nameLen;
+        auto newsock = cast(socket_t).accept(sock, addr.name, &nameLen);
+        if (socket_t.init == newsock)
+            throw new SocketAcceptException("Unable to accept socket connection");
+
+        addr.setNameLen(nameLen);
+        peerAddress = addr;
+
+        Socket newSocket;
+        try
+        {
+            newSocket = accepting();
+            assert(newSocket.sock == socket_t.init);
+
+            newSocket.setSock(newsock);
+            version (Windows)
+                newSocket._blocking = _blocking;                 //inherits blocking mode
+            newSocket._family = _family;             //same family
+        }
+        catch (Throwable o)
+        {
+            _close(newsock);
+            throw o;
+        }
+
+        return newSocket;
+    }
+
     /// Disables sends and/or receives.
     void shutdown(SocketShutdown how) @trusted nothrow @nogc
     {
@@ -2969,7 +3037,7 @@ public:
 
 
     /**
-     * Returns: the local machine's host name
+     * Returns: The local machine's host name
      */
     static @property string hostName() @trusted     // getter
     {
@@ -3492,7 +3560,7 @@ public:
             if (checkError) checkError.setMinCapacity(n);
         }
 
-        int result = .select(n, fr, fw, fe, &timeout.ctimeval);
+        int result = .select(n, fr, fw, fe, timeout !is null ? &timeout.ctimeval : null);
 
         version (Windows)
         {
@@ -3518,7 +3586,7 @@ public:
 
     /**
      * Can be overridden to support other addresses.
-     * Returns: a new `Address` object for the current address family.
+     * Returns: A new `Address` object for the current address family.
      */
     protected Address createAddress() pure nothrow
     {
@@ -3549,7 +3617,7 @@ public:
 }
 
 
-/// `TcpSocket` is a shortcut class for a TCP Socket.
+/// Shortcut class for a TCP Socket.
 class TcpSocket: Socket
 {
     /// Constructs a blocking TCP Socket.
@@ -3566,7 +3634,7 @@ class TcpSocket: Socket
 
 
     //shortcut
-    /// Constructs a blocking TCP Socket and connects to an `Address`.
+    /// Constructs a blocking TCP Socket and connects to the given `Address`.
     this(Address connectTo)
     {
         this(connectTo.addressFamily);
@@ -3575,7 +3643,7 @@ class TcpSocket: Socket
 }
 
 
-/// `UdpSocket` is a shortcut class for a UDP Socket.
+/// Shortcut class for a UDP Socket.
 class UdpSocket: Socket
 {
     /// Constructs a blocking UDP Socket.
@@ -3653,6 +3721,10 @@ class UdpSocket: Socket
                 checkAttributes!q{pure nothrow @safe}; assert(0);
             }
             @trusted Socket accept()
+            {
+                checkAttributes!q{@trusted}; assert(0);
+            }
+            @trusted Socket accept(out Address peerAddress)
             {
                 checkAttributes!q{@trusted}; assert(0);
             }
@@ -3827,4 +3899,27 @@ Socket[2] socketPair() @trusted
     auto buf = new ubyte[data.length];
     pair[1].receive(buf);
     assert(buf == data);
+}
+
+// Test accept with peer address
+@safe unittest
+{
+    auto listener = new TcpSocket();
+    scope(exit) listener.close();
+    listener.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
+    listener.bind(new InternetAddress(INADDR_LOOPBACK, InternetAddress.PORT_ANY));
+    auto serverAddr = listener.localAddress;
+    listener.listen(1);
+
+    auto client = new TcpSocket(serverAddr);
+    scope(exit) client.close();
+
+    Address peerAddress;
+    auto server = listener.accept(peerAddress);
+    scope(exit) server.close();
+
+    assert(peerAddress !is null);
+    assert(peerAddress.addressFamily == AddressFamily.INET);
+    // The peer address should match the client's local address
+    assert(peerAddress.toAddrString() == client.localAddress.toAddrString());
 }

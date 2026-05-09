@@ -1,5 +1,5 @@
 /* Definitions of various defaults for tm.h macros.
-   Copyright (C) 1992-2023 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
    Contributed by Ron Guilmette (rfg@monkeys.com)
 
 This file is part of GCC.
@@ -150,7 +150,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 
 #ifndef ASM_OUTPUT_FUNCTION_LABEL
 #define ASM_OUTPUT_FUNCTION_LABEL(FILE, NAME, DECL) \
-  ASM_OUTPUT_LABEL ((FILE), (NAME))
+  assemble_function_label_raw ((FILE), (NAME))
 #endif
 
 /* Output the definition of a compiler-generated label named NAME.  */
@@ -390,7 +390,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 /* Provide defaults for stuff that may not be defined when using
    sjlj exceptions.  */
 #ifndef EH_RETURN_DATA_REGNO
-#define EH_RETURN_DATA_REGNO(N) INVALID_REGNUM
+#define EH_RETURN_DATA_REGNO(N) (void (N), INVALID_REGNUM)
 #endif
 
 /* Offset between the eh handler address and entry in eh tables.  */
@@ -511,18 +511,6 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 
 #ifndef WCHAR_TYPE_SIZE
 #define WCHAR_TYPE_SIZE INT_TYPE_SIZE
-#endif
-
-#ifndef FLOAT_TYPE_SIZE
-#define FLOAT_TYPE_SIZE BITS_PER_WORD
-#endif
-
-#ifndef DOUBLE_TYPE_SIZE
-#define DOUBLE_TYPE_SIZE (BITS_PER_WORD * 2)
-#endif
-
-#ifndef LONG_DOUBLE_TYPE_SIZE
-#define LONG_DOUBLE_TYPE_SIZE (BITS_PER_WORD * 2)
 #endif
 
 #ifndef DECIMAL32_TYPE_SIZE
@@ -877,6 +865,20 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 #endif
 #endif
 
+/* Indicate whether the target uses "target" attributes for function
+   multiversioning.  This is used to choose between the "target" and
+   "target_version" attributes when expanding a "target_clones" attribute, and
+   determine whether the "target" and "target_clones" attributes are mutually
+   exclusive.  */
+#ifndef TARGET_HAS_FMV_TARGET_ATTRIBUTE
+#define TARGET_HAS_FMV_TARGET_ATTRIBUTE 1
+#endif
+
+/* Select a attribute separator for function multiversioning.  */
+#ifndef TARGET_CLONES_ATTR_SEPARATOR
+#define TARGET_CLONES_ATTR_SEPARATOR ','
+#endif
+
 /* Select a format to encode pointers in exception handling data.  We
    prefer those that result in fewer dynamic relocations.  Assume no
    special support here and encode direct references.  */
@@ -1156,7 +1158,7 @@ see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
 #endif
 
 #ifndef MAX_FIXED_MODE_SIZE
-#define MAX_FIXED_MODE_SIZE GET_MODE_BITSIZE (DImode)
+#define MAX_FIXED_MODE_SIZE MAX (BITS_PER_WORD * 2, 64)
 #endif
 
 /* Nonzero if structures and unions should be returned in memory.

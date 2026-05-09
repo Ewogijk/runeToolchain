@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -20,26 +20,28 @@
 #define RUST_HIR_LOWER
 
 #include "rust-system.h"
-#include "rust-ast-full.h"
-#include "rust-ast-visitor.h"
-#include "rust-hir-full.h"
+#include "rust-ast-full-decls.h"
+#include "rust-hir-full-decls.h"
 
 namespace Rust {
 namespace HIR {
 
 /* Checks whether the name of a field already exists.  Returns true
    and produces an error if so.  */
-bool
-struct_field_name_exists (std::vector<HIR::StructField> &fields,
-			  HIR::StructField &new_field);
+bool struct_field_name_exists (std::vector<HIR::StructField> &fields,
+			       HIR::StructField &new_field);
 
 /**
  * Lowers a Visibility from the AST into an HIR Visibility, desugaring it in
  * the process
  */
-Visibility
-translate_visibility (const AST::Visibility &vis);
+Visibility translate_visibility (const AST::Visibility &vis);
 
+/**
+ * Main base class used for lowering AST to HIR.
+ *
+ * Every subclass should provide a translate() method that takes an AST node and
+ * lowers it to some HIR stored in the TRANSLATED member. */
 class ASTLowering
 {
 public:

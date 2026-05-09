@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -28,9 +28,39 @@ namespace Resolver {
 class UnifyRules
 {
 public:
+  struct InferenceSite
+  {
+    InferenceSite (HirId pref, HirId ptyref, TyTy::BaseGeneric *param,
+		   TyTy::BaseType *infer)
+      : pref (pref), ptyref (ptyref), param (param), infer (infer)
+    {}
+
+    HirId pref;
+    HirId ptyref;
+    TyTy::BaseGeneric *param;
+    TyTy::BaseType *infer;
+  };
+  struct CommitSite
+  {
+    CommitSite (TyTy::BaseType *lhs, TyTy::BaseType *rhs,
+		TyTy::BaseType *resolved)
+      : lhs (lhs), rhs (rhs), resolved (resolved)
+    {}
+
+    TyTy::BaseType *lhs;
+    TyTy::BaseType *rhs;
+    TyTy::BaseType *resolved;
+  };
+
   static TyTy::BaseType *Resolve (TyTy::TyWithLocation lhs,
-				  TyTy::TyWithLocation rhs, Location locus,
-				  bool commit_flag, bool emit_error);
+				  TyTy::TyWithLocation rhs, location_t locus,
+				  bool commit_flag, bool emit_error, bool infer,
+				  bool check_bounds,
+				  std::vector<CommitSite> &commits,
+				  std::vector<InferenceSite> &infers);
+
+  static void commit (TyTy::BaseType *base, TyTy::BaseType *other,
+		      TyTy::BaseType *resolved);
 
 protected:
   TyTy::BaseType *expect_inference_variable (TyTy::InferType *ltype,
@@ -63,13 +93,24 @@ protected:
 			      TyTy::BaseType *rtype);
   TyTy::BaseType *expect_closure (TyTy::ClosureType *ltype,
 				  TyTy::BaseType *rtype);
+  TyTy::BaseType *expect_opaque (TyTy::OpaqueType *ltype,
+				 TyTy::BaseType *rtype);
+  TyTy::BaseType *expect_const (TyTy::BaseConstType *ltype,
+				TyTy::BaseType *rtype);
 
 private:
   UnifyRules (TyTy::TyWithLocation lhs, TyTy::TyWithLocation rhs,
-	      Location locus, bool commit_flag, bool emit_error);
+	      location_t locus, bool commit_flag, bool emit_error, bool infer,
+	      bool check_bounds, std::vector<CommitSite> &commits,
+	      std::vector<InferenceSite> &infers);
+
+  TyTy::BaseType *resolve_subtype (TyTy::TyWithLocation lhs,
+				   TyTy::TyWithLocation rhs);
 
   void emit_type_mismatch () const;
-  void commit (TyTy::BaseType *resolved);
+  void emit_abi_mismatch (const TyTy::FnType &expected,
+			  const TyTy::FnType &got) const;
+
   TyTy::BaseType *go ();
 
   TyTy::BaseType *get_base ();
@@ -77,9 +118,13 @@ private:
 
   TyTy::TyWithLocation lhs;
   TyTy::TyWithLocation rhs;
-  Location locus;
+  location_t locus;
   bool commit_flag;
   bool emit_error;
+  bool infer_flag;
+  bool check_bounds_flag;
+  std::vector<CommitSite> &commits;
+  std::vector<InferenceSite> &infers;
 
   Analysis::Mappings &mappings;
   TypeCheckContext &context;

@@ -1,5 +1,5 @@
 /* Command line option handling.
-   Copyright (C) 2006-2023 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -18,6 +18,7 @@ along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
 #define INCLUDE_STRING
+#define INCLUDE_VECTOR
 #include "config.h"
 #include "system.h"
 #include "intl.h"
@@ -25,6 +26,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "opts.h"
 #include "options.h"
 #include "diagnostic.h"
+#include "opts-diagnostic.h"
 #include "spellcheck.h"
 #include "opts-jobserver.h"
 
@@ -38,7 +40,7 @@ static void prune_options (struct cl_decoded_option **, unsigned int *);
    example, we want -gno-statement-frontiers to be taken as a negation
    of -gstatement-frontiers, but without catching the gno- prefix and
    signaling it's to be used for option remapping, it would end up
-   backtracked to g with no-statemnet-frontiers as the debug level.  */
+   backtracked to g with no-statement-frontiers as the debug level.  */
 
 static bool
 remapping_prefix_p (const struct cl_option *opt)
@@ -468,6 +470,28 @@ static const struct option_map option_map[] =
     { "--no-", NULL, "-f", false, true }
   };
 
+/* Given buffer P of size SZ, look for a prefix within OPTION_MAP;
+   if found, return the prefix and write the new prefix to *OUT_NEW_PREFIX.
+   Otherwise return nullptr.  */
+
+const char *
+get_option_prefix_remapping (const char *p, size_t sz,
+			     const char **out_new_prefix)
+{
+  for (unsigned i = 0; i < ARRAY_SIZE (option_map); i++)
+    {
+      const char * const old_prefix = option_map[i].opt0;
+      const size_t old_prefix_len = strlen (old_prefix);
+      if (old_prefix_len <= sz
+	  && !memcmp (p, old_prefix, old_prefix_len))
+	{
+	  *out_new_prefix = option_map[i].new_prefix;
+	  return old_prefix;
+	}
+    }
+  return nullptr;
+}
+
 /* Helper function for gcc.cc's driver::suggest_option, for populating the
    vec of suggestions for misspelled options.
 
@@ -502,6 +526,7 @@ add_misspelling_candidates (auto_vec<char *> *candidates,
   for (unsigned i = 0; i < ARRAY_SIZE (option_map); i++)
     {
       const char *opt0 = option_map[i].opt0;
+      const char *opt1 = option_map[i].opt1;
       const char *new_prefix = option_map[i].new_prefix;
       size_t new_prefix_len = strlen (new_prefix);
 
@@ -510,8 +535,9 @@ add_misspelling_candidates (auto_vec<char *> *candidates,
 
       if (strncmp (opt_text, new_prefix, new_prefix_len) == 0)
 	{
-	  char *alternative = concat (opt0 + 1, opt_text + new_prefix_len,
-				      NULL);
+	  char *alternative
+	    = concat (opt0 + 1, opt1 ? " " : "", opt1 ? opt1 : "",
+		      opt_text + new_prefix_len, NULL);
 	  candidates->safe_push (alternative);
 	}
     }
@@ -1001,7 +1027,7 @@ opts_concat (const char *first, ...)
    diagnostics or set state outside of these variables.  */
 
 void
-decode_cmdline_options_to_array (unsigned int argc, const char **argv, 
+decode_cmdline_options_to_array (unsigned int argc, const char **argv,
 				 unsigned int lang_mask,
 				 struct cl_decoded_option **decoded_options,
 				 unsigned int *decoded_options_count)
@@ -1052,7 +1078,9 @@ decode_cmdline_options_to_array (unsigned int argc, const char **argv,
       /* Expand -fdiagnostics-plain-output to its constituents.  This needs
 	 to happen here so that prune_options can handle -fdiagnostics-color
 	 specially.  */
-      if (!strcmp (opt, "-fdiagnostics-plain-output"))
+      if (opt[0] == '-'
+	  && (opt[1] == '-' || opt[1] == 'f')
+	  && !strcmp (opt + 2, "diagnostics-plain-output"))
 	{
 	  /* If you have changed the default diagnostics output, and this new
 	     output is not appropriately "plain" (e.g., the change needs to be
@@ -1068,6 +1096,11 @@ decode_cmdline_options_to_array (unsigned int argc, const char **argv,
 	    "-fdiagnostics-color=never",
 	    "-fdiagnostics-urls=never",
 	    "-fdiagnostics-path-format=separate-events",
+	    "-fdiagnostics-text-art-charset=none",
+	    "-fno-diagnostics-show-event-links",
+	    "-fno-diagnostics-show-nesting"
+	    /* We don't put "-fno-diagnostics-show-highlight-colors" here
+	       as -fdiagnostics-color=never makes it redundant.  */
 	  };
 	  const int num_expanded = ARRAY_SIZE (expanded_args);
 	  opt_array_len += num_expanded - 1;
@@ -1129,6 +1162,7 @@ prune_options (struct cl_decoded_option **decoded_options,
   unsigned int options_to_prepend = 0;
   unsigned int Wcomplain_wrong_lang_idx = 0;
   unsigned int fdiagnostics_color_idx = 0;
+  unsigned int fdiagnostics_urls_idx = 0;
 
   /* Remove arguments which are negated by others after them.  */
   new_decoded_options_count = 0;
@@ -1161,6 +1195,12 @@ prune_options (struct cl_decoded_option **decoded_options,
 	  if (fdiagnostics_color_idx == 0)
 	    ++options_to_prepend;
 	  fdiagnostics_color_idx = i;
+	  continue;
+	case OPT_fdiagnostics_urls_:
+	  gcc_checking_assert (i != 0);
+	  if (fdiagnostics_urls_idx == 0)
+	    ++options_to_prepend;
+	  fdiagnostics_urls_idx = i;
 	  continue;
 
 	default:
@@ -1225,6 +1265,12 @@ keep:
 	    = old_decoded_options[fdiagnostics_color_idx];
 	  new_decoded_options_count++;
 	}
+      if (fdiagnostics_urls_idx != 0)
+	{
+	  new_decoded_options[argv_0 + options_prepended++]
+	    = old_decoded_options[fdiagnostics_urls_idx];
+	  new_decoded_options_count++;
+	}
       gcc_checking_assert (options_to_prepend == options_prepended);
     }
 
@@ -1238,9 +1284,9 @@ keep:
 
 /* Handle option DECODED for the language indicated by LANG_MASK,
    using the handlers in HANDLERS and setting fields in OPTS and
-   OPTS_SET.  KIND is the diagnostic_t if this is a diagnostics
-   option, DK_UNSPECIFIED otherwise, and LOC is the location of the
-   option for options from the source file, UNKNOWN_LOCATION
+   OPTS_SET.  KIND is the enum diagnostics::kind if this is a diagnostics
+   option, diagnostics::kind::unspecified otherwise, and LOC is the location
+   of the option for options from the source file, UNKNOWN_LOCATION
    otherwise.  GENERATED_P is true for an option generated as part of
    processing another option or otherwise generated internally, false
    for one explicitly passed by the user.  control_warning_option
@@ -1254,7 +1300,7 @@ handle_option (struct gcc_options *opts,
 	       const struct cl_decoded_option *decoded,
 	       unsigned int lang_mask, int kind, location_t loc,
 	       const struct cl_option_handlers *handlers,
-	       bool generated_p, diagnostic_context *dc)
+	       bool generated_p, diagnostics::context *dc)
 {
   size_t opt_index = decoded->opt_index;
   const char *arg = decoded->arg;
@@ -1277,7 +1323,7 @@ handle_option (struct gcc_options *opts,
 					    handlers->target_option_override_hook))
 	  return false;
       }
-  
+
   return true;
 }
 
@@ -1292,7 +1338,7 @@ handle_generated_option (struct gcc_options *opts,
 			 size_t opt_index, const char *arg, HOST_WIDE_INT value,
 			 unsigned int lang_mask, int kind, location_t loc,
 			 const struct cl_option_handlers *handlers,
-			 bool generated_p, diagnostic_context *dc)
+			 bool generated_p, diagnostics::context *dc)
 {
   struct cl_decoded_option decoded;
 
@@ -1560,7 +1606,7 @@ read_cmdline_option (struct gcc_options *opts,
 		     location_t loc,
 		     unsigned int lang_mask,
 		     const struct cl_option_handlers *handlers,
-		     diagnostic_context *dc)
+		     diagnostics::context *dc)
 {
   const struct cl_option *option;
   const char *opt = decoded->orig_option_with_args_text;
@@ -1601,7 +1647,8 @@ read_cmdline_option (struct gcc_options *opts,
 
   gcc_assert (!decoded->errors);
 
-  if (!handle_option (opts, opts_set, decoded, lang_mask, DK_UNSPECIFIED,
+  if (!handle_option (opts, opts_set, decoded, lang_mask,
+		      static_cast<int> (diagnostics::kind::unspecified),
 		      loc, handlers, false, dc))
     error_at (loc, "unrecognized command-line option %qs", opt);
 }
@@ -1613,8 +1660,8 @@ read_cmdline_option (struct gcc_options *opts,
 
 void
 set_option (struct gcc_options *opts, struct gcc_options *opts_set,
-	    int opt_index, HOST_WIDE_INT value, const char *arg, int kind,
-	    location_t loc, diagnostic_context *dc,
+	    size_t opt_index, HOST_WIDE_INT value, const char *arg,
+	    int kind, location_t loc, diagnostics::context *dc,
 	    HOST_WIDE_INT mask /* = 0 */)
 {
   const struct cl_option *option = &cl_options[opt_index];
@@ -1624,8 +1671,10 @@ set_option (struct gcc_options *opts, struct gcc_options *opts_set,
   if (!flag_var)
     return;
 
-  if ((diagnostic_t) kind != DK_UNSPECIFIED && dc != NULL)
-    diagnostic_classify_diagnostic (dc, opt_index, (diagnostic_t) kind, loc);
+  if ((enum diagnostics::kind) kind != diagnostics::kind::unspecified
+      && dc != nullptr)
+    diagnostic_classify_diagnostic (dc, opt_index,
+				    (enum diagnostics::kind) kind, loc);
 
   if (opts_set != NULL)
     set_flag_var = option_flag_var (opt_index, opts_set);
@@ -1693,21 +1742,21 @@ set_option (struct gcc_options *opts, struct gcc_options *opts_set,
     case CLVC_BIT_SET:
 	if ((value != 0) == (option->var_type == CLVC_BIT_SET))
 	  {
-	    if (option->cl_host_wide_int) 
+	    if (option->cl_host_wide_int)
 	      *(HOST_WIDE_INT *) flag_var |= option->var_value;
-	    else 
+	    else
 	      *(int *) flag_var |= option->var_value;
 	  }
 	else
 	  {
-	    if (option->cl_host_wide_int) 
+	    if (option->cl_host_wide_int)
 	      *(HOST_WIDE_INT *) flag_var &= ~option->var_value;
-	    else 
+	    else
 	      *(int *) flag_var &= ~option->var_value;
 	  }
 	if (set_flag_var)
 	  {
-	    if (option->cl_host_wide_int) 
+	    if (option->cl_host_wide_int)
 	      *(HOST_WIDE_INT *) set_flag_var |= option->var_value;
 	    else
 	      *(int *) set_flag_var |= option->var_value;
@@ -1797,21 +1846,21 @@ option_enabled (int opt_idx, unsigned lang_mask, void *opts)
 	  }
 
       case CLVC_EQUAL:
-	if (option->cl_host_wide_int) 
+	if (option->cl_host_wide_int)
 	  return *(HOST_WIDE_INT *) flag_var == option->var_value;
 	else
 	  return *(int *) flag_var == option->var_value;
 
       case CLVC_BIT_CLEAR:
-	if (option->cl_host_wide_int) 
+	if (option->cl_host_wide_int)
 	  return (*(HOST_WIDE_INT *) flag_var & option->var_value) == 0;
 	else
 	  return (*(int *) flag_var & option->var_value) == 0;
 
       case CLVC_BIT_SET:
-	if (option->cl_host_wide_int) 
+	if (option->cl_host_wide_int)
 	  return (*(HOST_WIDE_INT *) flag_var & option->var_value) != 0;
-	else 
+	else
 	  return (*(int *) flag_var & option->var_value) != 0;
 
       case CLVC_SIZE:
@@ -1826,6 +1875,13 @@ option_enabled (int opt_idx, unsigned lang_mask, void *opts)
 	break;
       }
   return -1;
+}
+
+int
+compiler_diagnostic_option_id_manager::
+option_enabled_p (diagnostics::option_id opt_id) const
+{
+  return option_enabled (opt_id.m_idx, m_lang_mask, m_opts);
 }
 
 /* Fill STATE with the current state of option OPTION in OPTS.  Return
@@ -1890,7 +1946,7 @@ control_warning_option (unsigned int opt_index, int kind, const char *arg,
 			const struct cl_option_handlers *handlers,
 			struct gcc_options *opts,
 			struct gcc_options *opts_set,
-			diagnostic_context *dc)
+			diagnostics::context *dc)
 {
   if (cl_options[opt_index].alias_target != N_OPTS)
     {
@@ -1903,17 +1959,19 @@ control_warning_option (unsigned int opt_index, int kind, const char *arg,
   if (opt_index == OPT_SPECIAL_ignore || opt_index == OPT_SPECIAL_warn_removed)
     return;
   if (dc)
-    diagnostic_classify_diagnostic (dc, opt_index, (diagnostic_t) kind, loc);
+    diagnostic_classify_diagnostic (dc, opt_index,
+				    static_cast<enum diagnostics::kind> (kind),
+				    loc);
   if (imply)
     {
-      const struct cl_option *option = &cl_options[opt_index];
-
       /* -Werror=foo implies -Wfoo.  */
+      const struct cl_option *option = &cl_options[opt_index];
+      HOST_WIDE_INT value = 1;
+
       if (option->var_type == CLVC_INTEGER
 	  || option->var_type == CLVC_ENUM
 	  || option->var_type == CLVC_SIZE)
 	{
-	  HOST_WIDE_INT value = 1;
 
 	  if (arg && *arg == '\0' && !option->cl_missing_ok)
 	    arg = NULL;
@@ -1960,11 +2018,11 @@ control_warning_option (unsigned int opt_index, int kind, const char *arg,
 		  return;
 		}
 	    }
-
-	  handle_generated_option (opts, opts_set,
-				   opt_index, arg, value, lang_mask,
-				   kind, loc, handlers, false, dc);
 	}
+
+      handle_generated_option (opts, opts_set,
+			       opt_index, arg, value, lang_mask,
+			       kind, loc, handlers, false, dc);
     }
 }
 
@@ -2053,7 +2111,8 @@ jobserver_info::jobserver_info ()
       if (n != string::npos)
 	{
 	  string ending = makeflags.substr (n + js_needle.size ());
-	  if (ending.find (fifo_prefix) == 0)
+	  bool is_named_pipe = ending.find (fifo_prefix) == 0;
+	  if (is_named_pipe)
 	    {
 	      ending = ending.substr (fifo_prefix.size ());
 	      pipe_path = ending.substr (0, ending.find (' '));
@@ -2068,11 +2127,15 @@ jobserver_info::jobserver_info ()
 	    is_active = true;
 	  else
 	    {
-	      string dup = makeflags.substr (0, n);
-	      size_t pos = makeflags.find (' ', n);
-	      if (pos != string::npos)
-		dup += makeflags.substr (pos);
-	      skipped_makeflags = "MAKEFLAGS=" + dup;
+	      bool negative_fds = !is_named_pipe && rfd < 0 && wfd < 0;
+	      if (!negative_fds)
+	        {
+	          string dup = makeflags.substr (0, n);
+	          size_t pos = makeflags.find (' ', n);
+	          if (pos != string::npos)
+	            dup += makeflags.substr (pos);
+	         skipped_makeflags = "MAKEFLAGS=" + dup;
+	        }
 	      error_msg
 		= "cannot access %<" + js_needle + "%> file descriptors";
 	    }
@@ -2107,7 +2170,8 @@ jobserver_info::disconnect ()
 {
   if (!pipe_path.empty ())
     {
-      gcc_assert (close (pipefd) == 0);
+      int res = close (pipefd);
+      gcc_assert (res == 0);
       pipefd = -1;
     }
 }
@@ -2132,5 +2196,6 @@ jobserver_info::return_token ()
 {
   int fd = pipe_path.empty () ? wfd : pipefd;
   char c = 'G';
-  gcc_assert (write (fd, &c, 1) == 1);
+  int res = write (fd, &c, 1);
+  gcc_assert (res == 1);
 }

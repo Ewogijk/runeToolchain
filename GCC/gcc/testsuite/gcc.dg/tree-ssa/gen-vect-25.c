@@ -25,6 +25,7 @@ int main_1 (int n, int *p)
     }
 
   /* check results:  */
+#pragma GCC novector
   for (i = 0; i < N; i++)
     {
       if (ia[i] != n)
@@ -38,6 +39,7 @@ int main_1 (int n, int *p)
     }
 
   /* check results:  */
+#pragma GCC novector
   for (i = 0; i < N; i++)
     {
       if (ib[i] != k)

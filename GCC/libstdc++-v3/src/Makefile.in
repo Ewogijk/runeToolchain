@@ -92,8 +92,10 @@ target_triplet = @target@
 subdir = src
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/../config/acx.m4 \
+	$(top_srcdir)/../config/clang-plugin.m4 \
 	$(top_srcdir)/../config/enable.m4 \
 	$(top_srcdir)/../config/futex.m4 \
+	$(top_srcdir)/../config/gcc-plugin.m4 \
 	$(top_srcdir)/../config/hwcaps.m4 \
 	$(top_srcdir)/../config/iconv.m4 \
 	$(top_srcdir)/../config/lead-dot.m4 \
@@ -241,8 +243,8 @@ am__define_uniq_tagged_files = \
   done | $(am__uniquify_input)`
 ETAGS = etags
 CTAGS = ctags
-DIST_SUBDIRS = c++98 c++11 c++17 c++20 filesystem libbacktrace \
-	experimental
+DIST_SUBDIRS = c++98 c++11 c++17 c++20 c++23 c++26 filesystem \
+	libbacktrace experimental
 ABI_TWEAKS_SRCDIR = @ABI_TWEAKS_SRCDIR@
 ACLOCAL = @ACLOCAL@
 ALLOCATOR_H = @ALLOCATOR_H@
@@ -326,6 +328,7 @@ LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
+LLVM_CONFIG = @LLVM_CONFIG@
 LN_S = @LN_S@
 LONG_DOUBLE_128_FLAGS = @LONG_DOUBLE_128_FLAGS@
 LONG_DOUBLE_ALT128_COMPAT_FLAGS = @LONG_DOUBLE_ALT128_COMPAT_FLAGS@
@@ -491,7 +494,9 @@ AM_CPPFLAGS = $(GLIBCXX_INCLUDES) $(CPPFLAGS)
 @GLIBCXX_HOSTED_FALSE@backtrace_dir = 
 @GLIBCXX_HOSTED_FALSE@experimental_dir = 
 @GLIBCXX_HOSTED_TRUE@experimental_dir = experimental
-SUBDIRS = c++98 c++11 c++17 c++20 $(filesystem_dir) $(backtrace_dir) $(experimental_dir)
+SUBDIRS = c++98 c++11 c++17 c++20 c++23 c++26 \
+	$(filesystem_dir) $(backtrace_dir) $(experimental_dir)
+
 @VTV_CYGMIN_FALSE@toolexeclib_LTLIBRARIES = libstdc++.la
 
 # Cross compiler support.
@@ -550,7 +555,8 @@ libstdc___la_LIBADD = \
 	$(top_builddir)/src/c++98/libc++98convenience.la \
 	$(top_builddir)/src/c++11/libc++11convenience.la \
 	$(top_builddir)/src/c++17/libc++17convenience.la \
-	$(top_builddir)/src/c++20/libc++20convenience.la
+	$(top_builddir)/src/c++20/libc++20convenience.la \
+	$(top_builddir)/src/c++23/libmodulesconvenience.la
 
 libstdc___la_DEPENDENCIES = \
 	${version_dep} \
@@ -558,10 +564,14 @@ libstdc___la_DEPENDENCIES = \
 	$(top_builddir)/src/c++98/libc++98convenience.la \
 	$(top_builddir)/src/c++11/libc++11convenience.la \
 	$(top_builddir)/src/c++17/libc++17convenience.la \
-	$(top_builddir)/src/c++20/libc++20convenience.la
+	$(top_builddir)/src/c++20/libc++20convenience.la \
+	$(top_builddir)/src/c++23/libmodulesconvenience.la
 
+@ENABLE_DARWIN_AT_RPATH_TRUE@libstdc___darwin_rpath =  \
+@ENABLE_DARWIN_AT_RPATH_TRUE@	-Wc,-nodefaultrpaths \
+@ENABLE_DARWIN_AT_RPATH_TRUE@	-Wl,-rpath,@loader_path
 libstdc___la_LDFLAGS = \
-	-version-info $(libtool_VERSION) ${version_arg} -lm
+	-version-info $(libtool_VERSION) ${version_arg} -lm $(libstdc___darwin_rpath)
 
 libstdc___la_LINK = $(CXXLINK) $(libstdc___la_LDFLAGS) $(lt_host_flags)
 @GLIBCXX_LDBL_ALT128_COMPAT_FALSE@@GLIBCXX_LDBL_COMPAT_TRUE@LTCXXCOMPILE64 = $(LTCXXCOMPILE)
@@ -1018,6 +1028,8 @@ vpath % $(top_srcdir)/src/c++98
 vpath % $(top_srcdir)/src/c++11
 vpath % $(top_srcdir)/src/c++17
 vpath % $(top_srcdir)/src/c++20
+vpath % $(top_srcdir)/src/c++23
+vpath % $(top_srcdir)/src/c++26
 @ENABLE_FILESYSTEM_TS_TRUE@vpath % $(top_srcdir)/src/filesystem
 @ENABLE_BACKTRACE_TRUE@vpath % $(top_srcdir)/src/libbacktrace
 vpath % $(top_srcdir)/src/experimental
@@ -1089,9 +1101,7 @@ compatibility-condvar.o: compatibility-condvar.cc
 @ENABLE_SYMVERS_SUN_TRUE@@ENABLE_SYMVERS_TRUE@	CXXFILT="$(CXXFILT)"; export CXXFILT; \
 @ENABLE_SYMVERS_SUN_TRUE@@ENABLE_SYMVERS_TRUE@	perl $(toplevel_srcdir)/contrib/make_sunver.pl \
 @ENABLE_SYMVERS_SUN_TRUE@@ENABLE_SYMVERS_TRUE@	  libstdc++-symbols.ver \
-@ENABLE_SYMVERS_SUN_TRUE@@ENABLE_SYMVERS_TRUE@	  $(libstdc___la_OBJECTS:%.lo=.libs/%.o) \
-@ENABLE_SYMVERS_SUN_TRUE@@ENABLE_SYMVERS_TRUE@	 `echo ' $(libstdc___la_LIBADD) ' | \
-@ENABLE_SYMVERS_SUN_TRUE@@ENABLE_SYMVERS_TRUE@	    sed -e 's,/\([^/.]*\)\.la,/.libs/\1.a,g' -e 's/ -l[^ ]* / /'` \
+@ENABLE_SYMVERS_SUN_TRUE@@ENABLE_SYMVERS_TRUE@	  $(libstdc___la_OBJECTS) $(libstdc___la_LIBADD) \
 @ENABLE_SYMVERS_SUN_TRUE@@ENABLE_SYMVERS_TRUE@	 > $@ || (rm -f $@ ; exit 1)
 @ENABLE_SYMVERS_DARWIN_TRUE@@ENABLE_SYMVERS_TRUE@libstdc++-symbols.explist : libstdc++-symbols.ver \
 @ENABLE_SYMVERS_DARWIN_TRUE@@ENABLE_SYMVERS_TRUE@		${glibcxx_srcdir}/scripts/make_exports.pl \

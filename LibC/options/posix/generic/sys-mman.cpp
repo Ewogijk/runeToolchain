@@ -55,10 +55,12 @@ int munlockall(void) {
 }
 
 
-int posix_madvise(void *, size_t, int) {
-	mlibc::infoLogger() << "\e[31m" "mlibc: posix_madvise() fails unconditionally" "\e[39m"
-			<< frg::endlog;
-	return ENOSYS;
+int posix_madvise(void *addr, size_t length, int advice) {
+	if(!mlibc::sys_posix_madvise) {
+		MLIBC_MISSING_SYSDEP();
+		return ENOSYS;
+	}
+	return mlibc::sys_posix_madvise(addr, length, advice);
 }
 
 int msync(void *addr, size_t length, int flags) {
@@ -98,17 +100,17 @@ namespace {
 		if(*(p = strchrnul(name, '/')) || p == name ||
 			(p - name <= 2 && name[0] == '.' && p[-1] == '.')) {
 			errno = EINVAL;
-			return 0;
+			return nullptr;
 		}
 		if(p - name > NAME_MAX) {
 			errno = ENAMETOOLONG;
-			return 0;
+			return nullptr;
 		}
 		memcpy(buf, "/dev/shm/", 9);
 		memcpy(buf + 9, name, p - name + 1);
 		return buf;
 	}
-}
+} // namespace
 
 int shm_open(const char *name, int flags, mode_t mode) {
 	int cs;
@@ -117,7 +119,7 @@ int shm_open(const char *name, int flags, mode_t mode) {
 		return -1;
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cs);
 	int fd = open(name, flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, mode);
-	pthread_setcancelstate(cs, 0);
+	pthread_setcancelstate(cs, nullptr);
 	return fd;
 }
 

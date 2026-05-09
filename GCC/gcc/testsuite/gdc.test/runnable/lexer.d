@@ -1,14 +1,3 @@
-// REQUIRED_ARGS:
-/*
-TEST_OUTPUT:
----
-runnable/lexer.d(86): Deprecation: `version( <integer> )` is deprecated, use version identifiers instead
-runnable/lexer.d(87): Deprecation: `debug( <integer> )` is deprecated, use debug identifiers instead
----
-*/
-
-/*********************************************************/
-
 void test6()
 {
     string s = q"(foo(xxx))";
@@ -53,6 +42,18 @@ foo
 
     s = q{{foo}"}"};
     assert(s == "{foo}\"}\"");
+
+    // https://github.com/dlang/dmd/issues/22535
+    s = q"EOS
+*是是是*
+的的的.
+*000*
+EOS";
+    assert(s == "*是是是*
+的的的.
+*000*
+");
+    assert(s.length == 29);
 }
 
 /*********************************************************/
@@ -79,12 +80,6 @@ void test8()
     typeof({return 1;}()) b;
     Types!({return 1;}()) y;
 }
-
-/*********************************************************/
-
-// https://issues.dlang.org/show_bug.cgi?id=6584
-version(9223372036854775807){}
-debug(9223372036854775807){}
 
 /*********************************************************/
 

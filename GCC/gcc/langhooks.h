@@ -1,5 +1,5 @@
 /* The lang_hooks data structure.
-   Copyright (C) 2001-2023 Free Software Foundation, Inc.
+   Copyright (C) 2001-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -22,7 +22,7 @@ along with GCC; see the file COPYING3.  If not see
 
 /* FIXME: This file should be #include-d after tree.h (for enum tree_code).  */
 
-struct diagnostic_info;
+namespace diagnostics { struct diagnostic_info; }
 
 struct gimplify_omp_ctx;
 
@@ -313,6 +313,37 @@ struct lang_hooks_for_decls
   /* Do language specific checking on an implicitly determined clause.  */
   void (*omp_finish_clause) (tree clause, gimple_seq *pre_p, bool);
 
+  /* Additional language-specific mappings for a decl; returns true
+     if those may occur.  */
+  bool (*omp_deep_mapping_p) (const gimple *ctx_stmt, tree clause);
+
+  /* Additional language-specific mappings for a decl; returns the
+     number of additional mappings needed.  */
+  tree (*omp_deep_mapping_cnt) (const gimple *ctx_stmt, tree clause,
+				gimple_seq *seq);
+
+  /* Do the actual additional language-specific mappings for a decl. */
+  void (*omp_deep_mapping) (const gimple *stmt, tree clause,
+			    unsigned HOST_WIDE_INT tkind,
+			    tree data, tree sizes, tree kinds,
+			    tree offset_data, tree offset, gimple_seq *seq);
+
+  /* Finish language-specific processing on mapping nodes after expanding
+     user-defined mappers.  */
+  tree (*omp_finish_mapper_clauses) (tree clauses);
+
+  /* Find a mapper in the current parsing context, given a NAME (or
+     NULL_TREE) and TYPE.  */
+  tree (*omp_mapper_lookup) (tree name, tree type);
+
+  /* Return the statement for the mapper directive definition, from the
+     representation used to contain it (e.g. an inline function
+     declaration).  */
+  tree (*omp_extract_mapper_directive) (tree fndecl);
+
+  /* Return a simplified form for OMP_ARRAY_SECTION argument.  */
+  tree (*omp_map_array_section) (location_t, tree t);
+
   /* Return true if DECL is an allocatable variable (for the purpose of
      implicit mapping).  */
   bool (*omp_allocatable_p) (tree decl);
@@ -390,7 +421,7 @@ struct lang_hooks
 
   /* Callback used to perform language-specific initialization for the
      global diagnostic context structure.  */
-  void (*initialize_diagnostics) (diagnostic_context *);
+  void (*initialize_diagnostics) (diagnostics::context *);
 
   /* Beginning the main source file.  */
   void (*preprocess_main_file) (cpp_reader *, line_maps *,
@@ -514,9 +545,11 @@ struct lang_hooks
      in contexts where erroneously returning 0 causes problems.  */
   int (*types_compatible_p) (tree x, tree y);
 
-  /* Called by report_error_function to print out function name.  */
-  void (*print_error_function) (diagnostic_context *, const char *,
-				struct diagnostic_info *);
+  /* Called by diagnostic_report_current_function to print out function name
+     for textual diagnostic output.  */
+  void (*print_error_function) (diagnostics::text_sink &,
+				const char *,
+				const diagnostics::diagnostic_info *);
 
   /* Convert a character from the host's to the target's character
      set.  The character should be in what C calls the "basic source
@@ -532,9 +565,7 @@ struct lang_hooks
      table of attributes specific to the language, a table of
      attributes common to two or more languages (to allow easy
      sharing), and a table of attributes for checking formats.  */
-  const struct attribute_spec *attribute_table;
-  const struct attribute_spec *common_attribute_table;
-  const struct attribute_spec *format_attribute_table;
+  array_slice<const struct scoped_attribute_specs *const> attribute_table;
 
   struct lang_hooks_for_tree_inlining tree_inlining;
 
@@ -543,7 +574,7 @@ struct lang_hooks
   struct lang_hooks_for_decls decls;
 
   struct lang_hooks_for_types types;
-  
+
   struct lang_hooks_for_lto lto;
 
   /* Returns a TREE_VEC of the generic parameters of an instantiation of

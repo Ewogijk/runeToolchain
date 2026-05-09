@@ -1,4 +1,3 @@
-// { dg-options "-std=gnu++23" }
 // { dg-do run { target c++23 } }
 
 #include <ranges>
@@ -39,6 +38,9 @@ test01()
   auto v3 = y | views::adjacent_transform<3>([](auto... xs) { return ranges::max({xs...}); });
   VERIFY( ranges::size(v3) == 4 );
   VERIFY( ranges::equal(v3, (int[]){3, 4, 5, 6}) );
+
+  // LWG 3848 - adjacent_transform_view etc missing base accessor
+  v3.base();
 
   const auto v6 = y | views::adjacent_transform<6>([](auto...) { return 0; });
   VERIFY( ranges::equal(v6, (int[]){0}) );
@@ -97,10 +99,66 @@ test03()
   return true;
 }
 
+void
+test04()
+{
+  extern int x[5];
+  struct move_only {
+    move_only() { }
+    move_only(move_only&&) { }
+    int operator()(int i, int j) const { return i + j; }
+  };
+  // P2494R2 Relaxing range adaptors to allow for move only types
+  static_assert( requires { views::pairwise_transform(x, move_only{}); } );
+  static_assert( requires { x | views::pairwise_transform(move_only{}); } );
+}
+
+template<size_t FuncSize, typename Fn>
+void
+test05(Fn f)
+{
+  int x[] = {1,2,3,4,5,6};
+  auto v = x | views::pairwise_transform(f);
+  static_assert(sizeof(v.begin()) == 2*sizeof(int*) + FuncSize);
+}
+
+void
+test05all()
+{
+  test05<0>(std::equal_to<>());
+  test05<0>(std::equal_to<>());
+  test05<0>(std::not_equal_to<>());
+  test05<0>(std::greater<>());
+  test05<0>(std::less<>());
+  test05<0>(std::greater_equal<>());
+  test05<0>(std::less_equal<>());
+
+  test05<0>(std::ranges::equal_to());
+  test05<0>(std::ranges::not_equal_to());
+  test05<0>(std::ranges::greater());
+  test05<0>(std::ranges::less());
+  test05<0>(std::ranges::greater_equal());
+  test05<0>(std::ranges::less_equal());
+
+  test05<0>(std::plus<>());
+  test05<0>(std::minus<>());
+  test05<0>(std::multiplies<>());
+  test05<0>(std::divides<>());
+  test05<0>(std::modulus<>());
+
+  test05<0>(std::logical_and<>());
+  test05<0>(std::logical_or<>());
+
+  test05<0>(std::bit_and<>());
+  test05<0>(std::bit_or<>());
+  test05<0>(std::bit_xor<>());
+}
+
 int
 main()
 {
   static_assert(test01());
   static_assert(test02());
   static_assert(test03());
+  test04();
 }

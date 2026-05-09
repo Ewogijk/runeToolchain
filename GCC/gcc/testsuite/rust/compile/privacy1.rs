@@ -1,10 +1,13 @@
+#![feature(no_core)]
+#![no_core]
+
 mod orange {
     mod green {
         fn sain() {}
         pub fn doux() {}
     }
 
-    fn brown() {
+    fn brown() {// E0603
         green::sain(); // { dg-error "definition is private in this context" }
         green::doux();
     }

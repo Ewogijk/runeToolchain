@@ -1,6 +1,6 @@
 /* Definitions of target machine for GNU compiler.
    Renesas H8/300 (generic)
-   Copyright (C) 1992-2023 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
    Contributed by Steve Chamberlain (sac@cygnus.com),
    Jim Wilson (wilson@cygnus.com), and Doug Evans (dje@cygnus.com).
 
@@ -149,9 +149,7 @@ extern const char * const *h8_reg_names;
 #define INT_TYPE_SIZE		(TARGET_INT32 ? 32 : 16)
 #define LONG_TYPE_SIZE		32
 #define LONG_LONG_TYPE_SIZE	64
-#define FLOAT_TYPE_SIZE	32
-#define DOUBLE_TYPE_SIZE	32
-#define LONG_DOUBLE_TYPE_SIZE	DOUBLE_TYPE_SIZE
+#define DOUBLE_TYPE_MODE	SFmode
 
 #define MAX_FIXED_MODE_SIZE	32
 
@@ -612,6 +610,12 @@ struct cum_arg
 #define DATA_SECTION_ASM_OP "\t.section .data"
 #define BSS_SECTION_ASM_OP "\t.section .bss"
 
+/* Override default definitions from elfos.h. */
+#undef INIT_SECTION_ASM_OP
+#define INIT_SECTION_ASM_OP "\t.section\t.init,\"ax\""
+#undef FINI_SECTION_ASM_OP
+#define FINI_SECTION_ASM_OP "\t.section\t.fini,\"ax\""
+
 #undef DO_GLOBAL_CTORS_BODY
 #define DO_GLOBAL_CTORS_BODY			\
 {						\
@@ -649,18 +653,10 @@ struct cum_arg
 /* Globalizing directive for a label.  */
 #define GLOBAL_ASM_OP "\t.global "
 
+/* Override default definition from elfos.h. */
+#undef ASM_DECLARE_FUNCTION_NAME
 #define ASM_DECLARE_FUNCTION_NAME(FILE, NAME, DECL) \
-   ASM_OUTPUT_LABEL (FILE, NAME)
-
-/* This is how to store into the string LABEL
-   the symbol_ref name of an internal numbered label where
-   PREFIX is the class of label and NUM is the number within the class.
-   This is suitable for output with `assemble_name'.
-
-   N.B.: The h8300.md branch_true and branch_false patterns also know
-   how to generate internal labels.  */
-#define ASM_GENERATE_INTERNAL_LABEL(LABEL, PREFIX, NUM)	\
-  sprintf (LABEL, "*.%s%lu", PREFIX, (unsigned long)(NUM))
+   ASM_OUTPUT_FUNCTION_LABEL (FILE, NAME, DECL)
 
 /* This is how to output an insn to push a register on the stack.
    It need not be very fast code.  */
@@ -691,9 +687,6 @@ struct cum_arg
 #define ASM_OUTPUT_ALIGN(FILE, LOG)		\
   if ((LOG) != 0)				\
     fprintf (FILE, "\t.align %d\n", (LOG))
-
-#define ASM_OUTPUT_SKIP(FILE, SIZE) \
-  fprintf (FILE, "\t.space %d\n", (int)(SIZE))
 
 /* This says how to output an assembler line
    to define a global common symbol.  */

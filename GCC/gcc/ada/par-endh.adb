@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -23,6 +23,7 @@
 --                                                                          --
 ------------------------------------------------------------------------------
 
+with Errid;    use Errid;
 with Namet.Sp; use Namet.Sp;
 with Stringt;  use Stringt;
 with Uintp;    use Uintp;
@@ -155,12 +156,12 @@ package body Endh is
    function Same_Label (Label1, Label2 : Node_Id) return Boolean;
    --  This function compares the two names associated with the given nodes.
    --  If they are both simple (i.e. have Chars fields), then they have to
-   --  be the same name. Otherwise they must both be N_Selected_Component
-   --  nodes, referring to the same set of names, or Label1 is an N_Designator
-   --  referring to the same set of names as the N_Defining_Program_Unit_Name
-   --  in Label2. Any other combination returns False. This routine is used
-   --  to compare the End_Labl scanned from the End line with the saved label
-   --  value in the scope stack.
+   --  be the same name. If they are both N_Selected_Component or
+   --  N_Attribute_Reference nodes, they must refer to the same set of names.
+   --  Otherwise, Label1 must be a N_Designator referring to the same set of
+   --  names as the N_Defining_Program_Unit_Name in Label2. Any other
+   --  combination returns False. This routine is used to compare the End_Labl
+   --  scanned from the End line with the saved label value in the scope stack.
 
    ---------------
    -- Check_End --
@@ -269,6 +270,16 @@ package body Endh is
                end if;
 
                End_Labl := P_Designator;
+
+               --  Case of direct attribute definition
+
+               if Token = Tok_Apostrophe then
+                  Error_Msg_GNAT_Extension
+                    ("direct attribute definition", Token_Ptr);
+
+                  End_Labl := P_Attribute_Designators (End_Labl);
+               end if;
+
                End_Labl_Present := True;
 
                --  We have now scanned out a name. Here is where we do a check
@@ -299,7 +310,7 @@ package body Endh is
             else
                End_Labl := Scopes (Scope.Last).Labl;
 
-               if End_Labl > Empty_Or_Error then
+               if End_Labl not in Empty | Error then
 
                   --  The task here is to construct a designator from the
                   --  opening label, with the components all marked as not
@@ -412,19 +423,19 @@ package body Endh is
                      Error_Msg_SC
                        ("misplaced aspects for package declaration");
                      Error_Msg
-                       ("info: aspect specifications belong here??", Is_Loc);
-                     P_Aspect_Specifications (Empty);
+                       ("info: aspect specifications belong here", Is_Loc);
+                     P_Aspect_Specifications (Empty, Semicolon => True);
 
                   --  Other cases where aspect specifications are not allowed
 
                   else
-                     P_Aspect_Specifications (Error);
+                     P_Aspect_Specifications (Error, Semicolon => True);
                   end if;
 
                --  Aspect specifications allowed
 
                else
-                  P_Aspect_Specifications (Decl);
+                  P_Aspect_Specifications (Decl, Semicolon => True);
                end if;
 
             --  If no aspect specifications, must have a semicolon
@@ -657,8 +668,6 @@ package body Endh is
             Scan; -- past junk token on same line
          end loop;
       end if;
-
-      return;
    end End_Skip;
 
    --------------------
@@ -820,9 +829,9 @@ package body Endh is
       --  Cases where a label is definitely allowed on the END line
 
       elsif End_Type = E_Name then
-         Syntax_OK := (not Explicit_Start_Label (SS_Index))
+         Syntax_OK := not Explicit_Start_Label (SS_Index)
                          or else
-                      (not Scopes (SS_Index).Lreq);
+                      not Scopes (SS_Index).Lreq;
 
       --  Otherwise we have cases which don't allow labels anyway, so we
       --  certainly accept an END which does not have a label.
@@ -896,6 +905,10 @@ package body Endh is
    procedure Output_End_Expected (Ins : Boolean) is
       End_Type : SS_End_Type;
 
+      Wrong_End_Start : Source_Ptr;
+      Wrong_End_Finish : Source_Ptr;
+
+      Wrong_End_Span : Source_Span;
    begin
       --  Suppress message if this was a potentially junk entry (e.g. a record
       --  entry where no record keyword was present).
@@ -916,7 +929,7 @@ package body Endh is
 
       --  Suppress message if error was posted on opening label
 
-      if Error_Msg_Node_1 > Empty_Or_Error
+      if Error_Msg_Node_1 not in Empty | Error
         and then Error_Posted (Error_Msg_Node_1)
       then
          return;
@@ -932,8 +945,39 @@ package body Endh is
 
       elsif End_Type = E_Loop then
          if Error_Msg_Node_1 = Empty then
-            Error_Msg_SC -- CODEFIX
-              ("`END LOOP;` expected@ for LOOP#!");
+
+            Wrong_End_Start := Token_Ptr;
+
+            while Token /= Tok_Semicolon loop
+               Scan; -- past semicolon
+            end loop;
+
+            Wrong_End_Finish := Token_Ptr;
+
+            Wrong_End_Span :=
+              To_Span
+                (First => Wrong_End_Start,
+                 Ptr   => Wrong_End_Start,
+                 Last  => Wrong_End_Finish);
+
+            Restore_Scan_State (Scan_State);
+
+            Error_Msg -- CODEFIX
+              (Msg        => "`END LOOP;` expected@ for LOOP#!",
+               Flag_Span  => Wrong_End_Span,
+               N          => Empty,
+               Error_Code => GNAT0004,
+               Spans      =>
+                 (1 => Secondary_Labeled_Span (To_Span (Error_Msg_Sloc))),
+               Fixes      =>
+                 (1 =>
+                    Fix
+                      (Description => "Replace with 'end loop;'",
+                       Edits       =>
+                         (1 =>
+                            Edit
+                              (Text => "end loop;",
+                               Span => Wrong_End_Span)))));
          else
             Error_Msg_SC -- CODEFIX
               ("`END LOOP &;` expected@!");
@@ -1131,7 +1175,7 @@ package body Endh is
                then
                   Error_Msg_Col := Scopes (Scope.Last).Ecol;
                   Error_Msg
-                    ("(style) END in wrong column, should be@", End_Sloc);
+                    ("(style) END in wrong column, should be@?l?", End_Sloc);
                end if;
             end if;
 
@@ -1164,11 +1208,11 @@ package body Endh is
                        and then
                          (Scope.Last = 1
                             or else
-                              (not Explicit_Start_Label (Scope.Last - 1))
+                              not Explicit_Start_Label (Scope.Last - 1)
                                  or else
-                              (not Same_Label
-                                     (End_Labl,
-                                      Scopes (Scope.Last - 1).Labl)))
+                              not Same_Label
+                                    (End_Labl,
+                                     Scopes (Scope.Last - 1).Labl))
                      then
                         T_Semicolon;
                         Error_Msg ("duplicate end line ignored", End_Loc);
@@ -1324,6 +1368,12 @@ package body Endh is
       then
          return Same_Label (Prefix (Label1), Prefix (Label2)) and then
            Same_Label (Selector_Name (Label1), Selector_Name (Label2));
+
+      elsif Nkind (Label1) = N_Attribute_Reference
+        and then Nkind (Label2) = N_Attribute_Reference
+      then
+         return Same_Label (Prefix (Label1), Prefix (Label2)) and then
+           Attribute_Name (Label1) = Attribute_Name (Label2);
 
       elsif Nkind (Label1) = N_Designator
         and then Nkind (Label2) = N_Defining_Program_Unit_Name

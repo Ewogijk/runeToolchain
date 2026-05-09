@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright (C) 2020-2023 Free Software Foundation, Inc.
+# Copyright (C) 2020-2026 Free Software Foundation, Inc.
 #
 # This file is part of GCC.
 #
@@ -16,7 +16,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with GCC; see the file COPYING3.  If not see
-# <http://www.gnu.org/licenses/>.  */
+# <http://www.gnu.org/licenses/>.
 
 import difflib
 import os
@@ -33,11 +33,13 @@ default_changelog_locations = {
     'contrib/regression',
     'fixincludes',
     'gcc/ada',
+    'gcc/algol68',
     'gcc/analyzer',
     'gcc/brig',
     'gcc/c',
     'gcc/c-family',
     'gcc',
+    'gcc/cobol',
     'gcc/cp',
     'gcc/d',
     'gcc/fortran',
@@ -63,12 +65,15 @@ default_changelog_locations = {
     'libcpp/po',
     'libdecnumber',
     'libffi',
+    'libga68',
     'libgcc',
     'libgcc/config/avr/libf7',
     'libgcc/config/libbid',
+    'libgcobol',
     'libgfortran',
     'libgm2',
     'libgomp',
+    'libgrust',
     'libhsail-rt',
     'libiberty',
     'libitm',
@@ -85,14 +90,17 @@ default_changelog_locations = {
 
 bug_components = {
     'ada',
+    'algol68',
     'analyzer',
     'boehm-gc',
     'bootstrap',
     'c',
     'c++',
+    'cobol',
     'd',
     'debug',
     'demangler',
+    'diagnostics',
     'driver',
     'fastjar',
     'fortran',
@@ -104,11 +112,13 @@ bug_components = {
     'java',
     'jit',
     'libbacktrace',
+    'libcc1',
     'libf2c',
     'libffi',
     'libfortran',
     'libgcc',
     'libgcj',
+    'libgdiagnostics',
     'libgomp',
     'libitm',
     'libobjc',
@@ -128,6 +138,7 @@ bug_components = {
     'rtl-optimization',
     'rust',
     'sanitizer',
+    'sarif-replay',
     'spam',
     'target',
     'testsuite',
@@ -142,9 +153,12 @@ ignored_prefixes = {
     'gcc/testsuite/go.test/test/',
     'libffi/',
     'libgo/',
+    'libgrust/rustc-lib/core/',
+    'libgrust/rustc-lib/stdarch/',
     'libphobos/libdruntime/',
     'libphobos/src/',
     'libsanitizer/',
+    'zlib/',
     }
 
 wildcard_prefixes = {
@@ -329,11 +343,15 @@ class GitCommit:
                 self.revert_commit = m.group('hash')
                 break
         if self.revert_commit:
+            # The following happens for get_email.py:
+            if not self.commit_to_info_hook:
+                self.warnings.append(f"Invoked script can not obtain info about "
+                                     f"reverted commits such as '{self.revert_commit}'")
+                return
             self.info = self.commit_to_info_hook(self.revert_commit)
-
-        # The following happens for get_email.py:
-        if not self.info:
-            return
+            if not self.info:
+                self.errors.append(Error('Cannot find to-be-reverted commit', self.revert_commit))
+                return
 
         self.check_commit_email()
 
@@ -796,12 +814,18 @@ class GitCommit:
                 orig_date = self.original_info.date
                 current_timestamp = orig_date.strftime(DATE_FORMAT)
             elif self.cherry_pick_commit:
-                info = self.commit_to_info_hook(self.cherry_pick_commit)
+                info = (self.commit_to_info_hook
+                        and self.commit_to_info_hook(self.cherry_pick_commit))
                 # it can happen that it is a cherry-pick for a different
                 # repository
                 if info:
                     timestamp = info.date.strftime(DATE_FORMAT)
                 else:
+                    if self.commit_to_info_hook:
+                        self.warnings.append(f"Cherry-picked commit not found: '{self.cherry_pick_commit}'")
+                    else:
+                        self.warnings.append(f"Invoked script can not obtain info about "
+                                             f"cherry-picked commits such as '{self.revert_commit}'")
                     timestamp = current_timestamp
             elif not timestamp or use_commit_ts:
                 timestamp = current_timestamp

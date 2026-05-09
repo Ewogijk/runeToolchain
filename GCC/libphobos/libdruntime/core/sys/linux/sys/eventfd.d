@@ -30,7 +30,7 @@ version (X86_64)  version = X86_Any;
 import core.stdc.stdint: uint64_t;
 
 /// Type for the event counter
-alias uint64_t eventfd_t;
+alias eventfd_t = uint64_t;
 
 /* Return file descriptor for generic event channel.  Set initial
    value to count.  */
@@ -106,6 +106,12 @@ else version (SPARC_Any)
     enum EFD_NONBLOCK = 0x800; // octal!4000
 }
 else version (IBMZ_Any)
+{
+    enum EFD_SEMAPHORE = 1;
+    enum EFD_CLOEXEC = 0x80000; // octal!2000000
+    enum EFD_NONBLOCK = 0x800; // octal!4000
+}
+else version (LoongArch64)
 {
     enum EFD_SEMAPHORE = 1;
     enum EFD_CLOEXEC = 0x80000; // octal!2000000

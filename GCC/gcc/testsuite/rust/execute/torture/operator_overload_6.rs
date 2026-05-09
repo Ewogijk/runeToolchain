@@ -1,7 +1,15 @@
 /* { dg-output "add_assign\r*\n3\r*\n" } */
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+
 extern "C" {
     fn printf(s: *const i8, ...);
 }
+
+#[lang = "sized"]
+pub trait Sized {}
 
 #[lang = "add_assign"]
 pub trait AddAssign<Rhs = Self> {

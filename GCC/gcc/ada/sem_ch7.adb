@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -32,7 +32,6 @@ with Aspects;        use Aspects;
 with Atree;          use Atree;
 with Contracts;      use Contracts;
 with Debug;          use Debug;
-with Einfo;          use Einfo;
 with Einfo.Entities; use Einfo.Entities;
 with Einfo.Utils;    use Einfo.Utils;
 with Elists;         use Elists;
@@ -66,7 +65,6 @@ with Sem_Util;       use Sem_Util;
 with Sem_Warn;       use Sem_Warn;
 with Snames;         use Snames;
 with Stand;          use Stand;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Sinput;         use Sinput;
@@ -206,7 +204,7 @@ package body Sem_Ch7 is
    function Node_Hash (Id : Entity_Id) return Entity_Header_Num;
    --  Simple hash function for Entity_Ids
 
-   package Subprogram_Table is new GNAT.Htable.Simple_HTable
+   package Subprogram_Table is new GNAT.HTable.Simple_HTable
      (Header_Num => Entity_Header_Num,
       Element    => Boolean,
       No_Element => False,
@@ -216,7 +214,7 @@ package body Sem_Ch7 is
    --  Hash table to record which subprograms are referenced. It is declared
    --  at library level to avoid elaborating it for every call to Analyze.
 
-   package Traversed_Table is new GNAT.Htable.Simple_HTable
+   package Traversed_Table is new GNAT.HTable.Simple_HTable
      (Header_Num => Entity_Header_Num,
       Element    => Boolean,
       No_Element => False,
@@ -319,8 +317,9 @@ package body Sem_Ch7 is
             function Set_Referencer_Of_Non_Subprograms return Boolean is
             begin
                --  An inlined subprogram body acts as a referencer
-               --  unless we generate C code since inlining is then
-               --  handled by the C compiler.
+               --  unless we generate C code without -gnatn where we want
+               --  to favor generating static inline functions as much as
+               --  possible.
 
                --  Note that we test Has_Pragma_Inline here in addition
                --  to Is_Inlined. We are doing this for a client, since
@@ -329,7 +328,9 @@ package body Sem_Ch7 is
                --  should occur, so we need to catch all cases where the
                --  subprogram may be inlined by the client.
 
-               if (not CCG_Mode or else Has_Pragma_Inline_Always (Decl_Id))
+               if (not CCG_Mode
+                     or else Has_Pragma_Inline_Always (Decl_Id)
+                     or else Inline_Active)
                  and then (Is_Inlined (Decl_Id)
                             or else Has_Pragma_Inline (Decl_Id))
                then
@@ -446,7 +447,11 @@ package body Sem_Ch7 is
                   else
                      Decl_Id := Defining_Entity (Decl);
 
+                     --  See the N_Subprogram_Declaration case below
+
                      if not Set_Referencer_Of_Non_Subprograms
+                       and then (not In_Nested_Instance
+                                  or else not Subprogram_Table.Get_First)
                        and then not Subprogram_Table.Get (Decl_Id)
                      then
                         --  We can reset Is_Public right away
@@ -707,8 +712,7 @@ package body Sem_Ch7 is
 
       --  Local variables
 
-      Saved_GM   : constant Ghost_Mode_Type := Ghost_Mode;
-      Saved_IGR  : constant Node_Id         := Ignored_Ghost_Region;
+      Saved_Ghost_Config : constant Ghost_Config_Type := Ghost_Config;
       Saved_EA   : constant Boolean         := Expander_Active;
       Saved_ISMP : constant Boolean         :=
                      Ignore_SPARK_Mode_Pragmas_In_Instance;
@@ -829,7 +833,8 @@ package body Sem_Ch7 is
       --  user entities, as internally generated entities might still need
       --  to be expanded (e.g. those generated for types).
 
-      if Present (Ignored_Ghost_Region)
+      if not CodePeer_Mode
+        and then Present (Ghost_Config.Ignored_Ghost_Region)
         and then Comes_From_Source (Body_Id)
       then
          Expander_Active := False;
@@ -870,11 +875,6 @@ package body Sem_Ch7 is
          New_N := Copy_Generic_Node (N, Empty, Instantiating => False);
          Rewrite (N, New_N);
 
-         --  Once the contents of the generic copy and the template are
-         --  swapped, do the same for their respective aspect specifications.
-
-         Exchange_Aspects (N, New_N);
-
          --  Collect all contract-related source pragmas found within the
          --  template and attach them to the contract of the package body.
          --  This contract is used in the capture of global references within
@@ -893,6 +893,9 @@ package body Sem_Ch7 is
       --  current node otherwise. Note that N was rewritten above, so we must
       --  be sure to get the latest Body_Id value.
 
+      if Ekind (Body_Id) = E_Package then
+         Reinit_Field_To_Zero (Body_Id, F_Body_Needed_For_Inlining);
+      end if;
       Mutate_Ekind (Body_Id, E_Package_Body);
       Set_Body_Entity (Spec_Id, Body_Id);
       Set_Spec_Entity (Body_Id, Spec_Id);
@@ -919,9 +922,7 @@ package body Sem_Ch7 is
       Set_Has_Completion (Spec_Id);
       Last_Spec_Entity := Last_Entity (Spec_Id);
 
-      if Has_Aspects (N) then
-         Analyze_Aspect_Specifications (N, Body_Id);
-      end if;
+      Analyze_Aspect_Specifications (N, Body_Id);
 
       Push_Scope (Spec_Id);
 
@@ -1146,12 +1147,14 @@ package body Sem_Ch7 is
          end if;
       end if;
 
-      if Present (Ignored_Ghost_Region) then
+      if not CodePeer_Mode and then
+        Present (Ghost_Config.Ignored_Ghost_Region)
+      then
          Expander_Active := Saved_EA;
       end if;
 
       Ignore_SPARK_Mode_Pragmas_In_Instance := Saved_ISMP;
-      Restore_Ghost_Region (Saved_GM, Saved_IGR);
+      Restore_Ghost_Region (Saved_Ghost_Config);
    end Analyze_Package_Body_Helper;
 
    ---------------------------------
@@ -1180,6 +1183,8 @@ package body Sem_Ch7 is
       Generate_Definition (Id);
       Enter_Name (Id);
       Mutate_Ekind  (Id, E_Package);
+      Set_Is_Not_Self_Hidden (Id);
+      --  Needed early because of Set_Categorization_From_Pragmas below
       Set_Etype  (Id, Standard_Void_Type);
 
       --  Set SPARK_Mode from context
@@ -1201,9 +1206,7 @@ package body Sem_Ch7 is
       --  Analyze aspect specifications immediately, since we need to recognize
       --  things like Pure early enough to diagnose violations during analysis.
 
-      if Has_Aspects (N) then
-         Analyze_Aspect_Specifications (N, Id);
-      end if;
+      Analyze_Aspect_Specifications (N, Id);
 
       --  Ada 2005 (AI-217): Check if the package has been illegally named in
       --  a limited-with clause of its own context. In this case the error has
@@ -1255,12 +1258,17 @@ package body Sem_Ch7 is
                Is_Main_Unit => Parent (N) = Cunit (Main_Unit));
          end if;
 
-         --  Warn about references to unset objects, which is straightforward
-         --  for packages with no bodies. For packages with bodies this is more
-         --  complicated, because some of the objects might be set between spec
-         --  and body elaboration, in nested or child packages, etc.
+         --  For package declarations at the library level, warn about
+         --  references to unset objects, which is straightforward for packages
+         --  with no bodies. For packages with bodies this is more complicated,
+         --  because some of the objects might be set between spec and body
+         --  elaboration, in nested or child packages, etc. Note that the
+         --  recursive calls in Check_References will handle nested package
+         --  specifications.
 
-         Check_References (Id);
+         if Is_Library_Level_Entity (Id) then
+            Check_References (Id);
+         end if;
       end if;
 
       --  Set Body_Required indication on the compilation unit node
@@ -1398,7 +1406,7 @@ package body Sem_Ch7 is
 
       begin
          if Id = Cunit_Entity (Main_Unit)
-           or else Parent (Decl) = Library_Unit (Cunit (Main_Unit))
+           or else Parent (Decl) = Other_Comp_Unit (Cunit (Main_Unit))
          then
             Generate_Reference (Id, Scope (Id), 'k', False);
 
@@ -1414,7 +1422,7 @@ package body Sem_Ch7 is
 
             begin
                if Nkind (Main_Spec) = N_Package_Body then
-                  Main_Spec := Unit (Library_Unit (Cunit (Main_Unit)));
+                  Main_Spec := Unit (Other_Comp_Unit (Cunit (Main_Unit)));
                end if;
 
                U := Parent_Spec (Main_Spec);
@@ -1724,6 +1732,14 @@ package body Sem_Ch7 is
             Error_Msg_N ("no declaration in visible part for incomplete}", E);
          end if;
 
+         --  A type's nonoverridable aspects need to be resolved at the end
+         --  of the enclosing list of declarations, not only at freeze points
+         --  (see 13.1.1 (11/5)). (Perhaps the proc name should be changed???)
+
+         if Is_Type (E) and then Has_Delayed_Aspects (E) then
+            Analyze_Aspects_At_Freeze_Point (E, Nonoverridable_Only => True);
+         end if;
+
          Next_Entity (E);
       end loop;
 
@@ -1927,6 +1943,20 @@ package body Sem_Ch7 is
             end;
          end if;
 
+         --  Preanalyze class-wide conditions of dispatching primitives defined
+         --  in nested packages. For library packages, class-wide pre- and
+         --  postconditions are preanalyzed when the primitives are frozen
+         --  (see Merge_Class_Conditions); for nested packages, the end of the
+         --  package does not cause freezing (and hence they must be analyzed
+         --  now to ensure the correct visibility of referenced entities).
+
+         if not Is_Compilation_Unit (Id)
+           and then Is_Dispatching_Operation (E)
+           and then Present (Contract (E))
+         then
+            Preanalyze_Class_Conditions (E);
+         end if;
+
          Next_Entity (E);
       end loop;
 
@@ -2063,9 +2093,7 @@ package body Sem_Ch7 is
       Set_SPARK_Pragma           (Id, SPARK_Mode_Pragma);
       Set_SPARK_Pragma_Inherited (Id);
 
-      if Has_Aspects (N) then
-         Analyze_Aspect_Specifications (N, Id);
-      end if;
+      Analyze_Aspect_Specifications (N, Id);
    end Analyze_Private_Type_Declaration;
 
    ----------------------------------
@@ -2239,7 +2267,32 @@ package body Sem_Ch7 is
                         Next_Elmt (Op_Elmt_2);
                      end loop;
 
-                     --  Case 2: We have not found any explicit overriding and
+                     --  Case 2: For a formal type, we need to explicitly check
+                     --  whether a local subprogram hides from all visibility
+                     --  the implicitly declared primitive, because subprograms
+                     --  declared in a generic package specification are never
+                     --  primitive for a formal type, even if they happen to
+                     --  override an operation of the type (RM 3.2.3(7.d/2)).
+
+                     if Is_Generic_Type (E) then
+                        declare
+                           S : Entity_Id;
+
+                        begin
+                           S := E;
+                           while Present (S) loop
+                              if Chars (S) = Chars (Parent_Subp)
+                                and then Type_Conformant (Prim_Op, S)
+                              then
+                                 goto Next_Primitive;
+                              end if;
+
+                              Next_Entity (S);
+                           end loop;
+                        end;
+                     end if;
+
+                     --  Case 3: We have not found any explicit overriding and
                      --  hence we need to declare the operation (i.e., make it
                      --  visible).
 
@@ -2380,7 +2433,7 @@ package body Sem_Ch7 is
 
          --  Do not enter implicitly inherited non-overridden subprograms of
          --  a tagged type back into visibility if they have non-conformant
-         --  homographs (Ada RM 8.3 12.3/2).
+         --  homographs (RM 8.3(12.3/2)).
 
          elsif Is_Hidden_Non_Overridden_Subpgm (Id) then
             null;
@@ -2494,11 +2547,13 @@ package body Sem_Ch7 is
            and then Scope (Full_View (Id)) = Scope (Id)
            and then Ekind (Full_View (Id)) /= E_Incomplete_Type
          then
+            Full := Full_View (Id);
+
             --  If there is a use-type clause on the private type, set the full
             --  view accordingly.
 
-            Set_In_Use (Full_View (Id), In_Use (Id));
-            Full := Full_View (Id);
+            Set_In_Use (Full, In_Use (Id));
+            Set_Current_Use_Clause (Full, Current_Use_Clause (Id));
 
             if Is_Private_Base_Type (Full)
               and then Has_Private_Declaration (Full)
@@ -2637,7 +2692,7 @@ package body Sem_Ch7 is
       then
          return True;
 
-      elsif not (Is_Derived_Type (Dep))
+      elsif not Is_Derived_Type (Dep)
         and then Is_Derived_Type (Full_View (Dep))
       then
          --  When instantiating a package body, the scope stack is empty, so
@@ -2720,22 +2775,16 @@ package body Sem_Ch7 is
          Mutate_Ekind (Id, E_Private_Type);
       end if;
 
-      Set_Etype              (Id, Id);
+      Set_Is_Not_Self_Hidden (Id);
+      Set_Etype (Id, Id);
       Set_Has_Delayed_Freeze (Id);
-      Set_Is_First_Subtype   (Id);
-      Reinit_Size_Align      (Id);
-
-      Set_Is_Constrained (Id,
-        No (Discriminant_Specifications (N))
-          and then not Unknown_Discriminants_Present (N));
+      Set_Is_First_Subtype (Id);
+      Reinit_Size_Align (Id);
 
       --  Set tagged flag before processing discriminants, to catch illegal
       --  usage.
 
       Set_Is_Tagged_Type (Id, Tagged_Present (Def));
-
-      Set_Discriminant_Constraint (Id, No_Elist);
-      Set_Stored_Constraint (Id, No_Elist);
 
       if Present (Discriminant_Specifications (N)) then
          Push_Scope (Id);
@@ -2744,6 +2793,9 @@ package body Sem_Ch7 is
 
       elsif Unknown_Discriminants_Present (N) then
          Set_Has_Unknown_Discriminants (Id);
+
+      else
+         Set_Is_Constrained (Id);
       end if;
 
       Set_Private_Dependents (Id, New_Elmt_List);
@@ -2807,13 +2859,14 @@ package body Sem_Ch7 is
       --  Otherwise test to see if entity requires a completion. Note that
       --  subprogram entities whose declaration does not come from source are
       --  ignored here on the basis that we assume the expander will provide an
-      --  implicit completion at some point.
+      --  implicit completion at some point. In particular, an inherited
+      --  subprogram of a derived type should not cause us to return True here.
 
       elsif (Is_Overloadable (Id)
               and then Ekind (Id) not in E_Enumeration_Literal | E_Operator
               and then not Is_Abstract_Subprogram (Id)
               and then not Has_Completion (Id)
-              and then Comes_From_Source (Parent (Id)))
+              and then Comes_From_Source (Id))
 
         or else
           (Ekind (Id) = E_Package
@@ -2868,7 +2921,12 @@ package body Sem_Ch7 is
       --  When compiling a child unit this needs to be done recursively.
 
       function Type_In_Use (T : Entity_Id) return Boolean;
-      --  Check whether type or base type appear in an active use_type clause
+      --  Check whether type T is declared in P and appears in an active
+      --  use_type clause.
+
+      function Type_Of_Primitive_In_Use_All (Id : Entity_Id) return Boolean;
+      --  Check whether the profile of primitive subprogram Id mentions a type
+      --  declared in P that appears in an active use-all-type clause.
 
       ------------------------------
       -- Preserve_Full_Attributes --
@@ -2898,6 +2956,7 @@ package body Sem_Ch7 is
                                      (Priv, Has_Pragma_Unreferenced_Objects
                                                                        (Full));
          Set_Predicates_Ignored      (Priv, Predicates_Ignored         (Full));
+
          if Is_Unchecked_Union (Full) then
             Set_Is_Unchecked_Union (Base_Type (Priv));
          end if;
@@ -2907,14 +2966,8 @@ package body Sem_Ch7 is
          end if;
 
          if Priv_Is_Base_Type then
-            Set_Is_Controlled_Active
-                              (Priv, Is_Controlled_Active     (Full_Base));
-            Set_Finalize_Storage_Only
-                              (Priv, Finalize_Storage_Only    (Full_Base));
-            Set_Has_Controlled_Component
-                              (Priv, Has_Controlled_Component (Full_Base));
-
-            Propagate_Concurrent_Flags (Priv, Base_Type (Full));
+            Propagate_Concurrent_Flags (Priv, Full_Base);
+            Propagate_Controlled_Flags (Priv, Full_Base);
          end if;
 
          --  As explained in Freeze_Entity, private types are required to point
@@ -3038,10 +3091,85 @@ package body Sem_Ch7 is
       -----------------
 
       function Type_In_Use (T : Entity_Id) return Boolean is
+         BT : constant Entity_Id := Base_Type (T);
       begin
-         return Scope (Base_Type (T)) = P
-           and then (In_Use (T) or else In_Use (Base_Type (T)));
+         return Scope (BT) = P and then (In_Use (T) or else In_Use (BT));
       end Type_In_Use;
+
+      ----------------------------------
+      -- Type_Of_Primitive_In_Use_All --
+      ----------------------------------
+
+      function Type_Of_Primitive_In_Use_All (Id : Entity_Id) return Boolean is
+         function Type_In_Use_All (T : Entity_Id) return Boolean;
+         --  Check whether type T is declared in P and appears in an active
+         --  use-all-type clause.
+
+         ---------------------
+         -- Type_In_Use_All --
+         ---------------------
+
+         function Type_In_Use_All (T : Entity_Id) return Boolean is
+         begin
+            return Type_In_Use (T)
+              and then Nkind (Current_Use_Clause (T)) = N_Use_Type_Clause
+              and then All_Present (Current_Use_Clause (T));
+         end Type_In_Use_All;
+
+         --  Local variables
+
+         F : Node_Id;
+
+      --  Start of processing for Type_Of_Primitive_In_Use_All
+
+      begin
+         --  The use-all-type clauses were introduced in Ada 2005
+
+         if Ada_Version <= Ada_95 then
+            return False;
+         end if;
+
+         --  For enumeration literals, check type
+
+         if Ekind (Id) = E_Enumeration_Literal then
+            return Type_In_Use_All (Etype (Id));
+         end if;
+
+         --  For functions, check return type
+
+         if Ekind (Id) = E_Function then
+            declare
+               Typ : constant Entity_Id :=
+                       (if Ekind (Etype (Id)) = E_Anonymous_Access_Type
+                        then Designated_Type (Etype (Id))
+                        else Etype (Id));
+            begin
+               if Type_In_Use_All (Typ) then
+                  return True;
+               end if;
+            end;
+         end if;
+
+         --  For all subprograms, check formals
+
+         F := First_Formal (Id);
+         while Present (F) loop
+            declare
+               Typ : constant Entity_Id :=
+                       (if Ekind (Etype (F)) = E_Anonymous_Access_Type
+                        then Designated_Type (Etype (F))
+                        else Etype (F));
+            begin
+               if Type_In_Use_All (Typ) then
+                  return True;
+               end if;
+            end;
+
+            Next_Formal (F);
+         end loop;
+
+         return False;
+      end Type_Of_Primitive_In_Use_All;
 
    --  Start of processing for Uninstall_Declarations
 
@@ -3066,8 +3194,7 @@ package body Sem_Ch7 is
          --  the instantiation of the formals appears in the visible part,
          --  but the formals are private and remain so.
 
-         if Ekind (Id) = E_Function
-           and then Is_Operator_Symbol_Name (Chars (Id))
+         if Nkind (Id) = N_Defining_Operator_Symbol
            and then not Is_Hidden (Id)
            and then not Error_Posted (Id)
          then
@@ -3100,13 +3227,13 @@ package body Sem_Ch7 is
             elsif No (Etype (Id)) and then Serious_Errors_Detected /= 0 then
                null;
 
-            --  We need to avoid incorrectly marking enumeration literals as
-            --  non-visible when a visible use-all-type clause is in effect.
+            --  RM 8.4(8.1/3): Each primitive subprogram of T, including each
+            --  enumeration literal (if any), is potentially use-visible if T
+            --  is named in an active use-all-type clause.
 
-            elsif Type_In_Use (Etype (Id))
-              and then Nkind (Current_Use_Clause (Etype (Id))) =
-                         N_Use_Type_Clause
-              and then All_Present (Current_Use_Clause (Etype (Id)))
+            elsif (Ekind (Id) = E_Enumeration_Literal
+                    or else (Is_Subprogram (Id) and then Is_Primitive (Id)))
+              and then Type_Of_Primitive_In_Use_All (Id)
             then
                null;
 
@@ -3187,10 +3314,6 @@ package body Sem_Ch7 is
             --  is simply that the initializing expression is missing.
 
             if not Has_Private_Declaration (Etype (Id)) then
-
-               --  We assume that the user did not intend a deferred constant
-               --  declaration, and the expression is just missing.
-
                Error_Msg_N
                  ("constant declaration requires initialization expression",
                    Parent (Id));
@@ -3362,6 +3485,9 @@ package body Sem_Ch7 is
                   Next_Elmt (Elmt);
                end loop;
             end;
+
+            Set_Is_Hidden (Id);
+            Set_Is_Potentially_Use_Visible (Id, False);
 
          --  For subtypes of private types the frontend generates two entities:
          --  one associated with the partial view and the other associated with

@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -46,27 +46,41 @@ namespace Resolver {
 class CanonicalPath
 {
 public:
-  CanonicalPath (const CanonicalPath &other) : segs (other.segs) {}
+  CanonicalPath (const CanonicalPath &other)
+    : segs (other.segs), crate_num (other.crate_num)
+  {}
 
   CanonicalPath &operator= (const CanonicalPath &other)
   {
     segs = other.segs;
+    crate_num = other.crate_num;
     return *this;
   }
 
-  static CanonicalPath new_seg (NodeId id, const std::string &path)
+  static CanonicalPath new_seg (NodeId id, std::string path)
   {
     rust_assert (!path.empty ());
-    return CanonicalPath ({std::pair<NodeId, std::string> (id, path)},
-			  UNKNOWN_CREATENUM);
+    return CanonicalPath ({std::pair<NodeId, std::string> (id,
+							   std::move (path))},
+			  UNKNOWN_CRATENUM);
   }
 
   static CanonicalPath
   trait_impl_projection_seg (NodeId id, const CanonicalPath &trait_seg,
 			     const CanonicalPath &impl_type_seg)
   {
-    return CanonicalPath::new_seg (id, "<" + impl_type_seg.get () + " as "
+    // https://doc.rust-lang.org/reference/paths.html#canonical-paths
+    // should be "<X>"?
+    return CanonicalPath::new_seg (id, "<impl " + impl_type_seg.get () + " as "
 					 + trait_seg.get () + ">");
+  }
+
+  static CanonicalPath inherent_impl_seg (NodeId id,
+					  const CanonicalPath &impl_type_seg)
+  {
+    // https://doc.rust-lang.org/reference/paths.html#canonical-paths
+    // should be "<X as Y>"?
+    return CanonicalPath::new_seg (id, "<impl " + impl_type_seg.get () + ">");
   }
 
   std::string get () const
@@ -88,7 +102,7 @@ public:
 
   static CanonicalPath create_empty ()
   {
-    return CanonicalPath ({}, UNKNOWN_CREATENUM);
+    return CanonicalPath ({}, UNKNOWN_CRATENUM);
   }
 
   bool is_empty () const { return segs.size () == 0; }
@@ -100,6 +114,8 @@ public:
       return CanonicalPath (other.segs, crate_num);
 
     std::vector<std::pair<NodeId, std::string>> copy (segs);
+    copy.reserve (other.segs.size ());
+
     for (auto &s : other.segs)
       copy.push_back (s);
 
@@ -171,7 +187,7 @@ public:
 
   CrateNum get_crate_num () const
   {
-    rust_assert (crate_num != UNKNOWN_CREATENUM);
+    rust_assert (crate_num != UNKNOWN_CRATENUM);
     return crate_num;
   }
 

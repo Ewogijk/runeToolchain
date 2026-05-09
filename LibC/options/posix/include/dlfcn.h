@@ -33,7 +33,7 @@ void *dlsym(void *__restrict __handle, const char *__restrict __name);
 void *dlvsym(void *__restrict __handle, const char *__restrict __name, const char *__restrict __version);
 
 #endif /* !__MLIBC_ABI_ONLY */
-#define _GNU_SOURCE //TODO is there another way to provide this?
+
 #if defined(_GNU_SOURCE) && __MLIBC_GLIBC_OPTION
 
 /*gnu extension */

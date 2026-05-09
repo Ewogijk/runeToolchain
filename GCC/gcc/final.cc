@@ -1,5 +1,5 @@
 /* Convert RTL to assembler code and output it, for GNU compiler.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -82,6 +82,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "print-rtl.h"
 #include "function-abi.h"
 #include "common/common-target.h"
+#include "diagnostic.h"
+#include "diagnostics/file-cache.h"
 
 #include "dwarf2out.h"
 
@@ -148,7 +150,7 @@ extern const int length_unit_log; /* This is defined in insn-attrtab.cc.  */
 const rtx_insn *this_is_asm_operands;
 
 /* Number of operands of this insn, for an `asm' with operands.  */
-static unsigned int insn_noperands;
+unsigned int insn_noperands;
 
 /* Compare optimization flag.  */
 
@@ -163,9 +165,9 @@ static int insn_counter = 0;
 
 static int block_depth;
 
-/* Nonzero if have enabled APP processing of our assembler output.  */
+/* True if have enabled APP processing of our assembler output.  */
 
-static int app_on;
+static bool app_on;
 
 /* If we are outputting an insn sequence, this contains the sequence rtx.
    Zero otherwise.  */
@@ -362,7 +364,11 @@ get_attr_length_1 (rtx_insn *insn, int (*fallback_fn) (rtx_insn *))
 
       case CALL_INSN:
       case JUMP_INSN:
-	length = fallback_fn (insn);
+	body = PATTERN (insn);
+	if (GET_CODE (body) == ASM_INPUT || asm_noperands (body) >= 0)
+	  length = asm_insn_count (body) * fallback_fn (insn);
+	else
+	  length = fallback_fn (insn);
 	break;
 
       case INSN:
@@ -603,7 +609,7 @@ insn_current_reference_address (rtx_insn *branch)
 
 /* Compute branch alignments based on CFG profile.  */
 
-unsigned int
+void
 compute_alignments (void)
 {
   basic_block bb;
@@ -617,7 +623,7 @@ compute_alignments (void)
 
   /* If not optimizing or optimizing for size, don't assign any alignments.  */
   if (! optimize || optimize_function_for_size_p (cfun))
-    return 0;
+    return;
 
   if (dump_file)
     {
@@ -721,7 +727,6 @@ compute_alignments (void)
 
   loop_optimizer_finalize ();
   free_dominance_info (CDI_DOMINATORS);
-  return 0;
 }
 
 /* Grow the LABEL_ALIGN array after new labels are created.  */
@@ -790,7 +795,8 @@ public:
   /* opt_pass methods: */
   unsigned int execute (function *) final override
   {
-    return compute_alignments ();
+    compute_alignments ();
+    return 0;
   }
 
 }; // class pass_compute_alignments
@@ -822,7 +828,7 @@ shorten_branches (rtx_insn *first)
   int max_uid;
   int i;
   rtx_insn *seq;
-  int something_changed = 1;
+  bool something_changed = true;
   char *varying_length;
   rtx body;
   int uid;
@@ -1103,7 +1109,7 @@ shorten_branches (rtx_insn *first)
 
   while (something_changed)
     {
-      something_changed = 0;
+      something_changed = false;
       insn_current_align = MAX_CODE_ALIGN - 1;
       for (insn_current_address = 0, insn = first;
 	   insn != 0;
@@ -1136,7 +1142,7 @@ shorten_branches (rtx_insn *first)
 			{
 			  log = newlog;
 			  LABEL_TO_ALIGNMENT (insn) = log;
-			  something_changed = 1;
+			  something_changed = true;
 			}
 		    }
 		}
@@ -1274,7 +1280,7 @@ shorten_branches (rtx_insn *first)
 		       * GET_MODE_SIZE (table->get_data_mode ()));
 		  insn_current_address += insn_lengths[uid];
 		  if (insn_lengths[uid] != old_length)
-		    something_changed = 1;
+		    something_changed = true;
 		}
 
 	      continue;
@@ -1332,7 +1338,7 @@ shorten_branches (rtx_insn *first)
 		      if (!increasing || inner_length > insn_lengths[inner_uid])
 			{
 			  insn_lengths[inner_uid] = inner_length;
-			  something_changed = 1;
+			  something_changed = true;
 			}
 		      else
 			inner_length = insn_lengths[inner_uid];
@@ -1358,7 +1364,7 @@ shorten_branches (rtx_insn *first)
 	      && (!increasing || new_length > insn_lengths[uid]))
 	    {
 	      insn_lengths[uid] = new_length;
-	      something_changed = 1;
+	      something_changed = true;
 	    }
 	  else
 	    insn_current_address += insn_lengths[uid] - new_length;
@@ -1512,6 +1518,8 @@ reemit_insn_block_notes (void)
 	  case NOTE_INSN_BEGIN_STMT:
 	  case NOTE_INSN_INLINE_ENTRY:
 	    this_block = LOCATION_BLOCK (NOTE_MARKER_LOCATION (insn));
+	    if (!this_block)
+	      continue;
 	    goto set_cur_block_to_this_block;
 
 	  default:
@@ -1537,7 +1545,6 @@ reemit_insn_block_notes (void)
 	    this_block = choose_inner_scope (this_block,
 					     insn_scope (body->insn (i)));
 	}
-    set_cur_block_to_this_block:
       if (! this_block)
 	{
 	  if (INSN_LOCATION (insn) == UNKNOWN_LOCATION)
@@ -1546,6 +1553,7 @@ reemit_insn_block_notes (void)
 	    this_block = DECL_INITIAL (cfun->decl);
 	}
 
+    set_cur_block_to_this_block:
       if (this_block != cur_block)
 	{
 	  change_scope (insn, cur_block, this_block);
@@ -1684,9 +1692,6 @@ final_start_function_1 (rtx_insn **firstp, FILE *file, int *seen,
   force_source_line = false;
 
   high_block_linenum = high_function_linenum = last_linenum;
-
-  if (flag_sanitize & SANITIZE_ADDRESS)
-    asan_function_start ();
 
   rtx_insn *first = *firstp;
   if (in_initial_view_p (first))
@@ -2068,7 +2073,7 @@ output_alternate_entry_point (FILE *file, rtx_insn *insn)
 
 /* Given a CALL_INSN, find and return the nested CALL. */
 static rtx
-call_from_call_insn (rtx_call_insn *insn)
+call_from_call_insn (const rtx_call_insn *insn)
 {
   rtx x;
   gcc_assert (CALL_P (insn));
@@ -2094,6 +2099,15 @@ call_from_call_insn (rtx_call_insn *insn)
   return x;
 }
 
+/* Return the CALL in X if there is one.  */
+
+rtx
+get_call_rtx_from (const rtx_insn *insn)
+{
+  const rtx_call_insn *call_insn = as_a<const rtx_call_insn *> (insn);
+  return call_from_call_insn (call_insn);
+}
+
 /* Print a comment into the asm showing FILENAME, LINENUM, and the
    corresponding source line, if available.  */
 
@@ -2103,7 +2117,8 @@ asm_show_source (const char *filename, int linenum)
   if (!filename)
     return;
 
-  char_span line = location_get_source_line (filename, linenum);
+  diagnostics::char_span line
+    = global_dc->get_file_cache ().get_source_line (filename, linenum);
   if (!line)
     return;
 
@@ -2300,7 +2315,7 @@ final_scan_insn_1 (rtx_insn *insn, FILE *file, int optimize_p ATTRIBUTE_UNUSED,
 
 	      /* Output debugging info about the symbol-block beginning.  */
 	      if (!DECL_IGNORED_P (current_function_decl))
-		debug_hooks->begin_block (last_linenum, n);
+		debug_hooks->begin_block (last_linenum, n, NOTE_BLOCK (insn));
 
 	      /* Mark this block as output.  */
 	      TREE_ASM_WRITTEN (NOTE_BLOCK (insn)) = 1;
@@ -3147,6 +3162,7 @@ walk_alter_subreg (rtx *xp, bool *changed)
     case PLUS:
     case MULT:
     case AND:
+    case ASHIFT:
       XEXP (x, 0) = walk_alter_subreg (&XEXP (x, 0), changed);
       XEXP (x, 1) = walk_alter_subreg (&XEXP (x, 1), changed);
       break;
@@ -3279,7 +3295,11 @@ output_asm_operand_names (rtx *operands, int *oporder, int nops)
   for (i = 0; i < nops; i++)
     {
       int addressp;
-      rtx op = operands[oporder[i]];
+      int opnum = oporder[i];
+      /* Skip invalid ops. */
+      if (opnum == MAX_RECOG_OPERANDS)
+	continue;
+      rtx op = operands[opnum];
       tree expr = get_mem_expr_from_op (op, &addressp);
 
       fprintf (asm_out_file, "%c%s",
@@ -3412,8 +3432,8 @@ output_asm_insn (const char *templ, rtx *operands)
 #ifdef ASSEMBLER_DIALECT
   int dialect = 0;
 #endif
-  int oporder[MAX_RECOG_OPERANDS];
-  char opoutput[MAX_RECOG_OPERANDS];
+  int oporder[MAX_RECOG_OPERANDS+1];
+  char opoutput[MAX_RECOG_OPERANDS+1];
   int ops = 0;
 
   /* An insn may return a null string template
@@ -3491,21 +3511,28 @@ output_asm_insn (const char *templ, rtx *operands)
 	    int letter = *p++;
 	    unsigned long opnum;
 	    char *endptr;
+	    int letter2 = 0;
 
+	    if (letter == 'c' && *p == 'c')
+	      letter2 = *p++;
 	    opnum = strtoul (p, &endptr, 10);
 
 	    if (endptr == p)
 	      output_operand_lossage ("operand number missing "
 				      "after %%-letter");
 	    else if (this_is_asm_operands && opnum >= insn_noperands)
-	      output_operand_lossage ("operand number out of range");
+	      {
+		/* Force the opnum in bounds to a bogus location. */
+		opnum = MAX_RECOG_OPERANDS;
+		output_operand_lossage ("operand number out of range");
+	      }
 	    else if (letter == 'l')
 	      output_asm_label (operands[opnum]);
 	    else if (letter == 'a')
 	      output_address (VOIDmode, operands[opnum]);
 	    else if (letter == 'c')
 	      {
-		if (CONSTANT_ADDRESS_P (operands[opnum]))
+		if (letter2 == 'c' || CONSTANT_ADDRESS_P (operands[opnum]))
 		  output_addr_const (asm_out_file, operands[opnum]);
 		else
 		  output_operand (operands[opnum], 'c');
@@ -3539,7 +3566,11 @@ output_asm_insn (const char *templ, rtx *operands)
 
 	    opnum = strtoul (p, &endptr, 10);
 	    if (this_is_asm_operands && opnum >= insn_noperands)
-	      output_operand_lossage ("operand number out of range");
+	      {
+		/* Force the opnum in bounds to a bogus location. */
+		opnum = MAX_RECOG_OPERANDS;
+		output_operand_lossage ("operand number out of range");
+	      }
 	    else
 	      output_operand (operands[opnum], 0);
 
@@ -4043,9 +4074,9 @@ asm_fprintf (FILE *file, const char *p, ...)
   va_end (argptr);
 }
 
-/* Return nonzero if this function has no function calls.  */
+/* Return true if this function has no function calls.  */
 
-int
+bool
 leaf_function_p (void)
 {
   rtx_insn *insn;
@@ -4056,29 +4087,29 @@ leaf_function_p (void)
   /* Some back-ends (e.g. s390) want leaf functions to stay leaf
      functions even if they call mcount.  */
   if (crtl->profile && !targetm.keep_leaf_when_profiled ())
-    return 0;
+    return false;
 
   for (insn = get_insns (); insn; insn = NEXT_INSN (insn))
     {
       if (CALL_P (insn)
 	  && ! SIBLING_CALL_P (insn)
 	  && ! FAKE_CALL_P (insn))
-	return 0;
+	return false;
       if (NONJUMP_INSN_P (insn)
 	  && GET_CODE (PATTERN (insn)) == SEQUENCE
 	  && CALL_P (XVECEXP (PATTERN (insn), 0, 0))
 	  && ! SIBLING_CALL_P (XVECEXP (PATTERN (insn), 0, 0)))
-	return 0;
+	return false;
     }
 
-  return 1;
+  return true;
 }
 
-/* Return 1 if branch is a forward branch.
+/* Return true if branch is a forward branch.
    Uses insn_shuid array, so it works only in the final pass.  May be used by
    output templates to customary add branch prediction hints.
  */
-int
+bool
 final_forward_branch_p (rtx_insn *insn)
 {
   int insn_id, label_id;
@@ -4102,10 +4133,10 @@ final_forward_branch_p (rtx_insn *insn)
 
 #ifdef LEAF_REGISTERS
 
-/* Return 1 if this function uses only the registers that can be
+/* Return bool if this function uses only the registers that can be
    safely renumbered.  */
 
-int
+bool
 only_leaf_regs_used (void)
 {
   int i;
@@ -4114,15 +4145,15 @@ only_leaf_regs_used (void)
   for (i = 0; i < FIRST_PSEUDO_REGISTER; i++)
     if ((df_regs_ever_live_p (i) || global_regs[i])
 	&& ! permitted_reg_in_leaf_functions[i])
-      return 0;
+      return false;
 
   if (crtl->uses_pic_offset_table
       && pic_offset_table_rtx != 0
       && REG_P (pic_offset_table_rtx)
       && ! permitted_reg_in_leaf_functions[REGNO (pic_offset_table_rtx)])
-    return 0;
+    return false;
 
-  return 1;
+  return true;
 }
 
 /* Scan all instructions and renumber all registers into those
@@ -4210,6 +4241,7 @@ leaf_renumber_regs_insn (rtx in_rtx)
       case 's':
       case '0':
       case 'i':
+      case 'L':
       case 'w':
       case 'p':
       case 'n':

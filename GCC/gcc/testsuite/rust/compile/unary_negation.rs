@@ -1,3 +1,6 @@
+#![feature(no_core)]
+#![no_core]
+
 fn main() {
     let a: i32 = -1;
     let b: i32 = 3 - -1;
@@ -5,5 +8,4 @@ fn main() {
     let d: i32 = !3;
 
     let e: f32 = -true; // // { dg-error "cannot apply unary - to bool" }
-    // { dg-error {failed to type resolve expression} "" { target *-*-* } .-1 }
 }

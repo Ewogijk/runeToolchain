@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -16,40 +16,26 @@
 // along with GCC; see the file COPYING3.  If not see
 // <http://www.gnu.org/licenses/>.
 
+#include "rust-system.h"
 #include "rust-tyty.h"
-
-#include "rust-hir-type-check-expr.h"
-#include "rust-hir-type-check-type.h"
+#include "rust-tyty-subst.h"
 #include "rust-tyty-visitor.h"
-#include "rust-tyty-call.h"
 #include "rust-hir-map.h"
 #include "rust-location.h"
-#include "rust-linemap.h"
-
+#include "rust-type-util.h"
+#include "rust-hir-type-bounds.h"
 #include "rust-substitution-mapper.h"
 #include "rust-hir-trait-reference.h"
-#include "rust-hir-type-bounds.h"
 #include "rust-hir-trait-resolve.h"
-#include "rust-tyty-cmp.h"
-#include "rust-type-util.h"
+#include "tree-pretty-print.h"
 
+#include "optional.h"
 #include "options.h"
+#include "tree.h"
+#include "fold-const.h"
 
 namespace Rust {
 namespace TyTy {
-
-bool autoderef_cmp_flag = false;
-
-void
-set_cmp_autoderef_mode ()
-{
-  autoderef_cmp_flag = true;
-}
-void
-reset_cmp_autoderef_mode ()
-{
-  autoderef_cmp_flag = false;
-}
 
 std::string
 TypeKindFormat::to_string (TypeKind kind)
@@ -125,10 +111,16 @@ TypeKindFormat::to_string (TypeKind kind)
     case TypeKind::CLOSURE:
       return "Closure";
 
+    case TypeKind::OPAQUE:
+      return "Opaque";
+
+    case TypeKind::CONST:
+      return "Const";
+
     case TypeKind::ERROR:
       return "ERROR";
     }
-  gcc_unreachable ();
+  rust_unreachable ();
 }
 
 bool
@@ -156,14 +148,15 @@ is_primitive_type_kind (TypeKind kind)
 BaseType::BaseType (HirId ref, HirId ty_ref, TypeKind kind, RustIdent ident,
 		    std::set<HirId> refs)
   : TypeBoundsMappings ({}), kind (kind), ref (ref), ty_ref (ty_ref),
-    combined (refs), ident (ident), mappings (Analysis::Mappings::get ())
+    orig_ref (ref), combined (refs), ident (ident),
+    mappings (Analysis::Mappings::get ())
 {}
 
 BaseType::BaseType (HirId ref, HirId ty_ref, TypeKind kind, RustIdent ident,
 		    std::vector<TypeBoundPredicate> specified_bounds,
 		    std::set<HirId> refs)
   : TypeBoundsMappings (specified_bounds), kind (kind), ref (ref),
-    ty_ref (ty_ref), combined (refs), ident (ident),
+    ty_ref (ty_ref), orig_ref (ref), combined (refs), ident (ident),
     mappings (Analysis::Mappings::get ())
 {}
 
@@ -194,6 +187,11 @@ BaseType::set_ty_ref (HirId id)
 {
   ty_ref = id;
 }
+HirId
+BaseType::get_orig_ref () const
+{
+  return orig_ref;
+}
 
 bool
 BaseType::is_equal (const BaseType &other) const
@@ -204,6 +202,58 @@ BaseType::is_equal (const BaseType &other) const
 bool
 BaseType::is_unit () const
 {
+  const TyTy::BaseType *x = destructure ();
+  switch (x->get_kind ())
+    {
+    case PARAM:
+    case PROJECTION:
+    case PLACEHOLDER:
+    case FNPTR:
+    case FNDEF:
+    case ARRAY:
+    case SLICE:
+    case POINTER:
+    case REF:
+    case CLOSURE:
+    case INFER:
+    case BOOL:
+    case CHAR:
+    case INT:
+    case UINT:
+    case FLOAT:
+    case USIZE:
+    case ISIZE:
+    case OPAQUE:
+    case STR:
+    case DYNAMIC:
+    case CONST:
+    case ERROR:
+      return false;
+
+      // FIXME ! is coerceable to () so we need to fix that
+    case NEVER:
+      return true;
+
+    case TUPLE:
+      {
+	return x->as<const TupleType> ()->num_fields () == 0;
+      }
+
+    case ADT:
+      {
+	auto adt = x->as<const ADTType> ();
+	if (adt->is_enum ())
+	  return false;
+
+	for (const auto &variant : adt->get_variants ())
+	  {
+	    if (variant->num_fields () > 0)
+	      return false;
+	  }
+
+	return true;
+      }
+    }
   return false;
 }
 
@@ -225,43 +275,13 @@ BaseType::append_reference (HirId id)
   combined.insert (id);
 }
 
-bool
-BaseType::supports_substitutions () const
-{
-  return false;
-}
-
-bool
-BaseType::has_subsititions_defined () const
-{
-  return false;
-}
-
-bool
-BaseType::can_substitute () const
-{
-  return supports_substitutions () && has_subsititions_defined ();
-}
-
-bool
-BaseType::needs_generic_substitutions () const
-{
-  return false;
-}
-
-bool
-BaseType::contains_type_parameters () const
-{
-  return !is_concrete ();
-}
-
 const RustIdent &
 BaseType::get_ident () const
 {
   return ident;
 }
 
-Location
+location_t
 BaseType::get_locus () const
 {
   return ident.locus;
@@ -269,7 +289,7 @@ BaseType::get_locus () const
 
 // FIXME this is missing locus
 bool
-BaseType::satisfies_bound (const TypeBoundPredicate &predicate) const
+BaseType::satisfies_bound (const TypeBoundPredicate &predicate, bool emit_error)
 {
   const Resolver::TraitReference *query = predicate.get ();
   for (const auto &bound : specified_bounds)
@@ -278,6 +298,9 @@ BaseType::satisfies_bound (const TypeBoundPredicate &predicate) const
       if (item->satisfies_bound (*query))
 	return true;
     }
+
+  if (destructure ()->is<InferType> ())
+    return true;
 
   bool satisfied = false;
   auto probed = Resolver::TypeBoundsProbe::Probe (this);
@@ -309,6 +332,11 @@ BaseType::satisfies_bound (const TypeBoundPredicate &predicate) const
       const HIR::ImplBlock &impl = *(b.second);
       for (const auto &item : impl.get_impl_items ())
 	{
+	  bool is_associated_type = item->get_impl_item_type ()
+				    == HIR::ImplItem::ImplItemType::TYPE_ALIAS;
+	  if (!is_associated_type)
+	    continue;
+
 	  TyTy::BaseType *impl_item_ty = nullptr;
 	  Analysis::NodeMapping i = item->get_impl_mappings ();
 	  bool query_ok = Resolver::query_type (i.get_hirid (), &impl_item_ty);
@@ -316,27 +344,20 @@ BaseType::satisfies_bound (const TypeBoundPredicate &predicate) const
 	    return false;
 
 	  std::string item_name = item->get_impl_item_name ();
-	  TypeBoundPredicateItem lookup
+	  tl::optional<TypeBoundPredicateItem> lookup
 	    = predicate.lookup_associated_item (item_name);
-	  if (lookup.is_error ())
+	  if (!lookup.has_value ())
 	    return false;
 
-	  const auto *item_ref = lookup.get_raw_item ();
+	  const auto *item_ref = lookup->get_raw_item ();
 	  TyTy::BaseType *bound_ty = item_ref->get_tyty ();
 
-	  // compare the types
-	  if (!bound_ty->can_eq (impl_item_ty, false))
-	    {
-	      RichLocation r (mappings->lookup_location (get_ref ()));
-	      r.add_range (predicate.get_locus ());
-	      r.add_range (mappings->lookup_location (i.get_hirid ()));
-
-	      rust_error_at (
-		r, "expected %<%s%> got %<%s%>",
-		bound_ty->destructure ()->get_name ().c_str (),
-		impl_item_ty->destructure ()->get_name ().c_str ());
-	      return false;
-	    }
+	  if (!Resolver::types_compatable (
+		TyTy::TyWithLocation (bound_ty, predicate.get_locus ()),
+		TyTy::TyWithLocation (impl_item_ty, item->get_locus ()),
+		mappings.lookup_location (get_ref ()), false /*emit-error*/,
+		false /*check-bounds*/))
+	    return false;
 	}
 
       return true;
@@ -346,21 +367,20 @@ BaseType::satisfies_bound (const TypeBoundPredicate &predicate) const
 }
 
 bool
-BaseType::bounds_compatible (const BaseType &other, Location locus,
-			     bool emit_error) const
+BaseType::bounds_compatible (BaseType &other, location_t locus, bool emit_error)
 {
   std::vector<std::reference_wrapper<const TypeBoundPredicate>>
     unsatisfied_bounds;
   for (auto &bound : get_specified_bounds ())
     {
-      if (!other.satisfies_bound (bound))
+      if (!other.satisfies_bound (bound, emit_error))
 	unsatisfied_bounds.push_back (bound);
     }
 
   // lets emit a single error for this
   if (unsatisfied_bounds.size () > 0)
     {
-      RichLocation r (locus);
+      rich_location r (line_table, locus);
       std::string missing_preds;
       for (size_t i = 0; i < unsatisfied_bounds.size (); i++)
 	{
@@ -375,8 +395,8 @@ BaseType::bounds_compatible (const BaseType &other, Location locus,
 
       if (emit_error)
 	{
-	  rust_error_at (r,
-			 "bounds not satisfied for %s %<%s%> is not satisfied",
+	  rust_error_at (r, ErrorCode::E0277,
+			 "bounds not satisfied for %s %qs is not satisfied",
 			 other.get_name ().c_str (), missing_preds.c_str ());
 	  // rust_assert (!emit_error);
 	}
@@ -401,33 +421,28 @@ BaseType::inherit_bounds (
     }
 }
 
-const BaseType *
-BaseType::get_root () const
+BaseType *
+BaseType::get_root ()
 {
-  // FIXME this needs to be it its own visitor class with a vector adjustments
-  const TyTy::BaseType *root = this;
-  if (get_kind () == TyTy::REF)
-    {
-      const ReferenceType *r = static_cast<const ReferenceType *> (root);
-      root = r->get_base ()->get_root ();
-    }
-  else if (get_kind () == TyTy::POINTER)
-    {
-      const PointerType *r = static_cast<const PointerType *> (root);
-      root = r->get_base ()->get_root ();
-    }
+  TyTy::BaseType *root = this;
 
-  // these are an unsize
-  else if (get_kind () == TyTy::SLICE)
+  if (const auto r = root->try_as<const ReferenceType> ())
     {
-      const SliceType *r = static_cast<const SliceType *> (root);
+      root = r->get_base ()->get_root ();
+    }
+  else if (const auto r = root->try_as<const PointerType> ())
+    {
+      root = r->get_base ()->get_root ();
+    }
+  // these are an unsize
+  else if (const auto r = root->try_as<const SliceType> ())
+    {
       root = r->get_element_type ()->get_root ();
     }
-  // else if (get_kind () == TyTy::ARRAY)
-  //   {
-  //     const ArrayType *r = static_cast<const ArrayType *> (root);
-  //     root = r->get_element_type ()->get_root ();
-  //   }
+  //  else if (const auto r = root->try_as<const ArrayType> ())
+  //    {
+  //      root = r->get_element_type ()->get_root ();
+  //    }
 
   return root;
 }
@@ -442,41 +457,51 @@ BaseType::destructure ()
       if (recurisve_ops++ >= rust_max_recursion_depth)
 	{
 	  rust_error_at (
-	    Location (),
+	    UNDEF_LOCATION,
 	    "%<recursion depth%> count exceeds limit of %i (use "
 	    "%<frust-max-recursion-depth=%> to increase the limit)",
 	    rust_max_recursion_depth);
 	  return new ErrorType (get_ref ());
 	}
 
-      switch (x->get_kind ())
+      if (auto p = x->try_as<ParamType> ())
 	{
-	  case TyTy::TypeKind::PARAM: {
-	    TyTy::ParamType *p = static_cast<TyTy::ParamType *> (x);
-	    TyTy::BaseType *pr = p->resolve ();
-	    if (pr == x)
-	      return pr;
+	  auto pr = p->resolve ();
+	  if (pr == x)
+	    return pr;
 
-	    x = pr;
-	  }
-	  break;
+	  x = pr;
+	}
+      else if (x->get_kind () == TypeKind::CONST)
+	{
+	  auto p = x->as_const_type ();
+	  if (p->const_kind () == BaseConstType::ConstKind::Decl)
+	    {
+	      auto decl = static_cast<ConstParamType *> (p);
+	      auto pr = decl->resolve ();
+	      if (pr == x)
+		return pr;
 
-	  case TyTy::TypeKind::PLACEHOLDER: {
-	    TyTy::PlaceholderType *p = static_cast<TyTy::PlaceholderType *> (x);
-	    if (!p->can_resolve ())
-	      return p;
+	      x = pr;
+	    }
+	  else
+	    {
+	      return x;
+	    }
+	}
+      else if (auto p = x->try_as<PlaceholderType> ())
+	{
+	  if (!p->can_resolve ())
+	    return p;
 
-	    x = p->resolve ();
-	  }
-	  break;
-
-	  case TyTy::TypeKind::PROJECTION: {
-	    TyTy::ProjectionType *p = static_cast<TyTy::ProjectionType *> (x);
-	    x = p->get ();
-	  }
-	  break;
-
-	default:
+	  x = p->resolve ();
+	}
+      else if (auto p = x->try_as<ProjectionType> ())
+	{
+	  x = p->get ();
+	}
+      else
+	{
 	  return x;
 	}
     }
@@ -494,48 +519,153 @@ BaseType::destructure () const
       if (recurisve_ops++ >= rust_max_recursion_depth)
 	{
 	  rust_error_at (
-	    Location (),
+	    UNDEF_LOCATION,
 	    "%<recursion depth%> count exceeds limit of %i (use "
 	    "%<frust-max-recursion-depth=%> to increase the limit)",
 	    rust_max_recursion_depth);
 	  return new ErrorType (get_ref ());
 	}
 
-      switch (x->get_kind ())
+      if (auto p = x->try_as<const ParamType> ())
 	{
-	  case TyTy::TypeKind::PARAM: {
-	    const TyTy::ParamType *p = static_cast<const TyTy::ParamType *> (x);
-	    const TyTy::BaseType *pr = p->resolve ();
-	    if (pr == x)
-	      return pr;
+	  auto pr = p->resolve ();
+	  if (pr == x)
+	    return pr;
 
-	    x = pr;
-	  }
-	  break;
+	  x = pr;
+	}
+      else if (x->get_kind () == TypeKind::CONST)
+	{
+	  auto p = x->as_const_type ();
+	  if (p->const_kind () == BaseConstType::ConstKind::Decl)
+	    {
+	      auto decl = static_cast<const ConstParamType *> (p);
+	      auto pr = decl->resolve ();
+	      if (pr == x)
+		return pr;
 
-	  case TyTy::TypeKind::PLACEHOLDER: {
-	    const TyTy::PlaceholderType *p
-	      = static_cast<const TyTy::PlaceholderType *> (x);
-	    if (!p->can_resolve ())
-	      return p;
+	      x = pr;
+	    }
+	  else
+	    {
+	      return x;
+	    }
+	}
+      else if (auto p = x->try_as<const PlaceholderType> ())
+	{
+	  if (!p->can_resolve ())
+	    return p;
 
-	    x = p->resolve ();
-	  }
-	  break;
+	  x = p->resolve ();
+	}
+      else if (auto p = x->try_as<const ProjectionType> ())
+	{
+	  x = p->get ();
+	}
+      else if (auto p = x->try_as<const OpaqueType> ())
+	{
+	  auto pr = p->resolve ();
+	  if (pr == x)
+	    return pr;
 
-	  case TyTy::TypeKind::PROJECTION: {
-	    const TyTy::ProjectionType *p
-	      = static_cast<const TyTy::ProjectionType *> (x);
-	    x = p->get ();
-	  }
-	  break;
-
-	default:
+	  x = pr;
+	}
+      else
+	{
 	  return x;
 	}
     }
 
   return x;
+}
+
+BaseType *
+BaseType::monomorphized_clone () const
+{
+  const TyTy::BaseType *x = destructure ();
+
+  if (auto arr = x->try_as<const ArrayType> ())
+    {
+      TyVar elm = arr->get_var_element_type ().monomorphized_clone ();
+      return new ArrayType (arr->get_ref (), arr->get_ty_ref (), ident.locus,
+			    arr->get_capacity_var (), elm,
+			    arr->get_combined_refs ());
+    }
+  else if (auto slice = x->try_as<const SliceType> ())
+    {
+      TyVar elm = slice->get_var_element_type ().monomorphized_clone ();
+      return new SliceType (slice->get_ref (), slice->get_ty_ref (),
+			    ident.locus, elm, slice->get_combined_refs ());
+    }
+  else if (auto ptr = x->try_as<const PointerType> ())
+    {
+      TyVar elm = ptr->get_var_element_type ().monomorphized_clone ();
+      return new PointerType (ptr->get_ref (), ptr->get_ty_ref (), elm,
+			      ptr->mutability (), ptr->get_combined_refs ());
+    }
+  else if (auto ref = x->try_as<const ReferenceType> ())
+    {
+      TyVar elm = ref->get_var_element_type ().monomorphized_clone ();
+      return new ReferenceType (ref->get_ref (), ref->get_ty_ref (), elm,
+				ref->mutability (), ref->get_region (),
+				ref->get_combined_refs ());
+    }
+  else if (auto tuple = x->try_as<const TupleType> ())
+    {
+      std::vector<TyVar> cloned_fields;
+      for (const auto &f : tuple->get_fields ())
+	cloned_fields.push_back (f.monomorphized_clone ());
+
+      return new TupleType (tuple->get_ref (), tuple->get_ty_ref (),
+			    ident.locus, cloned_fields,
+			    tuple->get_combined_refs ());
+    }
+  else if (auto fn = x->try_as<const FnType> ())
+    {
+      std::vector<TyTy::FnParam> cloned_params;
+      for (auto &p : fn->get_params ())
+	cloned_params.push_back (p.monomorphized_clone ());
+
+      BaseType *retty = fn->get_return_type ()->monomorphized_clone ();
+      return new FnType (fn->get_ref (), fn->get_ty_ref (), fn->get_id (),
+			 fn->get_identifier (), fn->ident, fn->get_flags (),
+			 fn->get_abi (), std::move (cloned_params), retty,
+			 fn->clone_substs (), fn->get_substitution_arguments (),
+			 fn->get_region_constraints (),
+			 fn->get_combined_refs ());
+    }
+  else if (auto fn = x->try_as<const FnPtr> ())
+    {
+      std::vector<TyVar> cloned_params;
+      for (auto &p : fn->get_params ())
+	cloned_params.push_back (p.monomorphized_clone ());
+
+      TyVar retty = fn->get_var_return_type ().monomorphized_clone ();
+      return new FnPtr (fn->get_ref (), fn->get_ty_ref (), ident.locus,
+			std::move (cloned_params), retty, fn->get_abi (),
+			fn->get_unsafety (), fn->get_combined_refs ());
+    }
+  else if (auto adt = x->try_as<const ADTType> ())
+    {
+      std::vector<VariantDef *> cloned_variants;
+      for (auto &variant : adt->get_variants ())
+	cloned_variants.push_back (variant->monomorphized_clone ());
+
+      return new ADTType (adt->get_id (), adt->get_ref (), adt->get_ty_ref (),
+			  adt->get_identifier (), adt->ident,
+			  adt->get_adt_kind (), cloned_variants,
+			  adt->clone_substs (), adt->get_repr_options (),
+			  adt->get_used_arguments (),
+			  adt->get_region_constraints (),
+			  adt->get_combined_refs ());
+    }
+  else
+    {
+      return x->clone ();
+    }
+
+  rust_unreachable ();
+  return nullptr;
 }
 
 std::string
@@ -565,20 +695,396 @@ BaseType::debug () const
 	      debug_str ().c_str ());
 }
 
+const TyTy::BaseType *
+BaseType::contains_infer () const
+{
+  const TyTy::BaseType *x = destructure ();
+
+  if (auto fn = x->try_as<const FnType> ())
+    {
+      for (const auto &param : fn->get_params ())
+	{
+	  auto infer = param.get_type ()->contains_infer ();
+	  if (infer)
+	    return infer;
+	}
+      return fn->get_return_type ()->contains_infer ();
+    }
+  else if (auto fn = x->try_as<const FnPtr> ())
+    {
+      for (const auto &param : fn->get_params ())
+	{
+	  auto infer = param.get_tyty ()->contains_infer ();
+	  if (infer)
+	    return infer;
+	}
+      return fn->get_return_type ()->contains_infer ();
+    }
+  else if (auto adt = x->try_as<const ADTType> ())
+    {
+      for (auto &variant : adt->get_variants ())
+	{
+	  bool is_num_variant
+	    = variant->get_variant_type () == VariantDef::VariantType::NUM;
+	  bool is_unit_variant
+	    = variant->get_variant_type () == VariantDef::VariantType::UNIT;
+	  if (is_num_variant || is_unit_variant)
+	    continue;
+
+	  for (auto &field : variant->get_fields ())
+	    {
+	      const BaseType *field_type = field->get_field_type ();
+	      auto infer = (field_type->contains_infer ());
+	      if (infer)
+		return infer;
+	    }
+	}
+      return nullptr;
+    }
+  else if (auto arr = x->try_as<const ArrayType> ())
+    {
+      return arr->get_element_type ()->contains_infer ();
+    }
+  else if (auto slice = x->try_as<const SliceType> ())
+    {
+      return slice->get_element_type ()->contains_infer ();
+    }
+  else if (auto ptr = x->try_as<const PointerType> ())
+    {
+      return ptr->get_base ()->contains_infer ();
+    }
+  else if (auto ref = x->try_as<const ReferenceType> ())
+    {
+      return ref->get_base ()->contains_infer ();
+    }
+  else if (auto tuple = x->try_as<const TupleType> ())
+    {
+      for (size_t i = 0; i < tuple->num_fields (); i++)
+	{
+	  auto infer = (tuple->get_field (i)->contains_infer ());
+	  if (infer)
+	    return infer;
+	}
+      return nullptr;
+    }
+  else if (auto closure = x->try_as<const ClosureType> ())
+    {
+      auto infer = (closure->get_parameters ().contains_infer ());
+      if (infer)
+	return infer;
+      return closure->get_result_type ().contains_infer ();
+    }
+  else if (x->is<InferType> ())
+    {
+      return x;
+    }
+
+  return nullptr;
+}
+
+bool
+BaseType::is_concrete () const
+{
+  const TyTy::BaseType *x = destructure ();
+
+  if (x->is<ParamType> () || x->is<ProjectionType> ())
+    {
+      return false;
+    }
+  else if (x->get_kind () == TyTy::TypeKind::CONST)
+    {
+      auto p = x->as_const_type ();
+      if (p->const_kind () == BaseConstType::ConstKind::Decl)
+	return false;
+
+      return true;
+    }
+  // placeholder is a special case for this case when it is not resolvable
+  // it means we its just an empty placeholder associated type which is
+  // concrete
+  else if (x->is<PlaceholderType> ())
+    {
+      return true;
+    }
+  else if (auto fn = x->try_as<const FnType> ())
+    {
+      for (const auto &param : fn->get_params ())
+	{
+	  if (!param.get_type ()->is_concrete ())
+	    return false;
+	}
+      return fn->get_return_type ()->is_concrete ();
+    }
+  else if (auto fn = x->try_as<const FnPtr> ())
+    {
+      for (const auto &param : fn->get_params ())
+	{
+	  if (!param.get_tyty ()->is_concrete ())
+	    return false;
+	}
+      return fn->get_return_type ()->is_concrete ();
+    }
+  else if (auto adt = x->try_as<const ADTType> ())
+    {
+      if (adt->is_unit ())
+	return !adt->needs_substitution ();
+
+      for (auto &variant : adt->get_variants ())
+	{
+	  bool is_num_variant
+	    = variant->get_variant_type () == VariantDef::VariantType::NUM;
+	  bool is_unit_variant
+	    = variant->get_variant_type () == VariantDef::VariantType::UNIT;
+	  if (is_num_variant || is_unit_variant)
+	    continue;
+
+	  for (auto &field : variant->get_fields ())
+	    {
+	      const BaseType *field_type = field->get_field_type ();
+	      if (!field_type->is_concrete ())
+		return false;
+	    }
+	}
+      return true;
+    }
+  else if (auto arr = x->try_as<const ArrayType> ())
+    {
+      return arr->get_element_type ()->is_concrete ()
+	     && arr->get_capacity ()->is_concrete ();
+    }
+  else if (auto slice = x->try_as<const SliceType> ())
+    {
+      return slice->get_element_type ()->is_concrete ();
+    }
+  else if (auto ptr = x->try_as<const PointerType> ())
+    {
+      return ptr->get_base ()->is_concrete ();
+    }
+  else if (auto ref = x->try_as<const ReferenceType> ())
+    {
+      return ref->get_base ()->is_concrete ();
+    }
+  else if (auto tuple = x->try_as<const TupleType> ())
+    {
+      for (size_t i = 0; i < tuple->num_fields (); i++)
+	{
+	  if (!tuple->get_field (i)->is_concrete ())
+	    return false;
+	}
+      return true;
+    }
+  else if (auto closure = x->try_as<const ClosureType> ())
+    {
+      if (closure->get_parameters ().is_concrete ())
+	return false;
+      return closure->get_result_type ().is_concrete ();
+    }
+  else if (x->is<InferType> () || x->is<BoolType> () || x->is<CharType> ()
+	   || x->is<IntType> () || x->is<UintType> () || x->is<FloatType> ()
+	   || x->is<USizeType> () || x->is<ISizeType> () || x->is<NeverType> ()
+	   || x->is<StrType> () || x->is<DynamicObjectType> ()
+	   || x->is<ErrorType> ())
+    {
+      return true;
+    }
+
+  return false;
+}
+
+bool
+BaseType::has_substitutions_defined () const
+{
+  const auto x = this;
+  switch (x->get_kind ())
+    {
+    case INFER:
+    case BOOL:
+    case CHAR:
+    case INT:
+    case UINT:
+    case FLOAT:
+    case USIZE:
+    case ISIZE:
+    case NEVER:
+    case STR:
+    case DYNAMIC:
+    case ERROR:
+    case FNPTR:
+    case ARRAY:
+    case SLICE:
+    case POINTER:
+    case REF:
+    case TUPLE:
+    case PARAM:
+    case PLACEHOLDER:
+    case CONST:
+    case OPAQUE:
+      return false;
+
+    case PROJECTION:
+      {
+	const ProjectionType &p = *static_cast<const ProjectionType *> (x);
+	const SubstitutionRef &ref = static_cast<const SubstitutionRef &> (p);
+	return ref.has_substitutions ();
+      }
+      break;
+
+    case FNDEF:
+      {
+	const FnType &fn = *static_cast<const FnType *> (x);
+	const SubstitutionRef &ref = static_cast<const SubstitutionRef &> (fn);
+	return ref.has_substitutions ();
+      }
+      break;
+
+    case ADT:
+      {
+	const ADTType &adt = *static_cast<const ADTType *> (x);
+	const SubstitutionRef &ref = static_cast<const SubstitutionRef &> (adt);
+	return ref.has_substitutions ();
+      }
+      break;
+
+    case CLOSURE:
+      {
+	const ClosureType &closure = *static_cast<const ClosureType *> (x);
+	const SubstitutionRef &ref
+	  = static_cast<const SubstitutionRef &> (closure);
+	return ref.has_substitutions ();
+      }
+      break;
+    }
+
+  return false;
+}
+
+bool
+BaseType::needs_generic_substitutions () const
+{
+  const TyTy::BaseType *x = destructure ();
+  switch (x->get_kind ())
+    {
+    case INFER:
+    case BOOL:
+    case CHAR:
+    case INT:
+    case UINT:
+    case FLOAT:
+    case USIZE:
+    case ISIZE:
+    case NEVER:
+    case STR:
+    case DYNAMIC:
+    case ERROR:
+    case FNPTR:
+    case ARRAY:
+    case SLICE:
+    case POINTER:
+    case REF:
+    case TUPLE:
+    case PARAM:
+    case PLACEHOLDER:
+    case CONST:
+    case OPAQUE:
+      return false;
+
+    case PROJECTION:
+      {
+	const ProjectionType &p = *static_cast<const ProjectionType *> (x);
+	const SubstitutionRef &ref = static_cast<const SubstitutionRef &> (p);
+	return ref.needs_substitution ();
+      }
+      break;
+
+    case FNDEF:
+      {
+	const FnType &fn = *static_cast<const FnType *> (x);
+	const SubstitutionRef &ref = static_cast<const SubstitutionRef &> (fn);
+	return ref.needs_substitution ();
+      }
+      break;
+
+    case ADT:
+      {
+	const ADTType &adt = *static_cast<const ADTType *> (x);
+	const SubstitutionRef &ref = static_cast<const SubstitutionRef &> (adt);
+	return ref.needs_substitution ();
+      }
+      break;
+
+    case CLOSURE:
+      {
+	const ClosureType &closure = *static_cast<const ClosureType *> (x);
+	const SubstitutionRef &ref
+	  = static_cast<const SubstitutionRef &> (closure);
+	return ref.needs_substitution ();
+      }
+      break;
+    }
+
+  return false;
+}
+
+const SubstitutionArgumentMappings &
+BaseType::get_subst_argument_mappings () const
+{
+  static auto empty = SubstitutionArgumentMappings::empty ();
+  const TyTy::BaseType *x = destructure ();
+  switch (x->get_kind ())
+    {
+    case PROJECTION:
+      {
+	const auto &p = *static_cast<const ProjectionType *> (x);
+	const auto &ref = static_cast<const SubstitutionRef &> (p);
+	return ref.get_substitution_arguments ();
+      }
+      break;
+
+    case FNDEF:
+      {
+	const auto &fn = *static_cast<const FnType *> (x);
+	const auto &ref = static_cast<const SubstitutionRef &> (fn);
+	return ref.get_substitution_arguments ();
+      }
+      break;
+
+    case ADT:
+      {
+	const auto &adt = *static_cast<const ADTType *> (x);
+	const auto &ref = static_cast<const SubstitutionRef &> (adt);
+	return ref.get_substitution_arguments ();
+      }
+      break;
+
+    case CLOSURE:
+      {
+	const auto &closure = *static_cast<const ClosureType *> (x);
+	const auto &ref = static_cast<const SubstitutionRef &> (closure);
+	return ref.get_substitution_arguments ();
+      }
+      break;
+
+    default:
+      return empty;
+    }
+
+  return empty;
+}
+
 // InferType
 
-InferType::InferType (HirId ref, InferTypeKind infer_kind, Location locus,
-		      std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::INFER,
-	      {Resolver::CanonicalPath::create_empty (), locus}, refs),
-    infer_kind (infer_kind)
+InferType::InferType (HirId ref, InferTypeKind infer_kind, TypeHint hint,
+		      location_t locus, std::set<HirId> refs)
+  : BaseType (ref, ref, KIND, {Resolver::CanonicalPath::create_empty (), locus},
+	      refs),
+    infer_kind (infer_kind), default_hint (hint)
 {}
 
 InferType::InferType (HirId ref, HirId ty_ref, InferTypeKind infer_kind,
-		      Location locus, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::INFER,
+		      TypeHint hint, location_t locus, std::set<HirId> refs)
+  : BaseType (ref, ty_ref, KIND,
 	      {Resolver::CanonicalPath::create_empty (), locus}, refs),
-    infer_kind (infer_kind)
+    infer_kind (infer_kind), default_hint (hint)
 {}
 
 InferType::InferTypeKind
@@ -591,12 +1097,6 @@ std::string
 InferType::get_name () const
 {
   return as_string ();
-}
-
-bool
-InferType::is_concrete () const
-{
-  return true;
 }
 
 void
@@ -626,13 +1126,6 @@ InferType::as_string () const
   return "<infer::error>";
 }
 
-bool
-InferType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  InferCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
 BaseType *
 InferType::clone () const
 {
@@ -645,20 +1138,20 @@ InferType::clone () const
   // chain of references accordingly to ensure we don't loose the ability to
   // update the inference variables when we solve the type
 
-  auto mappings = Analysis::Mappings::get ();
+  auto &mappings = Analysis::Mappings::get ();
   auto context = Resolver::TypeCheckContext::get ();
 
   InferType *clone
-    = new InferType (mappings->get_next_hir_id (), get_infer_kind (),
-		     get_ident ().locus, get_combined_refs ());
+    = new InferType (mappings.get_next_hir_id (), get_infer_kind (),
+		     default_hint, get_ident ().locus, get_combined_refs ());
 
-  context->insert_type (Analysis::NodeMapping (mappings->get_current_crate (),
+  context->insert_type (Analysis::NodeMapping (mappings.get_current_crate (),
 					       UNKNOWN_NODEID,
 					       clone->get_ref (),
 					       UNKNOWN_LOCAL_DEFID),
 			clone);
-  mappings->insert_location (clone->get_ref (),
-			     mappings->lookup_location (get_ref ()));
+  mappings.insert_location (clone->get_ref (),
+			    mappings.lookup_location (get_ref ()));
 
   // setup the chain to reference this
   clone->append_reference (get_ref ());
@@ -666,59 +1159,238 @@ InferType::clone () const
   return clone;
 }
 
-BaseType *
-InferType::monomorphized_clone () const
-{
-  return clone ();
-}
-
 bool
 InferType::default_type (BaseType **type) const
 {
   auto context = Resolver::TypeCheckContext::get ();
   bool ok = false;
-  switch (infer_kind)
+
+  // NOTE: Calling this error is misleading.
+  if (default_hint.kind == TypeKind::ERROR)
     {
-    case GENERAL:
+      switch (infer_kind)
+	{
+	case GENERAL:
+	  return false;
+
+	case INTEGRAL:
+	  {
+	    ok = context->lookup_builtin ("i32", type);
+	    rust_assert (ok);
+	    return ok;
+	  }
+
+	case FLOAT:
+	  {
+	    ok = context->lookup_builtin ("f64", type);
+	    rust_assert (ok);
+	    return ok;
+	  }
+	}
       return false;
-
-      case INTEGRAL: {
-	ok = context->lookup_builtin ("i32", type);
-	rust_assert (ok);
-	return ok;
-      }
-
-      case FLOAT: {
-	ok = context->lookup_builtin ("f64", type);
-	rust_assert (ok);
-	return ok;
-      }
     }
+
+  switch (default_hint.kind)
+    {
+    case ISIZE:
+      ok = context->lookup_builtin ("isize", type);
+      rust_assert (ok);
+      return ok;
+
+    case USIZE:
+      ok = context->lookup_builtin ("usize", type);
+      rust_assert (ok);
+      return ok;
+
+    case INT:
+      switch (default_hint.szhint)
+	{
+	case TypeHint::SizeHint::S8:
+	  ok = context->lookup_builtin ("i8", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S16:
+	  ok = context->lookup_builtin ("i16", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S32:
+	  ok = context->lookup_builtin ("i32", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S64:
+	  ok = context->lookup_builtin ("i64", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S128:
+	  ok = context->lookup_builtin ("i128", type);
+	  rust_assert (ok);
+	  return ok;
+
+	default:
+	  return false;
+	}
+      break;
+
+    case UINT:
+      switch (default_hint.szhint)
+	{
+	case TypeHint::SizeHint::S8:
+	  ok = context->lookup_builtin ("u8", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S16:
+	  ok = context->lookup_builtin ("u16", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S32:
+	  ok = context->lookup_builtin ("u32", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S64:
+	  ok = context->lookup_builtin ("u64", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S128:
+	  ok = context->lookup_builtin ("u128", type);
+	  rust_assert (ok);
+	  return ok;
+
+	default:
+	  return false;
+	}
+      break;
+
+    case TypeKind::FLOAT:
+      switch (default_hint.szhint)
+	{
+	case TypeHint::SizeHint::S32:
+	  ok = context->lookup_builtin ("f32", type);
+	  rust_assert (ok);
+	  return ok;
+
+	case TypeHint::SizeHint::S64:
+	  ok = context->lookup_builtin ("f64", type);
+	  rust_assert (ok);
+	  return ok;
+
+	default:
+	  return false;
+	}
+      break;
+
+    default:
+      return false;
+    }
+
   return false;
+}
+
+void
+InferType::apply_primitive_type_hint (const BaseType &hint)
+{
+  switch (hint.get_kind ())
+    {
+    case ISIZE:
+    case USIZE:
+      infer_kind = INTEGRAL;
+      default_hint.kind = hint.get_kind ();
+      break;
+
+    case INT:
+      {
+	infer_kind = INTEGRAL;
+	default_hint.kind = hint.get_kind ();
+	default_hint.shint = TypeHint::SignedHint::SIGNED;
+	switch (hint.as<const IntType> ()->get_int_kind ())
+	  {
+	  case IntType::I8:
+	    default_hint.szhint = TypeHint::SizeHint::S8;
+	    break;
+	  case IntType::I16:
+	    default_hint.szhint = TypeHint::SizeHint::S16;
+	    break;
+	  case IntType::I32:
+	    default_hint.szhint = TypeHint::SizeHint::S32;
+	    break;
+	  case IntType::I64:
+	    default_hint.szhint = TypeHint::SizeHint::S64;
+	    break;
+	  case IntType::I128:
+	    default_hint.szhint = TypeHint::SizeHint::S128;
+	    break;
+	  }
+      }
+      break;
+
+    case UINT:
+      {
+	infer_kind = INTEGRAL;
+	default_hint.kind = hint.get_kind ();
+	default_hint.shint = TypeHint::SignedHint::UNSIGNED;
+	switch (hint.as<const UintType> ()->get_uint_kind ())
+	  {
+	  case UintType::U8:
+	    default_hint.szhint = TypeHint::SizeHint::S8;
+	    break;
+	  case UintType::U16:
+	    default_hint.szhint = TypeHint::SizeHint::S16;
+	    break;
+	  case UintType::U32:
+	    default_hint.szhint = TypeHint::SizeHint::S32;
+	    break;
+	  case UintType::U64:
+	    default_hint.szhint = TypeHint::SizeHint::S64;
+	    break;
+	  case UintType::U128:
+	    default_hint.szhint = TypeHint::SizeHint::S128;
+	    break;
+	  }
+      }
+      break;
+
+    case TypeKind::FLOAT:
+      {
+	infer_kind = FLOAT;
+	default_hint.shint = TypeHint::SignedHint::SIGNED;
+	default_hint.kind = hint.get_kind ();
+	switch (hint.as<const FloatType> ()->get_float_kind ())
+	  {
+	  case FloatType::F32:
+	    default_hint.szhint = TypeHint::SizeHint::S32;
+	    break;
+
+	  case FloatType::F64:
+	    default_hint.szhint = TypeHint::SizeHint::S64;
+	    break;
+	  }
+      }
+      break;
+
+    default:
+      // TODO bool, char, never??
+      break;
+    }
 }
 
 // ErrorType
 
 ErrorType::ErrorType (HirId ref, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::ERROR,
-	      {Resolver::CanonicalPath::create_empty (), Location ()}, refs)
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), UNDEF_LOCATION}, refs)
 {}
 
 ErrorType::ErrorType (HirId ref, HirId ty_ref, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::ERROR,
-	      {Resolver::CanonicalPath::create_empty (), Location ()}, refs)
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), UNDEF_LOCATION}, refs)
 {}
-
-bool
-ErrorType::is_unit () const
-{
-  return true;
-}
-bool
-ErrorType::is_concrete () const
-{
-  return false;
-}
 
 std::string
 ErrorType::get_name () const
@@ -744,28 +1416,16 @@ ErrorType::as_string () const
   return "<tyty::error>";
 }
 
-bool
-ErrorType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  return get_kind () == other->get_kind ();
-}
-
 BaseType *
 ErrorType::clone () const
 {
   return new ErrorType (get_ref (), get_ty_ref (), get_combined_refs ());
 }
 
-BaseType *
-ErrorType::monomorphized_clone () const
-{
-  return clone ();
-}
-
 // Struct Field type
 
 StructFieldType::StructFieldType (HirId ref, std::string name, BaseType *ty,
-				  Location locus)
+				  location_t locus)
   : ref (ref), name (name), ty (ty), locus (locus)
 {}
 
@@ -793,19 +1453,13 @@ StructFieldType::set_field_type (BaseType *fty)
   ty = fty;
 }
 
-bool
-StructFieldType::is_concrete () const
-{
-  return ty->is_concrete ();
-}
-
 void
 StructFieldType::debug () const
 {
   rust_debug ("%s", as_string ().c_str ());
 }
 
-Location
+location_t
 StructFieldType::get_locus () const
 {
   return locus;
@@ -820,14 +1474,11 @@ StructFieldType::as_string () const
 bool
 StructFieldType::is_equal (const StructFieldType &other) const
 {
-  bool names_eq = get_name ().compare (other.get_name ()) == 0;
+  bool names_eq = get_name () == other.get_name ();
 
   TyTy::BaseType *o = other.get_field_type ();
-  if (o->get_kind () == TypeKind::PARAM)
-    {
-      ParamType *op = static_cast<ParamType *> (o);
-      o = op->resolve ();
-    }
+  if (auto op = o->try_as<ParamType> ())
+    o = op->resolve ();
 
   bool types_eq = get_field_type ()->is_equal (*o);
 
@@ -861,15 +1512,18 @@ VariantDef::variant_type_string (VariantType type)
       return "tuple";
     case STRUCT:
       return "struct";
+    case UNIT:
+      return "unit struct";
     }
-  gcc_unreachable ();
+  rust_unreachable ();
   return "";
 }
 
 VariantDef::VariantDef (HirId id, DefId defid, std::string identifier,
-			RustIdent ident, HIR::Expr *discriminant)
+			RustIdent ident,
+			tl::optional<std::unique_ptr<HIR::Expr>> &&discriminant)
   : id (id), defid (defid), identifier (identifier), ident (ident),
-    discriminant (discriminant)
+    discriminant (std::move (discriminant))
 
 {
   type = VariantType::NUM;
@@ -878,32 +1532,14 @@ VariantDef::VariantDef (HirId id, DefId defid, std::string identifier,
 
 VariantDef::VariantDef (HirId id, DefId defid, std::string identifier,
 			RustIdent ident, VariantType type,
-			HIR::Expr *discriminant,
+			tl::optional<std::unique_ptr<HIR::Expr>> &&discriminant,
 			std::vector<StructFieldType *> fields)
   : id (id), defid (defid), identifier (identifier), ident (ident), type (type),
-    discriminant (discriminant), fields (fields)
+    discriminant (std::move (discriminant)), fields (fields)
 {
   rust_assert ((type == VariantType::NUM && fields.empty ())
-	       || (type == VariantType::TUPLE || type == VariantType::STRUCT));
-}
-
-VariantDef::VariantDef (const VariantDef &other)
-  : id (other.id), defid (other.defid), identifier (other.identifier),
-    ident (other.ident), type (other.type), discriminant (other.discriminant),
-    fields (other.fields)
-{}
-
-VariantDef &
-VariantDef::operator= (const VariantDef &other)
-{
-  id = other.id;
-  identifier = other.identifier;
-  type = other.type;
-  discriminant = other.discriminant;
-  fields = other.fields;
-  ident = other.ident;
-
-  return *this;
+	       || (type == VariantType::UNIT && fields.empty ())
+	       || type == VariantType::TUPLE || type == VariantType::STRUCT);
 }
 
 VariantDef &
@@ -911,9 +1547,8 @@ VariantDef::get_error_node ()
 {
   static VariantDef node
     = VariantDef (UNKNOWN_HIRID, UNKNOWN_DEFID, "",
-		  {Resolver::CanonicalPath::create_empty (),
-		   Linemap::unknown_location ()},
-		  nullptr);
+		  {Resolver::CanonicalPath::create_empty (), UNKNOWN_LOCATION},
+		  tl::nullopt);
 
   return node;
 }
@@ -976,7 +1611,6 @@ VariantDef::get_field_at_index (size_t index)
 std::vector<StructFieldType *> &
 VariantDef::get_fields ()
 {
-  rust_assert (type != NUM);
   return fields;
 }
 
@@ -1002,18 +1636,31 @@ VariantDef::lookup_field (const std::string &lookup,
   return false;
 }
 
-HIR::Expr *
+HIR::Expr &
+VariantDef::get_discriminant ()
+{
+  return *discriminant.value ();
+}
+
+const HIR::Expr &
 VariantDef::get_discriminant () const
 {
-  rust_assert (discriminant != nullptr);
-  return discriminant;
+  return *discriminant.value ();
+}
+
+bool
+VariantDef::has_discriminant () const
+{
+  return discriminant.has_value ();
 }
 
 std::string
 VariantDef::as_string () const
 {
   if (type == VariantType::NUM)
-    return identifier + " = " + discriminant->as_string ();
+    return identifier
+	   + (has_discriminant () ? " = " + get_discriminant ().to_string ()
+				  : "");
 
   std::string buffer;
   for (size_t i = 0; i < fields.size (); ++i)
@@ -1038,9 +1685,6 @@ VariantDef::is_equal (const VariantDef &other) const
   if (identifier.compare (other.identifier) != 0)
     return false;
 
-  if (discriminant != other.discriminant)
-    return false;
-
   if (fields.size () != other.fields.size ())
     return false;
 
@@ -1060,8 +1704,13 @@ VariantDef::clone () const
   for (auto &f : fields)
     cloned_fields.push_back ((StructFieldType *) f->clone ());
 
-  return new VariantDef (id, defid, identifier, ident, type, discriminant,
-			 cloned_fields);
+  auto &&discriminant_opt = has_discriminant ()
+			      ? tl::optional<std::unique_ptr<HIR::Expr>> (
+				get_discriminant ().clone_expr ())
+			      : tl::nullopt;
+
+  return new VariantDef (id, defid, identifier, ident, type,
+			 std::move (discriminant_opt), cloned_fields);
 }
 
 VariantDef *
@@ -1071,8 +1720,13 @@ VariantDef::monomorphized_clone () const
   for (auto &f : fields)
     cloned_fields.push_back ((StructFieldType *) f->monomorphized_clone ());
 
-  return new VariantDef (id, defid, identifier, ident, type, discriminant,
-			 cloned_fields);
+  auto discriminant_opt = has_discriminant ()
+			    ? tl::optional<std::unique_ptr<HIR::Expr>> (
+			      get_discriminant ().clone_expr ())
+			    : tl::nullopt;
+
+  return new VariantDef (id, defid, identifier, ident, type,
+			 std::move (discriminant_opt), cloned_fields);
 }
 
 const RustIdent &
@@ -1082,6 +1736,43 @@ VariantDef::get_ident () const
 }
 
 // ADTType
+
+ADTType::ADTType (DefId id, HirId ref, std::string identifier, RustIdent ident,
+		  ADTKind adt_kind, std::vector<VariantDef *> variants,
+		  std::vector<SubstitutionParamMapping> subst_refs,
+		  SubstitutionArgumentMappings generic_arguments,
+		  RegionConstraints region_constraints, std::set<HirId> refs)
+  : BaseType (ref, ref, TypeKind::ADT, ident, refs),
+    SubstitutionRef (std::move (subst_refs), std::move (generic_arguments),
+		     region_constraints),
+    id (id), identifier (identifier), variants (variants), adt_kind (adt_kind)
+{}
+
+ADTType::ADTType (DefId id, HirId ref, HirId ty_ref, std::string identifier,
+		  RustIdent ident, ADTKind adt_kind,
+		  std::vector<VariantDef *> variants,
+		  std::vector<SubstitutionParamMapping> subst_refs,
+		  SubstitutionArgumentMappings generic_arguments,
+		  RegionConstraints region_constraints, std::set<HirId> refs)
+  : BaseType (ref, ty_ref, TypeKind::ADT, ident, refs),
+    SubstitutionRef (std::move (subst_refs), std::move (generic_arguments),
+		     region_constraints),
+    id (id), identifier (identifier), variants (variants), adt_kind (adt_kind)
+{}
+
+ADTType::ADTType (DefId id, HirId ref, HirId ty_ref, std::string identifier,
+		  RustIdent ident, ADTKind adt_kind,
+		  std::vector<VariantDef *> variants,
+		  std::vector<SubstitutionParamMapping> subst_refs,
+		  ReprOptions repr,
+		  SubstitutionArgumentMappings generic_arguments,
+		  RegionConstraints region_constraints, std::set<HirId> refs)
+  : BaseType (ref, ty_ref, TypeKind::ADT, ident, refs),
+    SubstitutionRef (std::move (subst_refs), std::move (generic_arguments),
+		     region_constraints),
+    id (id), identifier (identifier), variants (variants), adt_kind (adt_kind),
+    repr (repr)
+{}
 
 void
 ADTType::accept_vis (TyVisitor &vis)
@@ -1111,43 +1802,34 @@ ADTType::as_string () const
 }
 
 bool
-ADTType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  ADTCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
-bool
 ADTType::is_equal (const BaseType &other) const
 {
   if (get_kind () != other.get_kind ())
     return false;
 
-  auto other2 = static_cast<const ADTType &> (other);
-  if (get_adt_kind () != other2.get_adt_kind ())
+  auto other2 = other.as<const ADTType> ();
+  if (get_adt_kind () != other2->get_adt_kind ())
     return false;
 
-  if (number_of_variants () != other2.number_of_variants ())
+  if (number_of_variants () != other2->number_of_variants ())
     return false;
 
-  if (has_subsititions_defined () != other2.has_subsititions_defined ())
+  if (has_substitutions_defined () != other2->has_substitutions_defined ())
     return false;
 
-  if (has_subsititions_defined ())
+  if (has_substitutions_defined ())
     {
-      if (get_num_substitutions () != other2.get_num_substitutions ())
+      if (get_num_substitutions () != other2->get_num_substitutions ())
 	return false;
 
       for (size_t i = 0; i < get_num_substitutions (); i++)
 	{
 	  const SubstitutionParamMapping &a = substitutions.at (i);
-	  const SubstitutionParamMapping &b = other2.substitutions.at (i);
+	  const SubstitutionParamMapping &b = other2->substitutions.at (i);
 
-	  const ParamType *aa = a.get_param_ty ();
-	  const ParamType *bb = b.get_param_ty ();
-	  BaseType *aaa = aa->resolve ();
-	  BaseType *bbb = bb->resolve ();
-	  if (!aaa->is_equal (*bbb))
+	  const auto &aa = a.get_param_ty ();
+	  const auto &bb = b.get_param_ty ();
+	  if (!aa->is_equal (*bb))
 	    return false;
 	}
     }
@@ -1155,13 +1837,19 @@ ADTType::is_equal (const BaseType &other) const
   for (size_t i = 0; i < number_of_variants (); i++)
     {
       const TyTy::VariantDef *a = get_variants ().at (i);
-      const TyTy::VariantDef *b = other2.get_variants ().at (i);
+      const TyTy::VariantDef *b = other2->get_variants ().at (i);
 
       if (!a->is_equal (*b))
 	return false;
     }
 
   return true;
+}
+
+DefId
+ADTType::get_id () const
+{
+  return id;
 }
 
 BaseType *
@@ -1171,23 +1859,10 @@ ADTType::clone () const
   for (auto &variant : variants)
     cloned_variants.push_back (variant->clone ());
 
-  return new ADTType (get_ref (), get_ty_ref (), identifier, ident,
+  return new ADTType (get_id (), get_ref (), get_ty_ref (), identifier, ident,
 		      get_adt_kind (), cloned_variants, clone_substs (),
 		      get_repr_options (), used_arguments,
-		      get_combined_refs ());
-}
-
-BaseType *
-ADTType::monomorphized_clone () const
-{
-  std::vector<VariantDef *> cloned_variants;
-  for (auto &variant : variants)
-    cloned_variants.push_back (variant->monomorphized_clone ());
-
-  return new ADTType (get_ref (), get_ty_ref (), identifier, ident,
-		      get_adt_kind (), cloned_variants, clone_substs (),
-		      get_repr_options (), used_arguments,
-		      get_combined_refs ());
+		      get_region_constraints (), get_combined_refs ());
 }
 
 static bool
@@ -1195,11 +1870,8 @@ handle_substitions (SubstitutionArgumentMappings &subst_mappings,
 		    StructFieldType *field)
 {
   auto fty = field->get_field_type ();
-  bool is_param_ty = fty->get_kind () == TypeKind::PARAM;
-  if (is_param_ty)
+  if (auto p = fty->try_as<ParamType> ())
     {
-      ParamType *p = static_cast<ParamType *> (fty);
-
       SubstitutionArg arg = SubstitutionArg::error ();
       bool ok = subst_mappings.get_argument_for_symbol (p, &arg);
       if (ok)
@@ -1220,7 +1892,7 @@ handle_substitions (SubstitutionArgumentMappings &subst_mappings,
 	    }
 	}
     }
-  else if (fty->has_subsititions_defined () || fty->contains_type_parameters ())
+  else if (fty->has_substitutions_defined () || !fty->is_concrete ())
     {
       BaseType *concrete
 	= Resolver::SubstMapperInternal::Resolve (fty, subst_mappings);
@@ -1244,8 +1916,8 @@ handle_substitions (SubstitutionArgumentMappings &subst_mappings,
 ADTType *
 ADTType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
 {
-  ADTType *adt = static_cast<ADTType *> (clone ());
-  adt->set_ty_ref (mappings->get_next_hir_id ());
+  auto adt = clone ()->as<ADTType> ();
+  adt->set_ty_ref (mappings.get_next_hir_id ());
   adt->used_arguments = subst_mappings;
 
   for (auto &sub : adt->get_substs ())
@@ -1275,47 +1947,34 @@ ADTType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
 
 // TupleType
 
-TupleType::TupleType (HirId ref, Location locus, std::vector<TyVar> fields,
+TupleType::TupleType (HirId ref, location_t locus, std::vector<TyVar> fields,
 		      std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::TUPLE,
-	      {Resolver::CanonicalPath::create_empty (), locus}, refs),
+  : BaseType (ref, ref, KIND, {Resolver::CanonicalPath::create_empty (), locus},
+	      refs),
     fields (fields)
 {}
 
-TupleType::TupleType (HirId ref, HirId ty_ref, Location locus,
+TupleType::TupleType (HirId ref, HirId ty_ref, location_t locus,
 		      std::vector<TyVar> fields, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::TUPLE,
+  : BaseType (ref, ty_ref, KIND,
 	      {Resolver::CanonicalPath::create_empty (), locus}, refs),
     fields (fields)
 {}
 
 TupleType *
-TupleType::get_unit_type (HirId ref)
+TupleType::get_unit_type ()
 {
-  return new TupleType (ref, Linemap::predeclared_location ());
-}
-
-bool
-TupleType::is_unit () const
-{
-  return this->fields.empty ();
+  static TupleType *ret = nullptr;
+  if (ret == nullptr)
+    ret = new TupleType (Analysis::Mappings::get ().get_next_hir_id (),
+			 BUILTINS_LOCATION);
+  return ret;
 }
 
 size_t
 TupleType::num_fields () const
 {
   return fields.size ();
-}
-
-bool
-TupleType::is_concrete () const
-{
-  for (size_t i = 0; i < num_fields (); i++)
-    {
-      if (!get_field (i)->is_concrete ())
-	return false;
-    }
-  return true;
 }
 
 const std::vector<TyVar> &
@@ -1358,7 +2017,7 @@ TupleType::get_name () const
   std::string fields_buffer;
   for (const TyVar &field : get_fields ())
     {
-      fields_buffer += field.get_tyty ()->as_string ();
+      fields_buffer += field.get_tyty ()->get_name ();
       bool has_next = (i + 1) < get_fields ().size ();
       fields_buffer += has_next ? ", " : "";
       i++;
@@ -1373,25 +2032,18 @@ TupleType::get_field (size_t index) const
 }
 
 bool
-TupleType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  TupleCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
-bool
 TupleType::is_equal (const BaseType &other) const
 {
   if (get_kind () != other.get_kind ())
     return false;
 
-  auto other2 = static_cast<const TupleType &> (other);
-  if (num_fields () != other2.num_fields ())
+  auto other2 = other.as<const TupleType> ();
+  if (num_fields () != other2->num_fields ())
     return false;
 
   for (size_t i = 0; i < num_fields (); i++)
     {
-      if (!get_field (i)->is_equal (*other2.get_field (i)))
+      if (!get_field (i)->is_equal (*other2->get_field (i)))
 	return false;
     }
   return true;
@@ -1408,30 +2060,19 @@ TupleType::clone () const
 			cloned_fields, get_combined_refs ());
 }
 
-BaseType *
-TupleType::monomorphized_clone () const
-{
-  std::vector<TyVar> cloned_fields;
-  for (const auto &f : fields)
-    cloned_fields.push_back (f.monomorphized_clone ());
-
-  return new TupleType (get_ref (), get_ty_ref (), get_ident ().locus,
-			cloned_fields, get_combined_refs ());
-}
-
 TupleType *
 TupleType::handle_substitions (SubstitutionArgumentMappings &mappings)
 {
-  auto mappings_table = Analysis::Mappings::get ();
+  auto &mappings_table = Analysis::Mappings::get ();
 
-  TupleType *tuple = static_cast<TupleType *> (clone ());
-  tuple->set_ref (mappings_table->get_next_hir_id ());
-  tuple->set_ty_ref (mappings_table->get_next_hir_id ());
+  auto tuple = clone ()->as<TupleType> ();
+  tuple->set_ref (mappings_table.get_next_hir_id ());
+  tuple->set_ty_ref (mappings_table.get_next_hir_id ());
 
   for (size_t i = 0; i < tuple->fields.size (); i++)
     {
       TyVar &field = fields.at (i);
-      if (field.get_tyty ()->contains_type_parameters ())
+      if (!field.get_tyty ()->is_concrete ())
 	{
 	  BaseType *concrete
 	    = Resolver::SubstMapperInternal::Resolve (field.get_tyty (),
@@ -1462,9 +2103,9 @@ FnType::as_string () const
   std::string params_str = "";
   for (auto &param : params)
     {
-      auto pattern = param.first;
-      auto ty = param.second;
-      params_str += pattern->as_string () + " " + ty->as_string ();
+      auto &pattern = param.get_pattern ();
+      auto ty = param.get_type ();
+      params_str += pattern.to_string () + " " + ty->as_string ();
       params_str += ",";
     }
 
@@ -1473,29 +2114,22 @@ FnType::as_string () const
 }
 
 bool
-FnType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  FnCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
-bool
 FnType::is_equal (const BaseType &other) const
 {
   if (get_kind () != other.get_kind ())
     return false;
 
-  auto other2 = static_cast<const FnType &> (other);
+  auto &other2 = static_cast<const FnType &> (other);
   if (get_identifier ().compare (other2.get_identifier ()) != 0)
     return false;
 
   if (!get_return_type ()->is_equal (*other2.get_return_type ()))
     return false;
 
-  if (has_subsititions_defined () != other2.has_subsititions_defined ())
+  if (has_substitutions_defined () != other2.has_substitutions_defined ())
     return false;
 
-  if (has_subsititions_defined ())
+  if (has_substitutions_defined ())
     {
       if (get_num_substitutions () != other2.get_num_substitutions ())
 	return false;
@@ -1506,9 +2140,8 @@ FnType::is_equal (const BaseType &other) const
 	  const SubstitutionParamMapping &a = get_substs ().at (i);
 	  const SubstitutionParamMapping &b = ofn.get_substs ().at (i);
 
-	  const ParamType *pa = a.get_param_ty ();
-	  const ParamType *pb = b.get_param_ty ();
-
+	  const auto *pa = a.get_param_ty ();
+	  const auto *pb = b.get_param_ty ();
 	  if (!pa->is_equal (*pb))
 	    return false;
 	}
@@ -1519,8 +2152,8 @@ FnType::is_equal (const BaseType &other) const
 
   for (size_t i = 0; i < num_params (); i++)
     {
-      auto lhs = param_at (i).second;
-      auto rhs = other2.param_at (i).second;
+      auto lhs = param_at (i).get_type ();
+      auto rhs = other2.param_at (i).get_type ();
       if (!lhs->is_equal (*rhs))
 	return false;
     }
@@ -1530,26 +2163,14 @@ FnType::is_equal (const BaseType &other) const
 BaseType *
 FnType::clone () const
 {
-  std::vector<std::pair<HIR::Pattern *, BaseType *>> cloned_params;
+  std::vector<TyTy::FnParam> cloned_params;
   for (auto &p : params)
-    cloned_params.push_back ({p.first, p.second->clone ()});
+    cloned_params.push_back (p.clone ());
 
   return new FnType (get_ref (), get_ty_ref (), get_id (), get_identifier (),
 		     ident, flags, abi, std::move (cloned_params),
 		     get_return_type ()->clone (), clone_substs (),
-		     get_combined_refs ());
-}
-
-BaseType *
-FnType::monomorphized_clone () const
-{
-  std::vector<std::pair<HIR::Pattern *, BaseType *>> cloned_params;
-  for (auto &p : params)
-    cloned_params.push_back ({p.first, p.second->monomorphized_clone ()});
-
-  return new FnType (get_ref (), get_ty_ref (), get_id (), get_identifier (),
-		     ident, flags, abi, std::move (cloned_params),
-		     get_return_type ()->clone (), clone_substs (),
+		     get_substitution_arguments (), get_region_constraints (),
 		     get_combined_refs ());
 }
 
@@ -1557,7 +2178,7 @@ FnType *
 FnType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
 {
   FnType *fn = static_cast<FnType *> (clone ());
-  fn->set_ty_ref (mappings->get_next_hir_id ());
+  fn->set_ty_ref (mappings.get_next_hir_id ());
   fn->used_arguments = subst_mappings;
 
   for (auto &sub : fn->get_substs ())
@@ -1598,8 +2219,7 @@ FnType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
 	    }
 	}
     }
-  else if (fty->needs_generic_substitutions ()
-	   || fty->contains_type_parameters ())
+  else if (fty->needs_generic_substitutions () || !fty->is_concrete ())
     {
       BaseType *concrete
 	= Resolver::SubstMapperInternal::Resolve (fty, subst_mappings);
@@ -1619,7 +2239,7 @@ FnType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
 
   for (auto &param : fn->get_params ())
     {
-      auto fty = param.second;
+      auto fty = param.get_type ();
 
       bool is_param_ty = fty->get_kind () == TypeKind::PARAM;
       if (is_param_ty)
@@ -1638,7 +2258,7 @@ FnType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
 		{
 		  auto new_field = argt->clone ();
 		  new_field->set_ref (fty->get_ref ());
-		  param.second = new_field;
+		  param.set_type (new_field);
 		}
 	      else
 		{
@@ -1646,8 +2266,7 @@ FnType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
 		}
 	    }
 	}
-      else if (fty->has_subsititions_defined ()
-	       || fty->contains_type_parameters ())
+      else if (fty->has_substitutions_defined () || !fty->is_concrete ())
 	{
 	  BaseType *concrete
 	    = Resolver::SubstMapperInternal::Resolve (fty, subst_mappings);
@@ -1663,7 +2282,7 @@ FnType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
 
 	  auto new_field = concrete->clone ();
 	  new_field->set_ref (fty->get_ref ());
-	  param.second = new_field;
+	  param.set_type (new_field);
 	}
     }
 
@@ -1693,14 +2312,13 @@ FnPtr::as_string () const
       params_str += p.get_tyty ()->as_string () + " ,";
     }
 
-  return "fnptr (" + params_str + ") -> " + get_return_type ()->as_string ();
-}
+  std::string unsafety = "";
+  if (get_unsafety () == Unsafety::Unsafe)
+    unsafety = "unsafe ";
 
-bool
-FnPtr::can_eq (const BaseType *other, bool emit_errors) const
-{
-  FnptrCmp r (this, emit_errors);
-  return r.can_eq (other);
+  std::string abi = get_string_from_abi (get_abi ());
+  return unsafety + "abi:" + abi + " " + "fnptr (" + params_str + ") -> "
+	 + get_return_type ()->as_string ();
 }
 
 bool
@@ -1720,7 +2338,7 @@ FnPtr::is_equal (const BaseType &other) const
 
   for (size_t i = 0; i < num_params (); i++)
     {
-      if (!param_at (i)->is_equal (*other2.param_at (i)))
+      if (!get_param_type_at (i)->is_equal (*other2.get_param_type_at (i)))
 	return false;
     }
   return true;
@@ -1730,24 +2348,48 @@ BaseType *
 FnPtr::clone () const
 {
   std::vector<TyVar> cloned_params;
+  cloned_params.reserve (params.size ());
+
   for (auto &p : params)
-    cloned_params.push_back (TyVar (p.get_ref ()));
+    cloned_params.emplace_back (p.get_ref ());
 
   return new FnPtr (get_ref (), get_ty_ref (), ident.locus,
-		    std::move (cloned_params), result_type,
-		    get_combined_refs ());
+		    std::move (cloned_params), result_type, get_abi (),
+		    get_unsafety (), get_combined_refs ());
 }
 
-BaseType *
-FnPtr::monomorphized_clone () const
+FnPtr *
+FnPtr::handle_substitions (SubstitutionArgumentMappings &mappings)
 {
-  std::vector<TyVar> cloned_params;
-  for (auto &p : params)
-    cloned_params.push_back (p.monomorphized_clone ());
+  auto &mappings_table = Analysis::Mappings::get ();
 
-  return new FnPtr (get_ref (), get_ty_ref (), ident.locus,
-		    std::move (cloned_params), result_type,
-		    get_combined_refs ());
+  auto fn = clone ()->as<FnPtr> ();
+  fn->set_ref (mappings_table.get_next_hir_id ());
+  fn->set_ty_ref (mappings_table.get_next_hir_id ());
+
+  if (!fn->result_type.get_tyty ()->is_concrete ())
+    {
+      BaseType *concrete
+	= Resolver::SubstMapperInternal::Resolve (fn->result_type.get_tyty (),
+						  mappings);
+      fn->result_type
+	= TyVar::subst_covariant_var (fn->result_type.get_tyty (), concrete);
+    }
+
+  for (size_t i = 0; i < fn->params.size (); i++)
+    {
+      TyVar &field = fn->params.at (i);
+      if (!field.get_tyty ()->is_concrete ())
+	{
+	  BaseType *concrete
+	    = Resolver::SubstMapperInternal::Resolve (field.get_tyty (),
+						      mappings);
+	  fn->params[i]
+	    = TyVar::subst_covariant_var (field.get_tyty (), concrete);
+	}
+    }
+
+  return fn;
 }
 
 void
@@ -1767,13 +2409,6 @@ ClosureType::as_string () const
 {
   std::string params_buf = parameters->as_string ();
   return "|" + params_buf + "| {" + result_type.get_tyty ()->as_string () + "}";
-}
-
-bool
-ClosureType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  ClosureCmp r (this, emit_errors);
-  return r.can_eq (other);
 }
 
 bool
@@ -1801,16 +2436,10 @@ ClosureType::clone () const
 			  specified_bounds);
 }
 
-BaseType *
-ClosureType::monomorphized_clone () const
-{
-  return clone ();
-}
-
 ClosureType *
 ClosureType::handle_substitions (SubstitutionArgumentMappings &mappings)
 {
-  gcc_unreachable ();
+  rust_unreachable ();
   return nullptr;
 }
 
@@ -1818,22 +2447,27 @@ void
 ClosureType::setup_fn_once_output () const
 {
   // lookup the lang items
-  auto fn_once_lang_item = Analysis::RustLangItem::ItemType::FN_ONCE;
-  auto fn_once_output_lang_item
-    = Analysis::RustLangItem::ItemType::FN_ONCE_OUTPUT;
+  auto fn_once_lookup = mappings.lookup_lang_item (LangItem::Kind::FN_ONCE);
+  auto fn_once_output_lookup
+    = mappings.lookup_lang_item (LangItem::Kind::FN_ONCE_OUTPUT);
+  if (!fn_once_lookup)
+    {
+      rust_fatal_error (UNKNOWN_LOCATION,
+			"Missing required %<fn_once%> lang item");
+      return;
+    }
+  if (!fn_once_output_lookup)
+    {
+      rust_fatal_error (UNKNOWN_LOCATION,
+			"Missing required %<fn_once_ouput%> lang item");
+      return;
+    }
 
-  DefId trait_id = UNKNOWN_DEFID;
-  bool trait_lang_item_defined
-    = mappings->lookup_lang_item (fn_once_lang_item, &trait_id);
-  rust_assert (trait_lang_item_defined);
-
-  DefId trait_item_id = UNKNOWN_DEFID;
-  bool trait_item_lang_item_defined
-    = mappings->lookup_lang_item (fn_once_output_lang_item, &trait_item_id);
-  rust_assert (trait_item_lang_item_defined);
+  DefId &trait_id = fn_once_lookup.value ();
+  DefId &trait_item_id = fn_once_output_lookup.value ();
 
   // resolve to the trait
-  HIR::Item *item = mappings->lookup_defid (trait_id);
+  HIR::Item *item = mappings.lookup_defid (trait_id).value ();
   rust_assert (item->get_item_kind () == HIR::Item::ItemKind::Trait);
   HIR::Trait *trait = static_cast<HIR::Trait *> (item);
 
@@ -1843,8 +2477,7 @@ ClosureType::setup_fn_once_output () const
 
   // resolve to trait item
   HIR::TraitItem *trait_item
-    = mappings->lookup_trait_item_defid (trait_item_id);
-  rust_assert (trait_item != nullptr);
+    = mappings.lookup_trait_item_defid (trait_item_id).value ();
   rust_assert (trait_item->get_item_kind ()
 	       == HIR::TraitItem::TraitItemKind::TYPE);
   std::string item_identifier = trait_item->trait_identifier ();
@@ -1875,14 +2508,10 @@ ArrayType::accept_vis (TyConstVisitor &vis) const
 std::string
 ArrayType::as_string () const
 {
-  return "[" + get_element_type ()->as_string () + ":" + "CAPACITY" + "]";
-}
+  auto cap = get_capacity ();
+  std::string capacity_str = cap->as_string ();
 
-bool
-ArrayType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  ArrayCmp r (this, emit_errors);
-  return r.can_eq (other);
+  return "[" + get_element_type ()->as_string () + "; " + capacity_str + "]";
 }
 
 bool
@@ -1905,33 +2534,44 @@ ArrayType::get_element_type () const
   return element_type.get_tyty ();
 }
 
-BaseType *
-ArrayType::clone () const
+const TyVar &
+ArrayType::get_var_element_type () const
 {
-  return new ArrayType (get_ref (), get_ty_ref (), ident.locus, capacity_expr,
-			element_type, get_combined_refs ());
+  return element_type;
 }
 
 BaseType *
-ArrayType::monomorphized_clone () const
+ArrayType::get_capacity () const
 {
-  return new ArrayType (get_ref (), get_ty_ref (), ident.locus, capacity_expr,
-			element_type.monomorphized_clone (),
-			get_combined_refs ());
+  return capacity.get_tyty ();
+}
+
+BaseType *
+ArrayType::clone () const
+{
+  return new ArrayType (get_ref (), get_ty_ref (), ident.locus, capacity,
+			element_type, get_combined_refs ());
 }
 
 ArrayType *
 ArrayType::handle_substitions (SubstitutionArgumentMappings &mappings)
 {
-  auto mappings_table = Analysis::Mappings::get ();
+  auto &mappings_table = Analysis::Mappings::get ();
 
   ArrayType *ref = static_cast<ArrayType *> (clone ());
-  ref->set_ty_ref (mappings_table->get_next_hir_id ());
+  ref->set_ty_ref (mappings_table.get_next_hir_id ());
 
   // might be &T or &ADT so this needs to be recursive
   auto base = ref->get_element_type ();
   BaseType *concrete = Resolver::SubstMapperInternal::Resolve (base, mappings);
   ref->element_type = TyVar::subst_covariant_var (base, concrete);
+
+  // handle capacity type
+  auto cap = ref->get_capacity ();
+  BaseType *concrete_cap
+    = Resolver::SubstMapperInternal::Resolve (cap, mappings);
+  rust_assert (concrete_cap->get_kind () == TyTy::TypeKind::CONST);
+  ref->capacity = TyVar::subst_covariant_var (cap, concrete_cap);
 
   return ref;
 }
@@ -1955,13 +2595,6 @@ SliceType::as_string () const
 }
 
 bool
-SliceType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  SliceCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
-bool
 SliceType::is_equal (const BaseType &other) const
 {
   if (get_kind () != other.get_kind ())
@@ -1981,6 +2614,12 @@ SliceType::get_element_type () const
   return element_type.get_tyty ();
 }
 
+const TyVar &
+SliceType::get_var_element_type () const
+{
+  return element_type;
+}
+
 BaseType *
 SliceType::clone () const
 {
@@ -1988,21 +2627,13 @@ SliceType::clone () const
 			element_type.clone (), get_combined_refs ());
 }
 
-BaseType *
-SliceType::monomorphized_clone () const
-{
-  return new SliceType (get_ref (), get_ty_ref (), ident.locus,
-			element_type.monomorphized_clone (),
-			get_combined_refs ());
-}
-
 SliceType *
 SliceType::handle_substitions (SubstitutionArgumentMappings &mappings)
 {
-  auto mappings_table = Analysis::Mappings::get ();
+  auto &mappings_table = Analysis::Mappings::get ();
 
   SliceType *ref = static_cast<SliceType *> (clone ());
-  ref->set_ty_ref (mappings_table->get_next_hir_id ());
+  ref->set_ty_ref (mappings_table.get_next_hir_id ());
 
   // might be &T or &ADT so this needs to be recursive
   auto base = ref->get_element_type ();
@@ -2015,16 +2646,14 @@ SliceType::handle_substitions (SubstitutionArgumentMappings &mappings)
 // BoolType
 
 BoolType::BoolType (HirId ref, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::BOOL,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
 BoolType::BoolType (HirId ref, HirId ty_ref, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::BOOL,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
@@ -2032,12 +2661,6 @@ std::string
 BoolType::get_name () const
 {
   return as_string ();
-}
-
-bool
-BoolType::is_concrete () const
-{
-  return true;
 }
 
 void
@@ -2058,39 +2681,24 @@ BoolType::as_string () const
   return "bool";
 }
 
-bool
-BoolType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  BoolCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
 BaseType *
 BoolType::clone () const
 {
   return new BoolType (get_ref (), get_ty_ref (), get_combined_refs ());
 }
 
-BaseType *
-BoolType::monomorphized_clone () const
-{
-  return clone ();
-}
-
 // IntType
 
 IntType::IntType (HirId ref, IntKind kind, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::INT,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
     int_kind (kind)
 {}
 
 IntType::IntType (HirId ref, HirId ty_ref, IntKind kind, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::INT,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
     int_kind (kind)
 {}
@@ -2135,15 +2743,8 @@ IntType::as_string () const
     case I128:
       return "i128";
     }
-  gcc_unreachable ();
+  rust_unreachable ();
   return "__unknown_int_type";
-}
-
-bool
-IntType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  IntCmp r (this, emit_errors);
-  return r.can_eq (other);
 }
 
 BaseType *
@@ -2151,12 +2752,6 @@ IntType::clone () const
 {
   return new IntType (get_ref (), get_ty_ref (), get_int_kind (),
 		      get_combined_refs ());
-}
-
-BaseType *
-IntType::monomorphized_clone () const
-{
-  return clone ();
 }
 
 bool
@@ -2169,27 +2764,19 @@ IntType::is_equal (const BaseType &other) const
   return get_int_kind () == o.get_int_kind ();
 }
 
-bool
-IntType::is_concrete () const
-{
-  return true;
-}
-
 // UintType
 
 UintType::UintType (HirId ref, UintKind kind, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::UINT,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
     uint_kind (kind)
 {}
 
 UintType::UintType (HirId ref, HirId ty_ref, UintKind kind,
 		    std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::UINT,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
     uint_kind (kind)
 {}
@@ -2234,15 +2821,8 @@ UintType::as_string () const
     case U128:
       return "u128";
     }
-  gcc_unreachable ();
+  rust_unreachable ();
   return "__unknown_uint_type";
-}
-
-bool
-UintType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  UintCmp r (this, emit_errors);
-  return r.can_eq (other);
 }
 
 BaseType *
@@ -2250,12 +2830,6 @@ UintType::clone () const
 {
   return new UintType (get_ref (), get_ty_ref (), get_uint_kind (),
 		       get_combined_refs ());
-}
-
-BaseType *
-UintType::monomorphized_clone () const
-{
-  return clone ();
 }
 
 bool
@@ -2268,27 +2842,19 @@ UintType::is_equal (const BaseType &other) const
   return get_uint_kind () == o.get_uint_kind ();
 }
 
-bool
-UintType::is_concrete () const
-{
-  return true;
-}
-
 // FloatType
 
 FloatType::FloatType (HirId ref, FloatKind kind, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::FLOAT,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
     float_kind (kind)
 {}
 
 FloatType::FloatType (HirId ref, HirId ty_ref, FloatKind kind,
 		      std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::FLOAT,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
     float_kind (kind)
 {}
@@ -2303,12 +2869,6 @@ FloatType::FloatKind
 FloatType::get_float_kind () const
 {
   return float_kind;
-}
-
-bool
-FloatType::is_concrete () const
-{
-  return true;
 }
 
 void
@@ -2333,15 +2893,8 @@ FloatType::as_string () const
     case F64:
       return "f64";
     }
-  gcc_unreachable ();
+  rust_unreachable ();
   return "__unknown_float_type";
-}
-
-bool
-FloatType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  FloatCmp r (this, emit_errors);
-  return r.can_eq (other);
 }
 
 BaseType *
@@ -2349,12 +2902,6 @@ FloatType::clone () const
 {
   return new FloatType (get_ref (), get_ty_ref (), get_float_kind (),
 			get_combined_refs ());
-}
-
-BaseType *
-FloatType::monomorphized_clone () const
-{
-  return clone ();
 }
 
 bool
@@ -2370,16 +2917,14 @@ FloatType::is_equal (const BaseType &other) const
 // UsizeType
 
 USizeType::USizeType (HirId ref, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::USIZE,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
 USizeType::USizeType (HirId ref, HirId ty_ref, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::USIZE,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
@@ -2387,12 +2932,6 @@ std::string
 USizeType::get_name () const
 {
   return as_string ();
-}
-
-bool
-USizeType::is_concrete () const
-{
-  return true;
 }
 
 void
@@ -2413,38 +2952,23 @@ USizeType::as_string () const
   return "usize";
 }
 
-bool
-USizeType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  USizeCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
 BaseType *
 USizeType::clone () const
 {
   return new USizeType (get_ref (), get_ty_ref (), get_combined_refs ());
 }
 
-BaseType *
-USizeType::monomorphized_clone () const
-{
-  return clone ();
-}
-
 // ISizeType
 
 ISizeType::ISizeType (HirId ref, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::ISIZE,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
 ISizeType::ISizeType (HirId ref, HirId ty_ref, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::ISIZE,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
@@ -2452,12 +2976,6 @@ std::string
 ISizeType::get_name () const
 {
   return as_string ();
-}
-
-bool
-ISizeType::is_concrete () const
-{
-  return true;
 }
 
 void
@@ -2478,46 +2996,25 @@ ISizeType::as_string () const
   return "isize";
 }
 
-bool
-ISizeType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  ISizeCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
 BaseType *
 ISizeType::clone () const
 {
   return new ISizeType (get_ref (), get_ty_ref (), get_combined_refs ());
 }
 
-BaseType *
-ISizeType::monomorphized_clone () const
-{
-  return clone ();
-}
-
 // Char Type
 
 CharType::CharType (HirId ref, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::CHAR,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
 CharType::CharType (HirId ref, HirId ty_ref, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::CHAR,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
-
-bool
-CharType::is_concrete () const
-{
-  return true;
-}
 
 std::string
 CharType::get_name () const
@@ -2543,50 +3040,30 @@ CharType::as_string () const
   return "char";
 }
 
-bool
-CharType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  CharCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
 BaseType *
 CharType::clone () const
 {
   return new CharType (get_ref (), get_ty_ref (), get_combined_refs ());
 }
 
-BaseType *
-CharType::monomorphized_clone () const
-{
-  return clone ();
-}
-
 // Reference Type
 
 ReferenceType::ReferenceType (HirId ref, TyVar base, Mutability mut,
-			      std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::REF,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
-	      refs),
-    base (base), mut (mut)
+			      Region region, std::set<HirId> refs)
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
+	      std::move (refs)),
+    base (base), mut (mut), region (region)
 {}
 
 ReferenceType::ReferenceType (HirId ref, HirId ty_ref, TyVar base,
-			      Mutability mut, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::REF,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
-	      refs),
-    base (base), mut (mut)
+			      Mutability mut, Region region,
+			      std::set<HirId> refs)
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
+	      std::move (refs)),
+    base (base), mut (mut), region (region)
 {}
-
-bool
-ReferenceType::is_concrete () const
-{
-  return get_base ()->is_concrete ();
-}
 
 Mutability
 ReferenceType::mutability () const
@@ -2599,11 +3076,16 @@ ReferenceType::is_mutable () const
 {
   return mut == Mutability::Mut;
 }
+Region
+ReferenceType::get_region () const
+{
+  return region;
+}
 
 bool
 ReferenceType::is_dyn_object () const
 {
-  return is_dyn_slice_type () || is_dyn_str_type ();
+  return is_dyn_slice_type () || is_dyn_str_type () || is_dyn_obj_type ();
 }
 
 bool
@@ -2629,6 +3111,19 @@ ReferenceType::is_dyn_str_type (const TyTy::StrType **str) const
     return true;
 
   *str = static_cast<const TyTy::StrType *> (element);
+  return true;
+}
+
+bool
+ReferenceType::is_dyn_obj_type (const TyTy::DynamicObjectType **dyn) const
+{
+  const TyTy::BaseType *element = get_base ()->destructure ();
+  if (element->get_kind () != TyTy::TypeKind::DYNAMIC)
+    return false;
+  if (dyn == nullptr)
+    return true;
+
+  *dyn = static_cast<const TyTy::DynamicObjectType *> (element);
   return true;
 }
 
@@ -2659,13 +3154,6 @@ ReferenceType::get_name () const
 }
 
 bool
-ReferenceType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  ReferenceCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
-bool
 ReferenceType::is_equal (const BaseType &other) const
 {
   if (get_kind () != other.get_kind ())
@@ -2684,28 +3172,26 @@ ReferenceType::get_base () const
   return base.get_tyty ();
 }
 
+const TyVar &
+ReferenceType::get_var_element_type () const
+{
+  return base;
+}
+
 BaseType *
 ReferenceType::clone () const
 {
   return new ReferenceType (get_ref (), get_ty_ref (), base, mutability (),
-			    get_combined_refs ());
-}
-
-BaseType *
-ReferenceType::monomorphized_clone () const
-{
-  return new ReferenceType (get_ref (), get_ty_ref (),
-			    base.monomorphized_clone (), mutability (),
-			    get_combined_refs ());
+			    get_region (), get_combined_refs ());
 }
 
 ReferenceType *
 ReferenceType::handle_substitions (SubstitutionArgumentMappings &mappings)
 {
-  auto mappings_table = Analysis::Mappings::get ();
+  auto &mappings_table = Analysis::Mappings::get ();
 
   ReferenceType *ref = static_cast<ReferenceType *> (clone ());
-  ref->set_ty_ref (mappings_table->get_next_hir_id ());
+  ref->set_ty_ref (mappings_table.get_next_hir_id ());
 
   // might be &T or &ADT so this needs to be recursive
   auto base = ref->get_base ();
@@ -2719,27 +3205,19 @@ ReferenceType::handle_substitions (SubstitutionArgumentMappings &mappings)
 
 PointerType::PointerType (HirId ref, TyVar base, Mutability mut,
 			  std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::POINTER,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
     base (base), mut (mut)
 {}
 
 PointerType::PointerType (HirId ref, HirId ty_ref, TyVar base, Mutability mut,
 			  std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::POINTER,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
     base (base), mut (mut)
 {}
-
-bool
-PointerType::is_concrete () const
-{
-  return get_base ()->is_concrete ();
-}
 
 Mutability
 PointerType::mutability () const
@@ -2762,7 +3240,7 @@ PointerType::is_const () const
 bool
 PointerType::is_dyn_object () const
 {
-  return is_dyn_slice_type () || is_dyn_str_type ();
+  return is_dyn_slice_type () || is_dyn_str_type () || is_dyn_obj_type ();
 }
 
 bool
@@ -2788,6 +3266,19 @@ PointerType::is_dyn_str_type (const TyTy::StrType **str) const
     return true;
 
   *str = static_cast<const TyTy::StrType *> (element);
+  return true;
+}
+
+bool
+PointerType::is_dyn_obj_type (const TyTy::DynamicObjectType **dyn) const
+{
+  const TyTy::BaseType *element = get_base ()->destructure ();
+  if (element->get_kind () != TyTy::TypeKind::DYNAMIC)
+    return false;
+  if (dyn == nullptr)
+    return true;
+
+  *dyn = static_cast<const TyTy::DynamicObjectType *> (element);
   return true;
 }
 
@@ -2818,13 +3309,6 @@ PointerType::get_name () const
 }
 
 bool
-PointerType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  PointerCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
-bool
 PointerType::is_equal (const BaseType &other) const
 {
   if (get_kind () != other.get_kind ())
@@ -2843,6 +3327,12 @@ PointerType::get_base () const
   return base.get_tyty ();
 }
 
+const TyVar &
+PointerType::get_var_element_type () const
+{
+  return base;
+}
+
 BaseType *
 PointerType::clone () const
 {
@@ -2850,21 +3340,13 @@ PointerType::clone () const
 			  get_combined_refs ());
 }
 
-BaseType *
-PointerType::monomorphized_clone () const
-{
-  return new PointerType (get_ref (), get_ty_ref (),
-			  base.monomorphized_clone (), mutability (),
-			  get_combined_refs ());
-}
-
 PointerType *
 PointerType::handle_substitions (SubstitutionArgumentMappings &mappings)
 {
-  auto mappings_table = Analysis::Mappings::get ();
+  auto &mappings_table = Analysis::Mappings::get ();
 
   PointerType *ref = static_cast<PointerType *> (clone ());
-  ref->set_ty_ref (mappings_table->get_next_hir_id ());
+  ref->set_ty_ref (mappings_table.get_next_hir_id ());
 
   // might be &T or &ADT so this needs to be recursive
   auto base = ref->get_base ();
@@ -2876,48 +3358,31 @@ PointerType::handle_substitions (SubstitutionArgumentMappings &mappings)
 
 // PARAM Type
 
-ParamType::ParamType (std::string symbol, Location locus, HirId ref,
-		      HIR::GenericParam &param,
+ParamType::ParamType (std::string symbol, location_t locus, HirId ref,
 		      std::vector<TypeBoundPredicate> specified_bounds,
 		      std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::PARAM,
-	      {Resolver::CanonicalPath::new_seg (UNKNOWN_NODEID, symbol),
-	       locus},
-	      specified_bounds, refs),
-    is_trait_self (false), symbol (symbol), param (param)
+  : BaseGeneric (ref, ref, KIND,
+		 {Resolver::CanonicalPath::new_seg (UNKNOWN_NODEID, symbol),
+		  locus},
+		 specified_bounds, refs),
+    is_trait_self (false), symbol (symbol)
 {}
 
-ParamType::ParamType (bool is_trait_self, std::string symbol, Location locus,
-		      HirId ref, HirId ty_ref, HIR::GenericParam &param,
+ParamType::ParamType (bool is_trait_self, std::string symbol, location_t locus,
+		      HirId ref, HirId ty_ref,
 		      std::vector<TypeBoundPredicate> specified_bounds,
 		      std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::PARAM,
-	      {Resolver::CanonicalPath::new_seg (UNKNOWN_NODEID, symbol),
-	       locus},
-	      specified_bounds, refs),
-    is_trait_self (is_trait_self), symbol (symbol), param (param)
+  : BaseGeneric (ref, ty_ref, KIND,
+		 {Resolver::CanonicalPath::new_seg (UNKNOWN_NODEID, symbol),
+		  locus},
+		 specified_bounds, refs),
+    is_trait_self (is_trait_self), symbol (symbol)
 {}
-
-HIR::GenericParam &
-ParamType::get_generic_param ()
-{
-  return param;
-}
 
 bool
 ParamType::can_resolve () const
 {
   return get_ref () != get_ty_ref ();
-}
-
-bool
-ParamType::is_concrete () const
-{
-  auto r = resolve ();
-  if (r == this)
-    return false;
-
-  return r->is_concrete ();
 }
 
 void
@@ -2950,28 +3415,15 @@ ParamType::get_name () const
   if (!can_resolve ())
     return get_symbol ();
 
-  return resolve ()->get_name ();
-}
-
-bool
-ParamType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  ParamCmp r (this, emit_errors);
-  return r.can_eq (other);
+  return destructure ()->get_name ();
 }
 
 BaseType *
 ParamType::clone () const
 {
   return new ParamType (is_trait_self, get_symbol (), ident.locus, get_ref (),
-			get_ty_ref (), param, get_specified_bounds (),
+			get_ty_ref (), get_specified_bounds (),
 			get_combined_refs ());
-}
-
-BaseType *
-ParamType::monomorphized_clone () const
-{
-  return resolve ()->clone ();
 }
 
 std::string
@@ -3024,7 +3476,9 @@ ParamType::is_equal (const BaseType &other) const
     return false;
 
   if (can_resolve ())
-    return resolve ()->can_eq (other2.resolve (), false);
+    return Resolver::types_compatable (TyTy::TyWithLocation (resolve ()),
+				       TyTy::TyWithLocation (other2.resolve ()),
+				       UNKNOWN_LOCATION, false, false);
 
   return get_symbol ().compare (other2.get_symbol ()) == 0;
 }
@@ -3040,16 +3494,16 @@ ParamType::handle_substitions (SubstitutionArgumentMappings &subst_mappings)
   ParamType *p = static_cast<ParamType *> (clone ());
   subst_mappings.on_param_subst (*p, arg);
 
-  // there are two cases one where we substitute directly to a new PARAM and
-  // otherwise
-  if (arg.get_tyty ()->get_kind () == TyTy::TypeKind::PARAM)
+  const BaseType *resolved = arg.get_tyty ();
+  if (resolved->get_kind () == TyTy::TypeKind::PARAM)
     {
-      p->set_ty_ref (arg.get_tyty ()->get_ref ());
-      return p;
+      const ParamType &pp = *static_cast<const ParamType *> (resolved);
+      if (pp.can_resolve ())
+	pp.resolve ();
     }
 
   // this is the new subst that this needs to pass
-  p->set_ref (mappings->get_next_hir_id ());
+  p->set_ref (mappings.get_next_hir_id ());
   p->set_ty_ref (arg.get_tyty ()->get_ref ());
 
   return p;
@@ -3067,19 +3521,492 @@ ParamType::is_implicit_self_trait () const
   return is_trait_self;
 }
 
+static std::string
+generate_tree_str (tree value)
+{
+  pretty_printer pp;
+  dump_generic_node (&pp, value, 0, TDF_NONE, true);
+  std::string result = pp_formatted_text (&pp);
+
+  if (!result.empty () && result.back () == '\n')
+    result.pop_back ();
+
+  return result;
+}
+
+// ---
+
+ConstParamType::ConstParamType (std::string symbol, location_t locus,
+				BaseType *type, HirId ref, HirId ty_ref,
+				std::set<HirId> refs)
+  : BaseConstType (type),
+    BaseGeneric (ref, ty_ref, KIND,
+		 {Resolver::CanonicalPath::new_seg (UNKNOWN_NODEID, symbol),
+		  locus},
+		 {}, refs),
+    symbol (symbol)
+{}
+
+BaseConstType::ConstKind
+ConstParamType::const_kind () const
+{
+  return BaseConstType::ConstKind::Decl;
+}
+
+std::string
+ConstParamType::get_symbol () const
+{
+  return symbol;
+}
+
+bool
+ConstParamType::can_resolve () const
+{
+  return get_ref () != get_ty_ref ();
+}
+
+BaseType *
+ConstParamType::resolve () const
+{
+  TyVar var (get_ty_ref ());
+  BaseType *r = var.get_tyty ();
+
+  while (r->get_kind () == TypeKind::CONST)
+    {
+      TyVar v (r->get_ty_ref ());
+      BaseType *n = v.get_tyty ();
+
+      // fix infinite loop
+      if (r == n)
+	break;
+
+      r = n;
+    }
+
+  if (r->get_kind () == TypeKind::CONST && (r->get_ref () == r->get_ty_ref ()))
+    {
+      auto *const_type = r->as_const_type ();
+      if (const_type->const_kind () != BaseConstType::ConstKind::Value)
+	return TyVar (r->get_ty_ref ()).get_tyty ();
+    }
+
+  return r;
+}
+
+void
+ConstParamType::accept_vis (TyVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+ConstParamType::accept_vis (TyConstVisitor &vis) const
+{
+  vis.visit (*this);
+}
+
+std::string
+ConstParamType::as_string () const
+{
+  if (!can_resolve ())
+    {
+      return get_symbol () + " CONST_REF: " + std::to_string (get_ref ());
+    }
+
+  BaseType *lookup = resolve ();
+  // Avoid infinite recursion if resolve() returns this same type
+  if (lookup == this->as_base_type ())
+    {
+      return get_symbol () + " CONST_REF: " + std::to_string (get_ref ());
+    }
+
+  return get_symbol () + "=" + lookup->as_string ();
+}
+
+BaseType *
+ConstParamType::clone () const
+{
+  return new ConstParamType (get_symbol (), ident.locus, specified_type,
+			     get_ref (), get_ty_ref (), get_combined_refs ());
+}
+
+std::string
+ConstParamType::get_name () const
+{
+  if (!can_resolve ())
+    return get_symbol ();
+
+  BaseType *lookup = resolve ();
+  if (lookup == this->as_base_type ())
+    return get_symbol () + ":" + get_specified_type ()->get_name ();
+
+  return lookup->get_name ();
+}
+
+bool
+ConstParamType::is_equal (const BaseType &other) const
+{
+  if (get_kind () != other.get_kind ())
+    {
+      if (!can_resolve ())
+	return false;
+
+      return resolve ()->is_equal (other);
+    }
+
+  auto other_const = other.as_const_type ();
+  if (other_const->const_kind () != BaseConstType::ConstKind::Decl)
+    return false;
+
+  auto &other2 = static_cast<const ConstParamType &> (*other_const);
+  if (can_resolve () != other2.can_resolve ())
+    return false;
+
+  if (can_resolve ())
+    {
+      // Compare the resolved ty_ref values to avoid infinite recursion
+      // through types_compatable/unification
+      BaseType *lhs = resolve ();
+      BaseType *rhs = other2.resolve ();
+
+      // If they resolve to the same type (same ty_ref), they're equal
+      if (lhs->get_ty_ref () == rhs->get_ty_ref ())
+	return true;
+
+      // Otherwise check if the resolved types are equal
+      // Avoid recursion by checking if we'd be comparing ConstParamTypes again
+      if (lhs->get_kind () == TypeKind::CONST
+	  && lhs->as_const_type ()->const_kind ()
+	       == BaseConstType::ConstKind::Decl)
+	return false; // Would cause recursion, so not equal
+
+      return lhs->is_equal (*rhs);
+    }
+
+  return get_symbol ().compare (other2.get_symbol ()) == 0;
+}
+
+BaseType *
+ConstParamType::handle_substitions (
+  SubstitutionArgumentMappings &subst_mappings)
+{
+  SubstitutionArg arg = SubstitutionArg::error ();
+  bool ok = subst_mappings.get_argument_for_symbol (this, &arg);
+  if (!ok || arg.is_error ())
+    return this;
+
+  ConstParamType *p = static_cast<ConstParamType *> (clone ());
+  const BaseType *resolved = arg.get_tyty ();
+
+  // this is the new subst that this needs to pass
+  p->set_ref (mappings.get_next_hir_id ());
+  p->set_ty_ref (resolved->get_ref ());
+
+  return p;
+}
+
+// --- ConstValueType
+
+ConstValueType::ConstValueType (tree value, BaseType *type, HirId ref,
+				HirId ty_ref, std::set<HirId> refs)
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), UNKNOWN_LOCATION},
+	      refs),
+    BaseConstType (type), folded_val (value)
+{}
+
+BaseConstType::ConstKind
+ConstValueType::const_kind () const
+{
+  return BaseConstType::ConstKind::Value;
+}
+
+void
+ConstValueType::accept_vis (TyVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+ConstValueType::accept_vis (TyConstVisitor &vis) const
+{
+  vis.visit (*this);
+}
+
+std::string
+ConstValueType::as_string () const
+{
+  return generate_tree_str (folded_val);
+}
+
+BaseType *
+ConstValueType::clone () const
+{
+  return new ConstValueType (folded_val, specified_type, get_ref (),
+			     get_ty_ref (), get_combined_refs ());
+}
+
+std::string
+ConstValueType::get_name () const
+{
+  return as_string ();
+}
+
+bool
+ConstValueType::is_equal (const BaseType &other) const
+{
+  if (get_kind () != other.get_kind ())
+    return false;
+
+  auto other_const = other.as_const_type ();
+  if (other_const->const_kind () != BaseConstType::ConstKind::Value)
+    return false;
+
+  auto &other2 = static_cast<const ConstValueType &> (*other_const);
+  return folded_val == other2.folded_val;
+}
+
+tree
+ConstValueType::get_value () const
+{
+  return folded_val;
+}
+
+// --- ConstInferType
+
+ConstInferType::ConstInferType (BaseType *type, HirId ref, HirId ty_ref,
+				std::set<HirId> refs)
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), UNKNOWN_LOCATION},
+	      refs),
+    BaseConstType (type)
+{}
+
+BaseConstType::ConstKind
+ConstInferType::const_kind () const
+{
+  return BaseConstType::ConstKind::Infer;
+}
+
+void
+ConstInferType::accept_vis (TyVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+ConstInferType::accept_vis (TyConstVisitor &vis) const
+{
+  vis.visit (*this);
+}
+
+std::string
+ConstInferType::as_string () const
+{
+  return specified_type->get_name () + "-?";
+}
+
+BaseType *
+ConstInferType::clone () const
+{
+  auto &mappings = Analysis::Mappings::get ();
+  auto context = Resolver::TypeCheckContext::get ();
+
+  ConstInferType *clone
+    = new ConstInferType (specified_type, mappings.get_next_hir_id (),
+			  get_ty_ref (), get_combined_refs ());
+
+  context->insert_type (Analysis::NodeMapping (mappings.get_current_crate (),
+					       UNKNOWN_NODEID,
+					       clone->get_ref (),
+					       UNKNOWN_LOCAL_DEFID),
+			clone);
+  mappings.insert_location (clone->get_ref (),
+			    mappings.lookup_location (get_ref ()));
+
+  clone->append_reference (get_ref ());
+
+  return clone;
+}
+
+std::string
+ConstInferType::get_name () const
+{
+  return as_string ();
+}
+
+bool
+ConstInferType::is_equal (const BaseType &other) const
+{
+  if (get_kind () != other.get_kind ())
+    return false;
+
+  auto other_const = other.as_const_type ();
+  if (other_const->const_kind () != BaseConstType::ConstKind::Infer)
+    return false;
+
+  return get_ref () == other.get_ref ();
+}
+
+// --- ConstErrorType
+
+ConstErrorType::ConstErrorType (BaseType *type, HirId ref, HirId ty_ref,
+				std::set<HirId> refs)
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), UNKNOWN_LOCATION},
+	      refs),
+    BaseConstType (type)
+{}
+
+BaseConstType::ConstKind
+ConstErrorType::const_kind () const
+{
+  return BaseConstType::ConstKind::Error;
+}
+
+void
+ConstErrorType::accept_vis (TyVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+ConstErrorType::accept_vis (TyConstVisitor &vis) const
+{
+  vis.visit (*this);
+}
+
+std::string
+ConstErrorType::as_string () const
+{
+  return "<const_error>";
+}
+
+BaseType *
+ConstErrorType::clone () const
+{
+  return new ConstErrorType (specified_type, get_ref (), get_ty_ref (),
+			     get_combined_refs ());
+}
+
+std::string
+ConstErrorType::get_name () const
+{
+  return as_string ();
+}
+
+bool
+ConstErrorType::is_equal (const BaseType &other) const
+{
+  if (get_kind () != other.get_kind ())
+    return false;
+
+  auto other_const = other.as_const_type ();
+  return other_const->const_kind () == BaseConstType::ConstKind::Error;
+}
+
+// OpaqueType
+
+OpaqueType::OpaqueType (location_t locus, HirId ref,
+			std::vector<TypeBoundPredicate> specified_bounds,
+			std::set<HirId> refs)
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::new_seg (UNKNOWN_NODEID, "impl"),
+	       locus},
+	      specified_bounds, refs)
+{}
+
+OpaqueType::OpaqueType (location_t locus, HirId ref, HirId ty_ref,
+			std::vector<TypeBoundPredicate> specified_bounds,
+			std::set<HirId> refs)
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::new_seg (UNKNOWN_NODEID, "impl"),
+	       locus},
+	      specified_bounds, refs)
+{}
+
+bool
+OpaqueType::can_resolve () const
+{
+  return get_ref () != get_ty_ref ();
+}
+
+void
+OpaqueType::accept_vis (TyVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+OpaqueType::accept_vis (TyConstVisitor &vis) const
+{
+  vis.visit (*this);
+}
+
+std::string
+OpaqueType::as_string () const
+{
+  return get_name ();
+}
+
+std::string
+OpaqueType::get_name () const
+{
+  return "impl " + raw_bounds_as_name ();
+}
+
+BaseType *
+OpaqueType::clone () const
+{
+  return new OpaqueType (ident.locus, get_ref (), get_ty_ref (),
+			 get_specified_bounds (), get_combined_refs ());
+}
+
+BaseType *
+OpaqueType::resolve () const
+{
+  TyVar var (get_ty_ref ());
+  return var.get_tyty ();
+}
+
+bool
+OpaqueType::is_equal (const BaseType &other) const
+{
+  auto other2 = static_cast<const OpaqueType &> (other);
+  if (can_resolve () != other2.can_resolve ())
+    return false;
+
+  if (num_specified_bounds () != other.num_specified_bounds ())
+    return false;
+
+  for (const auto &pred : specified_bounds)
+    {
+      bool found = false;
+      for (const auto &opred : other.get_specified_bounds ())
+	{
+	  found = pred.is_equal (opred);
+	  if (found)
+	    break;
+	}
+
+      if (!found)
+	return false;
+    }
+
+  return true;
+}
+
 // StrType
 
 StrType::StrType (HirId ref, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::STR,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
 StrType::StrType (HirId ref, HirId ty_ref, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::STR,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
@@ -3089,22 +4016,10 @@ StrType::get_name () const
   return as_string ();
 }
 
-bool
-StrType::is_concrete () const
-{
-  return true;
-}
-
 BaseType *
 StrType::clone () const
 {
   return new StrType (get_ref (), get_ty_ref (), get_combined_refs ());
-}
-
-BaseType *
-StrType::monomorphized_clone () const
-{
-  return clone ();
 }
 
 void
@@ -3126,13 +4041,6 @@ StrType::as_string () const
 }
 
 bool
-StrType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  StrCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
-bool
 StrType::is_equal (const BaseType &other) const
 {
   return get_kind () == other.get_kind ();
@@ -3141,16 +4049,14 @@ StrType::is_equal (const BaseType &other) const
 // Never Type
 
 NeverType::NeverType (HirId ref, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::NEVER,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
 NeverType::NeverType (HirId ref, HirId ty_ref, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::NEVER,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs)
 {}
 
@@ -3158,18 +4064,6 @@ std::string
 NeverType::get_name () const
 {
   return as_string ();
-}
-
-bool
-NeverType::is_unit () const
-{
-  return true;
-}
-
-bool
-NeverType::is_concrete () const
-{
-  return true;
 }
 
 void
@@ -3190,43 +4084,28 @@ NeverType::as_string () const
   return "!";
 }
 
-bool
-NeverType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  NeverCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
 BaseType *
 NeverType::clone () const
 {
   return new NeverType (get_ref (), get_ty_ref (), get_combined_refs ());
 }
 
-BaseType *
-NeverType::monomorphized_clone () const
-{
-  return clone ();
-}
-
 // placeholder type
 
-PlaceholderType::PlaceholderType (std::string symbol, HirId ref,
+PlaceholderType::PlaceholderType (std::string symbol, DefId id, HirId ref,
 				  std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::PLACEHOLDER,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
-    symbol (symbol)
+    symbol (symbol), defId (id)
 {}
 
-PlaceholderType::PlaceholderType (std::string symbol, HirId ref, HirId ty_ref,
-				  std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::PLACEHOLDER,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+PlaceholderType::PlaceholderType (std::string symbol, DefId id, HirId ref,
+				  HirId ty_ref, std::set<HirId> refs)
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
-    symbol (symbol)
+    symbol (symbol), defId (id)
 {}
 
 std::string
@@ -3235,26 +4114,10 @@ PlaceholderType::get_name () const
   return as_string ();
 }
 
-bool
-PlaceholderType::is_unit () const
-{
-  rust_assert (can_resolve ());
-  return resolve ()->is_unit ();
-}
-
 std::string
 PlaceholderType::get_symbol () const
 {
   return symbol;
-}
-
-bool
-PlaceholderType::is_concrete () const
-{
-  if (!can_resolve ())
-    return true;
-
-  return resolve ()->is_concrete ();
 }
 
 void
@@ -3276,27 +4139,11 @@ PlaceholderType::as_string () const
 	 + ">";
 }
 
-bool
-PlaceholderType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  PlaceholderCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
 BaseType *
 PlaceholderType::clone () const
 {
-  return new PlaceholderType (get_symbol (), get_ref (), get_ty_ref (),
-			      get_combined_refs ());
-}
-
-BaseType *
-PlaceholderType::monomorphized_clone () const
-{
-  if (can_resolve ())
-    return resolve ()->monomorphized_clone ();
-
-  return clone ();
+  return new PlaceholderType (get_symbol (), get_def_id (), get_ref (),
+			      get_ty_ref (), get_combined_refs ());
 }
 
 void
@@ -3317,7 +4164,17 @@ bool
 PlaceholderType::can_resolve () const
 {
   auto context = Resolver::TypeCheckContext::get ();
-  return context->lookup_associated_type_mapping (get_ty_ref (), nullptr);
+
+  BaseType *lookup = nullptr;
+  HirId mapping;
+
+  if (!context->lookup_associated_type_mapping (get_ty_ref (), &mapping))
+    return false;
+
+  if (!context->lookup_type (mapping, &lookup))
+    return false;
+
+  return lookup != nullptr;
 }
 
 BaseType *
@@ -3347,17 +4204,24 @@ PlaceholderType::is_equal (const BaseType &other) const
   return get_symbol ().compare (other2.get_symbol ()) == 0;
 }
 
+DefId
+PlaceholderType::get_def_id () const
+{
+  return defId;
+}
+
 // Projection type
 
 ProjectionType::ProjectionType (
   HirId ref, BaseType *base, const Resolver::TraitReference *trait, DefId item,
   std::vector<SubstitutionParamMapping> subst_refs,
-  SubstitutionArgumentMappings generic_arguments, std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::PROJECTION,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
-	      refs),
-    SubstitutionRef (std::move (subst_refs), std::move (generic_arguments)),
+  SubstitutionArgumentMappings generic_arguments,
+  RegionConstraints region_constraints, std::set<HirId> refs)
+  : BaseType (ref, ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
+	      std::move (refs)),
+    SubstitutionRef (std::move (subst_refs), std::move (generic_arguments),
+		     std::move (region_constraints)),
     base (base), trait (trait), item (item)
 {}
 
@@ -3365,20 +4229,15 @@ ProjectionType::ProjectionType (
   HirId ref, HirId ty_ref, BaseType *base,
   const Resolver::TraitReference *trait, DefId item,
   std::vector<SubstitutionParamMapping> subst_refs,
-  SubstitutionArgumentMappings generic_arguments, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::PROJECTION,
-	      {Resolver::CanonicalPath::create_empty (),
-	       Linemap::predeclared_location ()},
+  SubstitutionArgumentMappings generic_arguments,
+  RegionConstraints region_constraints, std::set<HirId> refs)
+  : BaseType (ref, ty_ref, KIND,
+	      {Resolver::CanonicalPath::create_empty (), BUILTINS_LOCATION},
 	      refs),
-    SubstitutionRef (std::move (subst_refs), std::move (generic_arguments)),
+    SubstitutionRef (std::move (subst_refs), std::move (generic_arguments),
+		     std::move (region_constraints)),
     base (base), trait (trait), item (item)
 {}
-
-bool
-ProjectionType::is_unit () const
-{
-  return false;
-}
 
 std::string
 ProjectionType::get_name () const
@@ -3386,39 +4245,16 @@ ProjectionType::get_name () const
   return as_string ();
 }
 
-bool
-ProjectionType::needs_generic_substitutions () const
-{
-  return needs_substitution ();
-}
-
-bool
-ProjectionType::supports_substitutions () const
-{
-  return true;
-}
-
-bool
-ProjectionType::has_subsititions_defined () const
-{
-  return has_substitutions ();
-}
-
 const BaseType *
 ProjectionType::get () const
 {
   return base;
 }
+
 BaseType *
 ProjectionType::get ()
 {
   return base;
-}
-
-bool
-ProjectionType::is_concrete () const
-{
-  return base->is_concrete ();
 }
 
 void
@@ -3439,24 +4275,12 @@ ProjectionType::as_string () const
   return "<Projection=" + subst_as_string () + "::" + base->as_string () + ">";
 }
 
-bool
-ProjectionType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  return base->can_eq (other, emit_errors);
-}
-
 BaseType *
 ProjectionType::clone () const
 {
   return new ProjectionType (get_ref (), get_ty_ref (), base->clone (), trait,
 			     item, clone_substs (), used_arguments,
-			     get_combined_refs ());
-}
-
-BaseType *
-ProjectionType::monomorphized_clone () const
-{
-  return get ()->monomorphized_clone ();
+			     region_constraints, get_combined_refs ());
 }
 
 ProjectionType *
@@ -3464,14 +4288,15 @@ ProjectionType::handle_substitions (
   SubstitutionArgumentMappings &subst_mappings)
 {
   // // do we really need to substitute this?
-  // if (base->needs_generic_substitutions () || base->contains_type_parameters
+  // if (base->needs_generic_substitutions () ||
+  // base->contains_type_parameters
   // ())
   //   {
   //     return this;
   //   }
 
   ProjectionType *projection = static_cast<ProjectionType *> (clone ());
-  projection->set_ty_ref (mappings->get_next_hir_id ());
+  projection->set_ty_ref (mappings.get_next_hir_id ());
   projection->used_arguments = subst_mappings;
 
   auto context = Resolver::TypeCheckContext::get ();
@@ -3512,8 +4337,7 @@ ProjectionType::handle_substitions (
 	    }
 	}
     }
-  else if (fty->needs_generic_substitutions ()
-	   || fty->contains_type_parameters ())
+  else if (fty->needs_generic_substitutions () || !fty->is_concrete ())
     {
       BaseType *concrete
 	= Resolver::SubstMapperInternal::Resolve (fty, subst_mappings);
@@ -3537,20 +4361,14 @@ ProjectionType::handle_substitions (
 DynamicObjectType::DynamicObjectType (
   HirId ref, RustIdent ident, std::vector<TypeBoundPredicate> specified_bounds,
   std::set<HirId> refs)
-  : BaseType (ref, ref, TypeKind::DYNAMIC, ident, specified_bounds, refs)
+  : BaseType (ref, ref, KIND, ident, specified_bounds, refs)
 {}
 
 DynamicObjectType::DynamicObjectType (
   HirId ref, HirId ty_ref, RustIdent ident,
   std::vector<TypeBoundPredicate> specified_bounds, std::set<HirId> refs)
-  : BaseType (ref, ty_ref, TypeKind::DYNAMIC, ident, specified_bounds, refs)
+  : BaseType (ref, ty_ref, KIND, ident, specified_bounds, refs)
 {}
-
-bool
-DynamicObjectType::is_concrete () const
-{
-  return true;
-}
 
 void
 DynamicObjectType::accept_vis (TyVisitor &vis)
@@ -3570,24 +4388,11 @@ DynamicObjectType::as_string () const
   return "dyn [" + raw_bounds_as_string () + "]";
 }
 
-bool
-DynamicObjectType::can_eq (const BaseType *other, bool emit_errors) const
-{
-  DynamicCmp r (this, emit_errors);
-  return r.can_eq (other);
-}
-
 BaseType *
 DynamicObjectType::clone () const
 {
   return new DynamicObjectType (get_ref (), get_ty_ref (), ident,
 				specified_bounds, get_combined_refs ());
-}
-
-BaseType *
-DynamicObjectType::monomorphized_clone () const
-{
-  return clone ();
 }
 
 std::string
@@ -3605,7 +4410,21 @@ DynamicObjectType::is_equal (const BaseType &other) const
   if (num_specified_bounds () != other.num_specified_bounds ())
     return false;
 
-  return bounds_compatible (other, Location (), false);
+  for (const auto &pred : specified_bounds)
+    {
+      bool found = false;
+      for (const auto &opred : other.get_specified_bounds ())
+	{
+	  found = pred.is_equal (opred);
+	  if (found)
+	    break;
+	}
+
+      if (!found)
+	return false;
+    }
+
+  return true;
 }
 
 const std::vector<
@@ -3615,7 +4434,7 @@ DynamicObjectType::get_object_items () const
   std::vector<
     std::pair<const Resolver::TraitItemReference *, const TypeBoundPredicate *>>
     items;
-  for (auto &bound : get_specified_bounds ())
+  for (const TypeBoundPredicate &bound : get_specified_bounds ())
     {
       const Resolver::TraitReference *trait = bound.get ();
       std::vector<const Resolver::TraitItemReference *> trait_items;
@@ -3626,7 +4445,7 @@ DynamicObjectType::get_object_items () const
 	  if (item->get_trait_item_type ()
 		== Resolver::TraitItemReference::TraitItemType::FN
 	      && item->is_object_safe ())
-	    items.push_back ({item, &bound});
+	    items.emplace_back (item, &bound);
 	}
     }
   return items;

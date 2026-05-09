@@ -16,6 +16,13 @@ int sigsuspend(const sigset_t *sigmask) {
 }
 
 int pthread_sigmask(int how, const sigset_t *__restrict set, sigset_t *__restrict retrieve) {
+ 	if(mlibc::sys_thread_sigmask) {
+	 	if(int e = mlibc::sys_thread_sigmask(how, set, retrieve); e) {
+	 	 	return e;
+	 	}
+ 	 	return 0;
+ 	}
+
 	if(!mlibc::sys_sigprocmask) {
 		MLIBC_MISSING_SYSDEP();
 		return ENOSYS;
@@ -55,13 +62,13 @@ int siginterrupt(int sig, int flag) {
 	int ret;
 	struct sigaction act;
 
-	sigaction(sig, NULL, &act);
+	sigaction(sig, nullptr, &act);
 	if (flag)
 		act.sa_flags &= ~SA_RESTART;
 	else
 		act.sa_flags |= SA_RESTART;
 
-	ret = sigaction(sig, &act, NULL);
+	ret = sigaction(sig, &act, nullptr);
 	return ret;
 }
 
