@@ -2105,6 +2105,7 @@ case $os in
 	| rtems* \
 	| rtmk* \
 	| rtu* \
+	| rune* \
 	| scout* \
 	| secbsd* \
 	| sei* \
