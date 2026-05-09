@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 2002-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 2002-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -228,7 +228,7 @@ package body GPrep is
       --  the deleted lines are not put as comment, we must output them as
       --  blank lines.
 
-      if Source_Ref_Pragma and (not Opt.Comment_Deleted_Lines) then
+      if Source_Ref_Pragma and not Opt.Comment_Deleted_Lines then
          Opt.Blank_Deleted_Lines := True;
       end if;
 
@@ -552,7 +552,7 @@ package body GPrep is
 
             Errutil.Finalize (Source_Type => "input");
 
-            OS_Exit (0);
+            OS_Exit (1);
 
          --  Otherwise, close the output file, and we are done
 
@@ -735,7 +735,7 @@ package body GPrep is
 
       loop
          begin
-            Switch := GNAT.Command_Line.Getopt ("D: a b c C r s T u v");
+            Switch := GNAT.Command_Line.Getopt ("D: a b c C e r s T u v");
 
             case Switch is
                when ASCII.NUL =>
@@ -754,6 +754,9 @@ package body GPrep is
 
                when 'c' =>
                   Opt.Comment_Deleted_Lines := True;
+
+               when 'e' =>
+                  Opt.Empty_Comment_Deleted_Lines := True;
 
                when 'C' =>
                   Opt.Replace_In_Comments := True;
@@ -831,6 +834,7 @@ package body GPrep is
       Write_Line ("   -c  Keep preprocessor lines as comments");
       Write_Line ("   -C  Do symbol replacements within comments");
       Write_Line ("   -D  Associate symbol with value");
+      Write_Line ("   -e  Replace preprocessor lines by empty comment lines");
       Write_Line ("   -r  Generate Source_Reference pragma");
       Write_Line ("   -s  Print a sorted list of symbol names and values");
       Write_Line ("   -T  Use LF as line terminators");

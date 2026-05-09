@@ -1,5 +1,5 @@
 /* Diagnostic routines shared by all languages that are variants of C.
-   Copyright (C) 1992-2023 Free Software Foundation, Inc.
+   Copyright (C) 1992-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -32,7 +32,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "stringpool.h"
 #include "attribs.h"
 #include "asan.h"
-#include "gcc-rich-location.h"
+#include "c-family/c-type-mismatch.h"
 #include "gimplify.h"
 #include "c-family/c-indentation.h"
 #include "c-family/c-spellcheck.h"
@@ -40,6 +40,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "stor-layout.h"
 #include "tree-pretty-print.h"
 #include "langhooks.h"
+#include "gcc-urlifier.h"
 
 /* Print a warning if a constant expression had overflow in folding.
    Invoke this function on every expression that the language
@@ -944,8 +945,9 @@ sizeof_pointer_memaccess_warning (location_t *sizeof_arg_loc, tree callee,
 			"argument to %<sizeof%> in %qD call is the same "
 			"expression as the destination; did you mean to "
 			"remove the addressof?", callee);
-	  else if ((TYPE_PRECISION (TREE_TYPE (type))
-		    == TYPE_PRECISION (char_type_node))
+	  else if ((INTEGRAL_TYPE_P (TREE_TYPE (type))
+		    && (TYPE_PRECISION (TREE_TYPE (type))
+			== TYPE_PRECISION (char_type_node)))
 		   || strop)
 	    warning_at (loc, OPT_Wsizeof_pointer_memaccess,
 			"argument to %<sizeof%> in %qD call is the same "
@@ -984,8 +986,9 @@ sizeof_pointer_memaccess_warning (location_t *sizeof_arg_loc, tree callee,
 			"argument to %<sizeof%> in %qD call is the same "
 			"expression as the source; did you mean to "
 			"remove the addressof?", callee);
-	  else if ((TYPE_PRECISION (TREE_TYPE (type))
-		    == TYPE_PRECISION (char_type_node))
+	  else if ((INTEGRAL_TYPE_P (TREE_TYPE (type))
+		    && (TYPE_PRECISION (TREE_TYPE (type))
+			== TYPE_PRECISION (char_type_node)))
 		   || strop)
 	    warning_at (loc, OPT_Wsizeof_pointer_memaccess,
 			"argument to %<sizeof%> in %qD call is the same "
@@ -1024,8 +1027,9 @@ sizeof_pointer_memaccess_warning (location_t *sizeof_arg_loc, tree callee,
 			"argument to %<sizeof%> in %qD call is the same "
 			"expression as the first source; did you mean to "
 			"remove the addressof?", callee);
-	  else if ((TYPE_PRECISION (TREE_TYPE (type))
-		    == TYPE_PRECISION (char_type_node))
+	  else if ((INTEGRAL_TYPE_P (TREE_TYPE (type))
+		    && (TYPE_PRECISION (TREE_TYPE (type))
+			== TYPE_PRECISION (char_type_node)))
 		   || strop)
 	    warning_at (loc, OPT_Wsizeof_pointer_memaccess,
 			"argument to %<sizeof%> in %qD call is the same "
@@ -1064,8 +1068,9 @@ sizeof_pointer_memaccess_warning (location_t *sizeof_arg_loc, tree callee,
 			"argument to %<sizeof%> in %qD call is the same "
 			"expression as the second source; did you mean to "
 			"remove the addressof?", callee);
-	  else if ((TYPE_PRECISION (TREE_TYPE (type))
-		    == TYPE_PRECISION (char_type_node))
+	  else if ((INTEGRAL_TYPE_P (TREE_TYPE (type))
+		    && (TYPE_PRECISION (TREE_TYPE (type))
+			== TYPE_PRECISION (char_type_node)))
 		   || strop)
 	    warning_at (loc, OPT_Wsizeof_pointer_memaccess,
 			"argument to %<sizeof%> in %qD call is the same "
@@ -1227,7 +1232,7 @@ conversion_warning (location_t loc, tree type, tree expr, tree result)
 	  {
 	    bool cstresult
 	      = (result
-		 && TREE_CODE_CLASS (TREE_CODE (result)) == tcc_constant);
+		 && CONSTANT_CLASS_P (result));
 	    if (TYPE_UNSIGNED (type))
 	      {
 		if (cstresult)
@@ -1255,7 +1260,7 @@ conversion_warning (location_t loc, tree type, tree expr, tree result)
 			      expr_type, type, expr);
 	      }
 	  }
-	else if (TREE_CODE_CLASS (TREE_CODE (result)) == tcc_constant)
+	else if (CONSTANT_CLASS_P (result))
 	  warning_at (loc, warnopt,
 		      "conversion from %qT to %qT changes value from %qE to %qE",
 		      expr_type, type, expr, result);
@@ -1306,8 +1311,10 @@ conversion_warning (location_t loc, tree type, tree expr, tree result)
       }
 
     case BIT_AND_EXPR:
-      if (TREE_CODE (expr_type) == INTEGER_TYPE
-	  && TREE_CODE (type) == INTEGER_TYPE)
+      if ((TREE_CODE (expr_type) == INTEGER_TYPE
+	   || TREE_CODE (expr_type) == BITINT_TYPE)
+	  && (TREE_CODE (type) == INTEGER_TYPE
+	      || TREE_CODE (type) == BITINT_TYPE))
 	for (int i = 0; i < 2; ++i)
 	  {
 	    tree op = TREE_OPERAND (expr, i);
@@ -1348,9 +1355,7 @@ conversion_warning (location_t loc, tree type, tree expr, tree result)
 	  break;
 
 	if (arith_ops
-	    && global_dc->option_enabled (warnopt,
-					  global_dc->lang_mask,
-					  global_dc->option_state))
+	    && global_dc->option_enabled_p (warnopt))
 	  {
 	    for (int i = 0; i < arith_ops; ++i)
 	      {
@@ -1404,7 +1409,7 @@ warnings_for_convert_and_check (location_t loc, tree type, tree expr,
   while (TREE_CODE (result) == COMPOUND_EXPR)
     result = TREE_OPERAND (result, 1);
 
-  bool cst = TREE_CODE_CLASS (TREE_CODE (result)) == tcc_constant;
+  bool cst = CONSTANT_CLASS_P (result);
   tree exprtype = TREE_TYPE (expr);
   tree result_diag;
   /* We're interested in the actual numerical value here, not its ASCII
@@ -1416,6 +1421,7 @@ warnings_for_convert_and_check (location_t loc, tree type, tree expr,
 
   if (TREE_CODE (expr) == INTEGER_CST
       && (TREE_CODE (type) == INTEGER_TYPE
+	  || TREE_CODE (type) == BITINT_TYPE
 	  || (TREE_CODE (type) == ENUMERAL_TYPE
 	      && TREE_CODE (ENUM_UNDERLYING_TYPE (type)) != BOOLEAN_TYPE))
       && !int_fits_type_p (expr, type))
@@ -1466,9 +1472,10 @@ warnings_for_convert_and_check (location_t loc, tree type, tree expr,
 	}
       /* No warning for converting 0x80000000 to int.  */
       else if (pedantic
-	       && (TREE_CODE (exprtype) != INTEGER_TYPE
-		   || TYPE_PRECISION (exprtype)
-		   != TYPE_PRECISION (type)))
+	       && ((TREE_CODE (exprtype) != INTEGER_TYPE
+		    && TREE_CODE (exprtype) != BITINT_TYPE)
+		   || (TYPE_PRECISION (exprtype)
+		       != TYPE_PRECISION (type))))
 	{
 	  if (cst)
 	    warning_at (loc, OPT_Woverflow,
@@ -1513,13 +1520,15 @@ match_case_to_enum_1 (tree key, tree type, tree label)
     return;
 
   char buf[WIDE_INT_PRINT_BUFFER_SIZE];
+  wide_int w = wi::to_wide (key);
 
+  gcc_assert (w.get_precision () <= WIDE_INT_MAX_INL_PRECISION);
   if (tree_fits_uhwi_p (key))
-    print_dec (wi::to_wide (key), buf, UNSIGNED);
+    print_dec (w, buf, UNSIGNED);
   else if (tree_fits_shwi_p (key))
-    print_dec (wi::to_wide (key), buf, SIGNED);
+    print_dec (w, buf, SIGNED);
   else
-    print_hex (wi::to_wide (key), buf);
+    print_hex (w, buf);
 
   if (TYPE_NAME (type) == NULL_TREE)
     warning_at (DECL_SOURCE_LOCATION (CASE_LABEL (label)),
@@ -1803,6 +1812,10 @@ c_do_switch_warnings (splay_tree cases, location_t switch_location,
 		  "enumeration value %qE not handled in switch",
 		  TREE_PURPOSE (chain));
     }
+
+  /* Attribute flag_enum means bitwise combinations are OK.  */
+  if (lookup_attribute ("flag_enum", TYPE_ATTRIBUTES (type)))
+    return;
 
   /* Warn if there are case expressions that don't correspond to
      enumerators.  This can occur since C and C++ don't enforce
@@ -2172,7 +2185,6 @@ warn_about_parentheses (location_t loc, enum tree_code code,
 	}
       return;
     }
-#undef NOT_A_BOOLEAN_EXPR_P
 }
 
 /* If LABEL (a LABEL_DECL) has not been used, issue a warning.  */
@@ -2182,7 +2194,9 @@ warn_for_unused_label (tree label)
 {
   if (!TREE_USED (label))
     {
-      if (DECL_INITIAL (label))
+      if (warning_suppressed_p (label, OPT_Wunused_label))
+	/* Don't warn.  */;
+      else if (DECL_INITIAL (label))
 	warning (OPT_Wunused_label, "label %q+D defined but not used", label);
       else
 	warning (OPT_Wunused_label, "label %q+D declared but not defined", label);
@@ -2257,6 +2271,76 @@ warn_for_memset (location_t loc, tree arg0, tree arg2,
 			"by element size");
 	}
     }
+}
+
+/* Warn for calloc (sizeof (X), n).  */
+
+void
+warn_for_calloc (location_t *sizeof_arg_loc, tree callee,
+		 vec<tree, va_gc> *params, tree *sizeof_arg, tree attr)
+{
+  if (!TREE_VALUE (attr) || !TREE_CHAIN (TREE_VALUE (attr)))
+    return;
+
+  int arg1 = TREE_INT_CST_LOW (TREE_VALUE (TREE_VALUE (attr))) - 1;
+  int arg2
+    = TREE_INT_CST_LOW (TREE_VALUE (TREE_CHAIN (TREE_VALUE (attr)))) - 1;
+  if (arg1 < 0
+      || (unsigned) arg1 >= vec_safe_length (params)
+      || arg1 >= 6
+      || arg2 < 0
+      || (unsigned) arg2 >= vec_safe_length (params)
+      || arg2 >= 6
+      || arg1 >= arg2)
+    return;
+
+  if (sizeof_arg[arg1] == NULL_TREE || sizeof_arg[arg2] != NULL_TREE)
+    return;
+
+  if (warning_at (sizeof_arg_loc[arg1], OPT_Wcalloc_transposed_args,
+		  "%qD sizes specified with %<sizeof%> in the earlier "
+		  "argument and not in the later argument", callee))
+    inform (sizeof_arg_loc[arg1], "earlier argument should specify number "
+	    "of elements, later size of each element");
+}
+
+/* Warn for allocator calls where the constant allocated size is smaller
+   than sizeof (TYPE).  */
+
+void
+warn_for_alloc_size (location_t loc, tree type, tree call, tree alloc_size)
+{
+  if (!TREE_VALUE (alloc_size))
+    return;
+
+  tree arg1 = TREE_VALUE (TREE_VALUE (alloc_size));
+  int idx1 = TREE_INT_CST_LOW (arg1) - 1;
+  if (idx1 < 0 || idx1 >= call_expr_nargs (call))
+    return;
+  arg1 = CALL_EXPR_ARG (call, idx1);
+  if (TREE_CODE (arg1) != INTEGER_CST)
+    return;
+  if (TREE_CHAIN (TREE_VALUE (alloc_size)))
+    {
+      tree arg2 = TREE_VALUE (TREE_CHAIN (TREE_VALUE (alloc_size)));
+      int idx2 = TREE_INT_CST_LOW (arg2) - 1;
+      if (idx2 < 0 || idx2 >= call_expr_nargs (call))
+	return;
+      arg2 = CALL_EXPR_ARG (call, idx2);
+      if (TREE_CODE (arg2) != INTEGER_CST)
+	return;
+      arg1 = int_const_binop (MULT_EXPR, fold_convert (sizetype, arg1),
+			      fold_convert (sizetype, arg2));
+      if (TREE_CODE (arg1) != INTEGER_CST)
+	return;
+    }
+  if (!VOID_TYPE_P (type)
+      && TYPE_SIZE_UNIT (type)
+      && TREE_CODE (TYPE_SIZE_UNIT (type)) == INTEGER_CST
+      && tree_int_cst_lt (arg1, TYPE_SIZE_UNIT (type)))
+    warning_at (loc, OPT_Walloc_size,
+		"allocation of insufficient size %qE for type %qT with "
+		"size %qE", arg1, type, TYPE_SIZE_UNIT (type));
 }
 
 /* Subroutine of build_binary_op. Give warnings for comparisons
@@ -2593,6 +2677,7 @@ warn_duplicated_cond_add_or_warn (location_t loc, tree cond, vec<tree> **chain)
 bool
 diagnose_mismatched_attributes (tree olddecl, tree newdecl)
 {
+  auto_urlify_attributes sentinel;
   bool warned = false;
 
   tree a1 = lookup_attribute ("optimize", DECL_ATTRIBUTES (olddecl));
@@ -2945,7 +3030,7 @@ warn_for_multistatement_macros (location_t body_loc, location_t next_loc,
   while (linemap_macro_expansion_map_p (guard_map))
     {
       const line_map_macro *mm = linemap_check_macro (guard_map);
-      guard_loc_exp = MACRO_MAP_EXPANSION_POINT_LOCATION (mm);
+      guard_loc_exp = mm->get_expansion_point_location ();
       guard_map = linemap_lookup (line_table, guard_loc_exp);
       if (guard_map == body_map)
 	return;
@@ -2987,14 +3072,13 @@ check_alignment_of_packed_member (tree type, tree field, bool rvalue)
   return NULL_TREE;
 }
 
-/* Return struct or union type if the right hand value, RHS:
-   1. Is a pointer value which isn't aligned to a pointer type TYPE.
-   2. Is an address which takes the unaligned address of packed member
-      of struct or union when assigning to TYPE.
+/* Return struct or union type if the right hand value, RHS,
+   is an address which takes the unaligned address of packed member
+   of struct or union when assigning to TYPE.
    Otherwise, return NULL_TREE.  */
 
 static tree
-check_address_or_pointer_of_packed_member (tree type, tree rhs)
+check_address_of_packed_member (tree type, tree rhs)
 {
   bool rvalue = true;
   bool indirect = false;
@@ -3016,57 +3100,6 @@ check_address_or_pointer_of_packed_member (tree type, tree rhs)
     return NULL_TREE;
 
   type = TREE_TYPE (type);
-
-  if (TREE_CODE (rhs) == PARM_DECL
-      || VAR_P (rhs)
-      || TREE_CODE (rhs) == CALL_EXPR)
-    {
-      tree rhstype = TREE_TYPE (rhs);
-      if (TREE_CODE (rhs) == CALL_EXPR)
-	{
-	  rhs = CALL_EXPR_FN (rhs);	/* Pointer expression.  */
-	  if (rhs == NULL_TREE)
-	    return NULL_TREE;
-	  rhs = TREE_TYPE (rhs);	/* Pointer type.  */
-	  /* We could be called while processing a template and RHS could be
-	     a functor.  In that case it's a class, not a pointer.  */
-	  if (!POINTER_TYPE_P (rhs))
-	    return NULL_TREE;
-	  rhs = TREE_TYPE (rhs);	/* Function type.  */
-	  rhstype = TREE_TYPE (rhs);
-	  if (!rhstype || !POINTER_TYPE_P (rhstype))
-	    return NULL_TREE;
-	  rvalue = true;
-	}
-      if (rvalue && POINTER_TYPE_P (rhstype))
-	rhstype = TREE_TYPE (rhstype);
-      while (TREE_CODE (rhstype) == ARRAY_TYPE)
-	rhstype = TREE_TYPE (rhstype);
-      if (TYPE_PACKED (rhstype))
-	{
-	  unsigned int type_align = min_align_of_type (type);
-	  unsigned int rhs_align = min_align_of_type (rhstype);
-	  if (rhs_align < type_align)
-	    {
-	      auto_diagnostic_group d;
-	      location_t location = EXPR_LOC_OR_LOC (rhs, input_location);
-	      if (warning_at (location, OPT_Waddress_of_packed_member,
-			      "converting a packed %qT pointer (alignment %d) "
-			      "to a %qT pointer (alignment %d) may result in "
-			      "an unaligned pointer value",
-			      rhstype, rhs_align, type, type_align))
-		{
-		  tree decl = TYPE_STUB_DECL (rhstype);
-		  if (decl)
-		    inform (DECL_SOURCE_LOCATION (decl), "defined here");
-		  decl = TYPE_STUB_DECL (type);
-		  if (decl)
-		    inform (DECL_SOURCE_LOCATION (decl), "defined here");
-		}
-	    }
-	}
-      return NULL_TREE;
-    }
 
   tree context = NULL_TREE;
 
@@ -3090,14 +3123,12 @@ check_address_or_pointer_of_packed_member (tree type, tree rhs)
   return context;
 }
 
-/* Check and warn if the right hand value, RHS:
-   1. Is a pointer value which isn't aligned to a pointer type TYPE.
-   2. Is an address which takes the unaligned address of packed member
-      of struct or union when assigning to TYPE.
- */
+/* Check and warn if the right hand value, RHS,
+   is an address which takes the unaligned address of packed member
+   of struct or union when assigning to TYPE.  */
 
 static void
-check_and_warn_address_or_pointer_of_packed_member (tree type, tree rhs)
+check_and_warn_address_of_packed_member (tree type, tree rhs)
 {
   bool nop_p = false;
   tree orig_rhs;
@@ -3115,11 +3146,11 @@ check_and_warn_address_or_pointer_of_packed_member (tree type, tree rhs)
   if (TREE_CODE (rhs) == COND_EXPR)
     {
       /* Check the THEN path.  */
-      check_and_warn_address_or_pointer_of_packed_member
+      check_and_warn_address_of_packed_member
 	(type, TREE_OPERAND (rhs, 1));
 
       /* Check the ELSE path.  */
-      check_and_warn_address_or_pointer_of_packed_member
+      check_and_warn_address_of_packed_member
 	(type, TREE_OPERAND (rhs, 2));
     }
   else
@@ -3143,7 +3174,7 @@ check_and_warn_address_or_pointer_of_packed_member (tree type, tree rhs)
 	}
 
       tree context
-	= check_address_or_pointer_of_packed_member (type, rhs);
+	= check_address_of_packed_member (type, rhs);
       if (context)
 	{
 	  location_t loc = EXPR_LOC_OR_LOC (rhs, input_location);
@@ -3155,14 +3186,12 @@ check_and_warn_address_or_pointer_of_packed_member (tree type, tree rhs)
     }
 }
 
-/* Warn if the right hand value, RHS:
-   1. Is a pointer value which isn't aligned to a pointer type TYPE.
-   2. Is an address which takes the unaligned address of packed member
-      of struct or union when assigning to TYPE.
-*/
+/* Warn if the right hand value, RHS,
+   is an address which takes the unaligned address of packed member
+   of struct or union when assigning to TYPE.  */
 
 void
-warn_for_address_or_pointer_of_packed_member (tree type, tree rhs)
+warn_for_address_of_packed_member (tree type, tree rhs)
 {
   if (!warn_address_of_packed_member)
     return;
@@ -3171,7 +3200,7 @@ warn_for_address_or_pointer_of_packed_member (tree type, tree rhs)
   if (!POINTER_TYPE_P (type))
     return;
 
-  check_and_warn_address_or_pointer_of_packed_member (type, rhs);
+  check_and_warn_address_of_packed_member (type, rhs);
 }
 
 /* Return EXPR + 1.  Convenience helper used below.  */
@@ -3396,13 +3425,313 @@ expr_to_str (pretty_printer &pp, tree expr, const char *dflt)
   return pp_formatted_text (&pp);
 }
 
+/* Helper for warn_parms_array_mismatch.  Compare the mappings of
+   two function parameters and diagnose mismatches.  ORIGLOC is the
+   location of the first function declaration.  CURP and NEWP are the
+   parameters in the first and second function declarators,
+   respectively.  PARMPOS is the position of the parameters within the
+   list of parameter declarations.  BUILTIN is true if the function is
+   a builtin.  */
+
+static void
+warn_parm_array_mismatch (location_t origloc, rdwr_map *cur_idx,
+			  rdwr_map *new_idx, tree curp, tree newp,
+			  unsigned parmpos, bool builtin)
+{
+  /* Create an empty access specification and use it for pointers with
+     no spec of their own.  */
+  attr_access ptr_spec = { };
+
+  /* Only check pointers and C++ references.  */
+  tree curptype = TREE_TYPE (curp);
+  tree newptype = TREE_TYPE (newp);
+  if (!POINTER_TYPE_P (curptype) || !POINTER_TYPE_P (newptype))
+    return;
+
+  /* Skip mismatches in __builtin_va_list that is commonly
+     an array but that in declarations of built-ins decays
+     to a pointer.  */
+  if (builtin && TREE_TYPE (newptype) == TREE_TYPE (va_list_type_node))
+    return;
+
+  /* Access specs for the argument on the current (previous) and
+     new (to replace the current) declarations.  Either may be null,
+     indicating the parameter is an ordinary pointer with no size
+     associated with it.  */
+  attr_access *cura = cur_idx->get (parmpos);
+  attr_access *newa = new_idx->get (parmpos);
+
+  if (!newa)
+    {
+      /* Continue if both parameters are pointers with no size
+	 associated with them.  */
+      if (!cura)
+	return;
+
+      /* Otherwise point at PTR_SPEC and set its parameter pointer
+	 and number.  */
+      newa = &ptr_spec;
+      newa->ptr = newp;
+      newa->ptrarg = parmpos;
+    }
+  else if (!cura)
+    {
+      cura = &ptr_spec;
+      cura->ptr = curp;
+      cura->ptrarg = parmpos;
+    }
+
+  /* Set if the parameter is [re]declared as a VLA.  */
+  const bool cur_vla_p = cura->size || cura->minsize == HOST_WIDE_INT_M1U;
+  const bool new_vla_p = newa->size || newa->minsize == HOST_WIDE_INT_M1U;
+
+  if (DECL_P (curp))
+    origloc = DECL_SOURCE_LOCATION (curp);
+  else if (EXPR_P (curp) && EXPR_HAS_LOCATION (curp))
+    origloc = EXPR_LOCATION (curp);
+
+  /* The location of the parameter in the current redeclaration.  */
+  location_t newloc = DECL_SOURCE_LOCATION (newp);
+  if (origloc == UNKNOWN_LOCATION)
+    origloc = newloc;
+
+  const std::string newparmstr = newa->array_as_string (newptype);
+  const std::string curparmstr = cura->array_as_string (curptype);
+  if (new_vla_p && !cur_vla_p)
+    {
+      if (warning_at (newloc, OPT_Wvla_parameter,
+		      "argument %u of type %s "
+		      "declared as a variable length array",
+		      parmpos + 1, newparmstr.c_str ()))
+	inform (origloc,
+		(cura == &ptr_spec
+		 ? G_("previously declared as a pointer %s")
+		 : G_("previously declared as an ordinary array %s")),
+		curparmstr.c_str ());
+      return;
+    }
+
+  if (newa == &ptr_spec)
+    {
+      /* The new declaration uses the pointer form.  Detect mismatches
+	 between the pointer and a previous array or VLA forms.  */
+      if (cura->minsize == HOST_WIDE_INT_M1U)
+	{
+	  /* Diagnose a pointer/VLA mismatch.  */
+	  if (warning_at (newloc, OPT_Wvla_parameter,
+			  "argument %u of type %s declared as a pointer",
+			  parmpos + 1, newparmstr.c_str ()))
+	    inform (origloc,
+		    "previously declared as a variable length array %s",
+		    curparmstr.c_str ());
+	  return;
+	}
+
+      if (cura->minsize && cura->minsize != HOST_WIDE_INT_M1U)
+	{
+	  /* Diagnose mismatches between arrays with a constant
+	     bound and pointers.  */
+	  if (warning_at (newloc, OPT_Warray_parameter_,
+			  "argument %u of type %s declared as a pointer",
+			  parmpos + 1, newparmstr.c_str ()))
+	    inform (origloc, "previously declared as an array %s",
+		    curparmstr.c_str ());
+	  return;
+	}
+    }
+
+  if (!new_vla_p && cur_vla_p)
+    {
+      if (warning_at (newloc, OPT_Wvla_parameter,
+		      "argument %u of type %s declared as an ordinary array",
+		      parmpos + 1, newparmstr.c_str ()))
+	inform (origloc, "previously declared as a variable length array %s",
+		curparmstr.c_str ());
+      return;
+    }
+
+  /* Move on to the next pair of parameters if both of the current
+     pair are VLAs with a single variable bound that refers to
+     a parameter at the same position.  */
+  if (newa->size && cura->size
+      && newa->sizarg != UINT_MAX
+      && newa->sizarg == cura->sizarg
+      && newa->minsize == cura->minsize
+      && !TREE_PURPOSE (newa->size) && !TREE_PURPOSE (cura->size))
+    return;
+
+  if (newa->size || cura->size)
+    {
+      unsigned newunspec, curunspec;
+      unsigned newbnds = newa->vla_bounds (&newunspec) + newunspec;
+      unsigned curbnds = cura->vla_bounds (&curunspec) + curunspec;
+
+      if (newbnds != curbnds)
+	{
+	  if (warning_n (newloc, OPT_Wvla_parameter, newbnds,
+			 "argument %u of type %s declared with "
+			 "%u variable bound",
+			 "argument %u of type %s declared with "
+			 "%u variable bounds",
+			 parmpos + 1, newparmstr.c_str (),
+			 newbnds))
+	    inform_n (origloc, curbnds,
+		      "previously declared as %s with %u variable bound",
+		      "previously declared as %s with %u variable bounds",
+		      curparmstr.c_str (), curbnds);
+	  return;
+	}
+
+      if (newunspec > curunspec)
+	{
+	  location_t warnloc = newloc, noteloc = origloc;
+	  const char *warnparmstr = newparmstr.c_str ();
+	  const char *noteparmstr = curparmstr.c_str ();
+	  unsigned warnunspec = newunspec, noteunspec = curunspec;
+
+	  if (warning_n (warnloc, OPT_Wvla_parameter, warnunspec,
+			 "argument %u of type %s declared with "
+			 "%u unspecified variable bound",
+			 "argument %u of type %s declared with "
+			 "%u unspecified variable bounds",
+			 parmpos + 1, warnparmstr, warnunspec))
+	    {
+	      if (warnloc == newloc)
+		inform_n (noteloc, noteunspec,
+			  "previously declared as %s with "
+			  "%u unspecified variable bound",
+			  "previously declared as %s with "
+			  "%u unspecified variable bounds",
+			  noteparmstr, noteunspec);
+	      else
+		inform_n (noteloc, noteunspec,
+			  "subsequently declared as %s with "
+			  "%u unspecified variable bound",
+			  "subsequently declared as %s with "
+			  "%u unspecified variable bounds",
+			  noteparmstr, noteunspec);
+	    }
+	  return;
+	}
+    }
+
+  /* Iterate over the lists of VLA variable bounds, comparing each
+     pair for equality, and diagnosing mismatches.  */
+  for (tree newvbl = newa->size, curvbl = cura->size; newvbl && curvbl;
+       newvbl = TREE_CHAIN (newvbl), curvbl = TREE_CHAIN (curvbl))
+    {
+      tree newpos = TREE_PURPOSE (newvbl);
+      tree curpos = TREE_PURPOSE (curvbl);
+
+      tree newbnd = vla_bound_parm_decl (TREE_VALUE (newvbl));
+      tree curbnd = vla_bound_parm_decl (TREE_VALUE (curvbl));
+
+      if (newpos == curpos && newbnd == curbnd)
+	/* In the expected case when both bounds either refer to
+	   the same positional parameter or when neither does,
+	   and both are the same expression they are necessarily
+	   the same.  */
+	continue;
+
+      pretty_printer pp1, pp2;
+      const char* const newbndstr = expr_to_str (pp1, newbnd, "*");
+      const char* const curbndstr = expr_to_str (pp2, curbnd, "*");
+
+      if (!newpos != !curpos
+	  || (newpos && !tree_int_cst_equal (newpos, curpos)))
+	{
+	  /* Diagnose a mismatch between a specified VLA bound and
+	     an unspecified one.  This can only happen in the most
+	     significant bound.
+
+	     Distinguish between the common case of bounds that are
+	     other function parameters such as in
+	       f (int n, int[n]);
+	     and others.  */
+
+	  gcc_rich_location richloc (newloc);
+	  bool warned;
+	  if (newpos)
+	    {
+	      /* Also underline the VLA bound argument.  */
+	      richloc.add_range (DECL_SOURCE_LOCATION (newbnd));
+	      warned = warning_at (&richloc, OPT_Wvla_parameter,
+				   "argument %u of type %s "
+				   "declared with mismatched bound argument %E",
+				   parmpos + 1, newparmstr.c_str (),
+				   plus_one (newpos));
+	    }
+	  else
+	    warned = warning_at (&richloc, OPT_Wvla_parameter,
+				 "argument %u of type %s "
+				 "declared with mismatched bound %qs",
+				 parmpos + 1, newparmstr.c_str (),
+				 newbndstr);
+
+	  if (warned)
+	    {
+	      gcc_rich_location richloc (origloc);
+	      if (curpos)
+		{
+		  /* Also underline the VLA bound argument.  */
+		  richloc.add_range (DECL_SOURCE_LOCATION (curbnd));
+		  inform (&richloc,
+			  "previously declared as %s with bound argument %E",
+			  curparmstr.c_str (), plus_one (curpos));
+		}
+	      else
+		inform (&richloc,
+			"previously declared as %s with bound %qs",
+			curparmstr.c_str (), curbndstr);
+
+	      continue;
+	    }
+	}
+
+      if (!newpos && newbnd && curbnd)
+	{
+	  /* The VLA bounds don't refer to other function parameters.
+	     Compare them lexicographically to detect gross mismatches
+	     such as between T[foo()] and T[bar()].  */
+	  if (operand_equal_p (newbnd, curbnd,
+			       OEP_DECL_NAME | OEP_LEXICOGRAPHIC))
+	    continue;
+
+	  if (warning_at (newloc, OPT_Wvla_parameter,
+			  "argument %u of type %s "
+			  "declared with mismatched bound %qs",
+			  parmpos + 1, newparmstr.c_str (), newbndstr))
+	    inform (origloc, "previously declared as %s with bound %qs",
+		    curparmstr.c_str (), curbndstr);
+	  continue;
+	}
+    }
+
+  if (newa->minsize == cura->minsize
+      || (((newa->minsize == 0 && newa->mode != access_deferred)
+	   || (cura->minsize == 0 && cura->mode != access_deferred))
+	  && newa != &ptr_spec
+	  && cura != &ptr_spec))
+    return;
+
+  if (!newa->static_p && !cura->static_p && warn_array_parameter < 2)
+    /* Avoid warning about mismatches in ordinary (non-static) arrays
+       at levels below 2.  */
+    return;
+
+  if (warning_at (newloc, OPT_Warray_parameter_,
+		  "argument %u of type %s with mismatched bound",
+		  parmpos + 1, newparmstr.c_str ()))
+    inform (origloc, "previously declared as %s", curparmstr.c_str ());
+}
+
 /* Detect and diagnose a mismatch between an attribute access specification
    on the original declaration of FNDECL and that on the parameters NEWPARMS
    from its redeclaration.  ORIGLOC is the location of the first declaration
    (FNDECL's is set to the location of the redeclaration).  */
 
 void
-warn_parm_array_mismatch (location_t origloc, tree fndecl, tree newparms)
+warn_parms_array_mismatch (location_t origloc, tree fndecl, tree newparms)
 {
   /* The original parameter list (copied from the original declaration
      into the current [re]declaration, FNDECL)).  The two are equal if
@@ -3441,10 +3770,6 @@ warn_parm_array_mismatch (location_t origloc, tree fndecl, tree newparms)
      such as between f(T*) and f(T[1]), where the former mapping would be
      empty.  */
 
-  /* Create an empty access specification and use it for pointers with
-     no spec of their own.  */
-  attr_access ptr_spec = { };
-
   /* Iterate over the two lists of function parameters, comparing their
      respective mappings and diagnosing mismatches.  */
   unsigned parmpos = 0;
@@ -3455,304 +3780,8 @@ warn_parm_array_mismatch (location_t origloc, tree fndecl, tree newparms)
 	/* Bail on invalid redeclarations with fewer arguments.  */
 	return;
 
-      /* Only check pointers and C++ references.  */
-      tree curptype = TREE_TYPE (curp);
-      tree newptype = TREE_TYPE (newp);
-      if (!POINTER_TYPE_P (curptype) || !POINTER_TYPE_P (newptype))
-	continue;
-
-      /* Skip mismatches in __builtin_va_list that is commonly
-	 an array but that in declarations of built-ins decays
-	 to a pointer.  */
-      if (builtin && TREE_TYPE (newptype) == TREE_TYPE (va_list_type_node))
-	continue;
-
-      /* Access specs for the argument on the current (previous) and
-	 new (to replace the current) declarations.  Either may be null,
-	 indicating the parameter is an ordinary pointer with no size
-	 associated with it.  */
-      attr_access *cura = cur_idx.get (parmpos);
-      attr_access *newa = new_idx.get (parmpos);
-
-      if (!newa)
-	{
-	  /* Continue of both parameters are pointers with no size
-	     associated with it.  */
-	  if (!cura)
-	    continue;
-
-	  /* Otherwise point at PTR_SPEC and set its parameter pointer
-	     and number.  */
-	  newa = &ptr_spec;
-	  newa->ptr = newp;
-	  newa->ptrarg = parmpos;
-	}
-      else if (!cura)
-	{
-	  cura = &ptr_spec;
-	  cura->ptr = curp;
-	  cura->ptrarg = parmpos;
-	}
-
-      /* Set if the parameter is [re]declared as a VLA.  */
-      const bool cur_vla_p = cura->size || cura->minsize == HOST_WIDE_INT_M1U;
-      const bool new_vla_p = newa->size || newa->minsize == HOST_WIDE_INT_M1U;
-
-      if (DECL_P (curp))
-	origloc = DECL_SOURCE_LOCATION (curp);
-      else if (EXPR_P (curp) && EXPR_HAS_LOCATION (curp))
-	origloc = EXPR_LOCATION (curp);
-
-      /* The location of the parameter in the current redeclaration.  */
-      location_t newloc = DECL_SOURCE_LOCATION (newp);
-      if (origloc == UNKNOWN_LOCATION)
-	origloc = newloc;
-
-      const std::string newparmstr = newa->array_as_string (newptype);
-      const std::string curparmstr = cura->array_as_string (curptype);
-      if (new_vla_p && !cur_vla_p)
-	{
-	  if (warning_at (newloc, OPT_Wvla_parameter,
-			  "argument %u of type %s declared as "
-			  "a variable length array",
-			  parmpos + 1, newparmstr.c_str ()))
-	    inform (origloc,
-		    (cura == &ptr_spec
-		     ? G_("previously declared as a pointer %s")
-		     : G_("previously declared as an ordinary array %s")),
-		    curparmstr.c_str ());
-	  continue;
-	}
-
-      if (newa == &ptr_spec)
-	{
-	  /* The new declaration uses the pointer form.  Detect mismatches
-	     between the pointer and a previous array or VLA forms.  */
-	  if (cura->minsize == HOST_WIDE_INT_M1U)
-	    {
-	      /* Diagnose a pointer/VLA mismatch.  */
-	      if (warning_at (newloc, OPT_Wvla_parameter,
-			      "argument %u of type %s declared "
-			      "as a pointer",
-			      parmpos + 1, newparmstr.c_str ()))
-		inform (origloc,
-			"previously declared as a variable length array %s",
-			curparmstr.c_str ());
-	      continue;
-	    }
-
-	  if (cura->minsize && cura->minsize != HOST_WIDE_INT_M1U)
-	    {
-	      /* Diagnose mismatches between arrays with a constant
-		 bound and pointers.  */
-	      if (warning_at (newloc, OPT_Warray_parameter_,
-			      "argument %u of type %s declared "
-			      "as a pointer",
-			      parmpos + 1, newparmstr.c_str ()))
-		inform (origloc, "previously declared as an array %s",
-			curparmstr.c_str ());
-	      continue;
-	    }
-	}
-
-      if (!new_vla_p && cur_vla_p)
-	{
-	  if (warning_at (newloc, OPT_Wvla_parameter,
-			  "argument %u of type %s declared "
-			  "as an ordinary array",
-			  parmpos + 1, newparmstr.c_str ()))
-	    inform (origloc,
-		    "previously declared as a variable length array %s",
-		    curparmstr.c_str ());
-	  continue;
-	}
-
-      /* Move on to the next pair of parameters if both of the current
-	 pair are VLAs with a single variable bound that refers to
-	 a parameter at the same position.  */
-      if (newa->size && cura->size
-	  && newa->sizarg != UINT_MAX
-	  && newa->sizarg == cura->sizarg
-	  && newa->minsize == cura->minsize
-	  && !TREE_PURPOSE (newa->size) && !TREE_PURPOSE (cura->size))
-	continue;
-
-      if (newa->size || cura->size)
-	{
-	  unsigned newunspec, curunspec;
-	  unsigned newbnds = newa->vla_bounds (&newunspec) + newunspec;
-	  unsigned curbnds = cura->vla_bounds (&curunspec) + curunspec;
-
-	  if (newbnds != curbnds)
-	    {
-	      if (warning_n (newloc, OPT_Wvla_parameter, newbnds,
-			     "argument %u of type %s declared with "
-			     "%u variable bound",
-			     "argument %u of type %s declared with "
-			     "%u variable bounds",
-			     parmpos + 1, newparmstr.c_str (),
-			     newbnds))
-		inform_n (origloc, curbnds,
-			  "previously declared as %s with %u variable bound",
-			  "previously declared as %s with %u variable bounds",
-			  curparmstr.c_str (), curbnds);
-	      continue;
-	    }
-
-	  if (newunspec != curunspec)
-	    {
-	      location_t warnloc = newloc, noteloc = origloc;
-	      const char *warnparmstr = newparmstr.c_str ();
-	      const char *noteparmstr = curparmstr.c_str ();
-	      unsigned warnunspec = newunspec, noteunspec = curunspec;
-
-	      if (newunspec < curunspec)
-		{
-		  /* If the new declaration has fewer unspecified bounds
-		     point the warning to the previous declaration to make
-		     it clear that that's the one to change.  Otherwise,
-		     point it to the new decl.  */
-		  std::swap (warnloc, noteloc);
-		  std::swap (warnparmstr, noteparmstr);
-		  std::swap (warnunspec, noteunspec);
-		}
-	      if (warning_n (warnloc, OPT_Wvla_parameter, warnunspec,
-			     "argument %u of type %s declared with "
-			     "%u unspecified variable bound",
-			     "argument %u of type %s declared with "
-			     "%u unspecified variable bounds",
-			     parmpos + 1, warnparmstr, warnunspec))
-		{
-		  if (warnloc == newloc)
-		    inform_n (noteloc, noteunspec,
-			      "previously declared as %s with %u unspecified "
-			      "variable bound",
-			      "previously declared as %s with %u unspecified "
-			      "variable bounds",
-			      noteparmstr, noteunspec);
-		  else
-		    inform_n (noteloc, noteunspec,
-			      "subsequently declared as %s with %u unspecified "
-			      "variable bound",
-			      "subsequently declared as %s with %u unspecified "
-			      "variable bounds",
-			      noteparmstr, noteunspec);
-		}
-	      continue;
-	    }
-	}
-
-      /* Iterate over the lists of VLA variable bounds, comparing each
-	 pair for equality, and diagnosing mismatches.  The case of
-	 the lists having different lengths is handled above so at
-	 this point they do .  */
-      for (tree newvbl = newa->size, curvbl = cura->size; newvbl;
-	   newvbl = TREE_CHAIN (newvbl), curvbl = TREE_CHAIN (curvbl))
-	{
-	  gcc_assert (curvbl);
-
-	  tree newpos = TREE_PURPOSE (newvbl);
-	  tree curpos = TREE_PURPOSE (curvbl);
-
-	  tree newbnd = vla_bound_parm_decl (TREE_VALUE (newvbl));
-	  tree curbnd = vla_bound_parm_decl (TREE_VALUE (curvbl));
-
-	  if (newpos == curpos && newbnd == curbnd)
-	    /* In the expected case when both bounds either refer to
-	       the same positional parameter or when neither does,
-	       and both are the same expression they are necessarily
-	       the same.  */
-	    continue;
-
-	  pretty_printer pp1, pp2;
-	  const char* const newbndstr = expr_to_str (pp1, newbnd, "*");
-	  const char* const curbndstr = expr_to_str (pp2, curbnd, "*");
-
-	  if (!newpos != !curpos
-	      || (newpos && !tree_int_cst_equal (newpos, curpos)))
-	    {
-	      /* Diagnose a mismatch between a specified VLA bound and
-		 an unspecified one.  This can only happen in the most
-		 significant bound.
-
-		 Distinguish between the common case of bounds that are
-		 other function parameters such as in
-		   f (int n, int[n]);
-		 and others.  */
-
-	      gcc_rich_location richloc (newloc);
-	      bool warned;
-	      if (newpos)
-		{
-		  /* Also underline the VLA bound argument.  */
-		  richloc.add_range (DECL_SOURCE_LOCATION (newbnd));
-		  warned = warning_at (&richloc, OPT_Wvla_parameter,
-				       "argument %u of type %s declared "
-				       "with mismatched bound argument %E",
-				       parmpos + 1, newparmstr.c_str (),
-				       plus_one (newpos));
-		}
-	      else
-		warned = warning_at (&richloc, OPT_Wvla_parameter,
-				     "argument %u of type %s declared "
-				     "with mismatched bound %<%s%>",
-				     parmpos + 1, newparmstr.c_str (),
-				     newbndstr);
-
-	      if (warned)
-		{
-		  gcc_rich_location richloc (origloc);
-		  if (curpos)
-		    {
-		      /* Also underline the VLA bound argument.  */
-		      richloc.add_range (DECL_SOURCE_LOCATION (curbnd));
-		      inform (&richloc, "previously declared as %s with "
-			      "bound argument %E",
-			      curparmstr.c_str (), plus_one (curpos));
-		    }
-		  else
-		    inform (&richloc, "previously declared as %s with bound "
-			    "%<%s%>", curparmstr.c_str (), curbndstr);
-
-		  continue;
-		}
-	    }
-
-	  if (!newpos && newbnd && curbnd)
-	    {
-	      /* The VLA bounds don't refer to other function parameters.
-		 Compare them lexicographically to detect gross mismatches
-		 such as between T[foo()] and T[bar()].  */
-	      if (operand_equal_p (newbnd, curbnd,
-				   OEP_DECL_NAME | OEP_LEXICOGRAPHIC))
-		continue;
-
-	      if (warning_at (newloc, OPT_Wvla_parameter,
-			      "argument %u of type %s declared with "
-			      "mismatched bound %<%s%>",
-			      parmpos + 1, newparmstr.c_str (), newbndstr))
-		inform (origloc, "previously declared as %s with bound %qs",
-			curparmstr.c_str (), curbndstr);
-	      continue;
-	    }
-	}
-
-      if (newa->minsize == cura->minsize
-	  || (((newa->minsize == 0 && newa->mode != access_deferred)
-	       || (cura->minsize == 0 && cura->mode != access_deferred))
-	      && newa != &ptr_spec
-	      && cura != &ptr_spec))
-	continue;
-
-      if (!newa->static_p && !cura->static_p && warn_array_parameter < 2)
-	/* Avoid warning about mismatches in ordinary (non-static) arrays
-	   at levels below 2.  */
-	continue;
-
-      if (warning_at (newloc, OPT_Warray_parameter_,
-		      "argument %u of type %s with mismatched bound",
-		      parmpos + 1, newparmstr.c_str ()))
-	inform (origloc, "previously declared as %s", curparmstr.c_str ());
+      warn_parm_array_mismatch (origloc, &cur_idx, &new_idx, curp, newp, parmpos,
+				builtin);
     }
 }
 
@@ -3805,8 +3834,9 @@ maybe_warn_sizeof_array_div (location_t loc, tree arr, tree arr_type,
 
 /* Warn about C++20 [depr.array.comp] array comparisons: "Equality
    and relational comparisons between two operands of array type are
-   deprecated."  We also warn in C and earlier C++ standards.  CODE is
-   the code for this comparison, OP0 and OP1 are the operands.  */
+   deprecated."  In C++26 this is a permerror.  We also warn in C and earlier
+   C++ standards.  CODE is the code for this comparison, OP0 and OP1 are
+   the operands.  */
 
 void
 do_warn_array_compare (location_t location, tree_code code, tree op0, tree op1)
@@ -3819,19 +3849,36 @@ do_warn_array_compare (location_t location, tree_code code, tree op0, tree op1)
     op1 = TREE_OPERAND (op1, 0);
 
   auto_diagnostic_group d;
-  if (warning_at (location, OPT_Warray_compare,
-		  (c_dialect_cxx () && cxx_dialect >= cxx20)
-		  ? G_("comparison between two arrays is deprecated in C++20")
-		  : G_("comparison between two arrays")))
+  enum diagnostics::kind kind = diagnostics::kind::warning;
+  const char *msg;
+  if (c_dialect_cxx () && cxx_dialect >= cxx20)
+    {
+      /* P2865R5 made this comparison ill-formed in C++26.  */
+      if (cxx_dialect >= cxx26)
+	{
+	  msg = G_("comparison between two arrays is not allowed in C++26");
+	  kind = diagnostics::kind::permerror;
+	}
+      else
+	msg = G_("comparison between two arrays is deprecated in C++20");
+    }
+  else
+    msg = G_("comparison between two arrays");
+  if (emit_diagnostic (kind, location, OPT_Warray_compare, msg))
     {
       /* C doesn't allow +arr.  */
       if (c_dialect_cxx ())
 	inform (location, "use unary %<+%> which decays operands to pointers "
-		"or %<&%D[0] %s &%D[0]%> to compare the addresses",
-		op0, op_symbol_code (code), op1);
+		"or %<&%s%E%s[0] %s &%s%E%s[0]%> to compare the addresses",
+		DECL_P (op0) ? "" : "(", op0, DECL_P (op0) ? "" : ")",
+		op_symbol_code (code),
+		DECL_P (op1) ? "" : "(", op1, DECL_P (op1) ? "" : ")");
       else
-	inform (location, "use %<&%D[0] %s &%D[0]%> to compare the addresses",
-		op0, op_symbol_code (code), op1);
+	inform (location,
+		"use %<&%s%E%s[0] %s &%s%E%s[0]%> to compare the addresses",
+		DECL_P (op0) ? "" : "(", op0, DECL_P (op0) ? "" : ")",
+		op_symbol_code (code),
+		DECL_P (op1) ? "" : "(", op1, DECL_P (op1) ? "" : ")");
     }
 }
 

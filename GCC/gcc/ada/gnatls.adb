@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -117,7 +117,6 @@ procedure Gnatls is
 
    Also_Predef       : Boolean := False;  --  -a
    Dependable        : Boolean := False;  --  -d
-   License           : Boolean := False;  --  -l
    Very_Verbose_Mode : Boolean := False;  --  -V
    --  Command line flags
 
@@ -187,9 +186,6 @@ procedure Gnatls is
 
    procedure Usage;
    --  Print usage message
-
-   procedure Output_License_Information;
-   --  Output license statement, and if not found, output reference to COPYING
 
    function Image (Restriction : Restriction_Id) return String;
    --  Returns the capitalized image of Restriction
@@ -881,20 +877,6 @@ procedure Gnatls is
       return Normalize_Pathname (Path);
    end Normalize;
 
-   --------------------------------
-   -- Output_License_Information --
-   --------------------------------
-
-   procedure Output_License_Information is
-   begin
-      case Build_Type is
-         when others =>
-            Write_Str ("Please refer to file COPYING in your distribution"
-                     & " for license terms.");
-            Write_Eol;
-      end case;
-   end Output_License_Information;
-
    -------------------
    -- Output_Object --
    -------------------
@@ -1414,7 +1396,7 @@ procedure Gnatls is
          First := 3;
          loop
             while First <= Name_Len
-              and then (Name_Buffer (First) = Path_Separator)
+              and then Name_Buffer (First) = Path_Separator
             loop
                First := First + 1;
             end loop;
@@ -1573,7 +1555,6 @@ procedure Gnatls is
          Last  : Natural;
 
       begin
-
          if Is_Absolute_Path (Path) then
             if Is_Directory (Path) then
                return new String'(Path);
@@ -1606,7 +1587,9 @@ procedure Gnatls is
                Name_Len := 0;
 
                if not Is_Absolute_Path (Self (First .. Last)) then
-                  Add_Str_To_Name_Buffer (Get_Current_Dir);  -- ??? System call
+                  Add_Str_To_Name_Buffer
+                    (GNAT.Directory_Operations.Get_Current_Dir);
+
                   Add_Char_To_Name_Buffer (Directory_Separator);
                end if;
 
@@ -1673,9 +1656,13 @@ procedure Gnatls is
       end if;
 
       if Lib_Path /= null then
-         Osint.Fail ("RTS path not valid: missing adainclude directory");
+         Osint.Fail
+           ("RTS path """ & Name
+            & """ not valid: missing adainclude directory");
       elsif Src_Path /= null then
-         Osint.Fail ("RTS path not valid: missing adalib directory");
+         Osint.Fail
+           ("RTS path """ & Name
+            & """ not valid: missing adalib directory");
       end if;
 
       --  Try to find the RTS on the project path. First setup the project path
@@ -1710,7 +1697,8 @@ procedure Gnatls is
       end if;
 
       Osint.Fail
-        ("RTS path not valid: missing adainclude and adalib directories");
+        ("RTS path """ & Name
+          & """ not valid: missing adainclude and adalib directories");
    end Search_RTS;
 
    -------------------
@@ -1788,7 +1776,6 @@ procedure Gnatls is
                when 'o' => Reset_Print; Print_Object := True;
                when 'v' => Verbose_Mode              := True;
                when 'd' => Dependable                := True;
-               when 'l' => License                   := True;
                when 'V' => Very_Verbose_Mode         := True;
 
                when others => OK := False;
@@ -1942,11 +1929,6 @@ procedure Gnatls is
                                "depend");
       Write_Eol;
 
-      --  Line for -l
-
-      Write_Str ("  -l         output license information");
-      Write_Eol;
-
       --  Line for -v
 
       Write_Str ("  -v         verbose output, full path and unit " &
@@ -2041,21 +2023,6 @@ begin
 
       Next_Arg := Next_Arg + 1;
    end loop Scan_Args;
-
-   --  If -l (output license information) is given, it must be the only switch
-
-   if License then
-      if Arg_Count = 2 then
-         Output_License_Information;
-
-      else
-         Set_Standard_Error;
-         Write_Str ("Can't use -l with another switch");
-         Write_Eol;
-         Try_Help;
-         Exit_Program (E_Fatal);
-      end if;
-   end if;
 
    --  Handle --RTS switch
 
@@ -2170,7 +2137,7 @@ begin
             First := Prj_Path'First;
             loop
                while First <= Prj_Path'Last
-                 and then (Prj_Path (First) = Path_Separator)
+                 and then Prj_Path (First) = Path_Separator
                loop
                   First := First + 1;
                end loop;

@@ -1,1 +1,0 @@
-../../../../abis/rune/clockid_t.h

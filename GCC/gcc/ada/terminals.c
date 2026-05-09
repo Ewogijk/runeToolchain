@@ -6,7 +6,7 @@
  *                                                                          *
  *                          C Implementation File                           *
  *                                                                          *
- *                     Copyright (C) 2008-2023, AdaCore                     *
+ *                     Copyright (C) 2008-2026, AdaCore                     *
  *                                                                          *
  * GNAT is free software;  you can  redistribute it  and/or modify it under *
  * terms of the  GNU General Public License as published  by the Free Soft- *
@@ -31,7 +31,7 @@
 
 #define ATTRIBUTE_UNUSED __attribute__((unused))
 
-/* First all usupported platforms. Add stubs for exported routines. */
+/* First all unsupported platforms. Add stubs for exported routines. */
 
 #if defined (VMS) || defined (__vxworks) || defined (__Lynx__) \
   || defined (__ANDROID__) || defined (__PikeOS__) || defined(__DJGPP__)
@@ -724,13 +724,16 @@ __gnat_setup_child_communication
     if (bRet == FALSE) {
       cpid = -1;
     }
-
-    dwRet = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
-    if (dwRet != 0) {
-      cpid = -1;
+    else {
+      dwRet = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+      if (dwRet != 0) {
+	cpid = -1;
+      }
+      else {
+	cpid = buf[4] | (buf[5] << 8) | (buf[6] << 16) | (buf[7] << 24);
+      }
     }
 
-    cpid = buf[4] | (buf[5] << 8) | (buf[6] << 16) | (buf[7] << 24);
     process->pid = cpid;
   }
 
@@ -1089,7 +1092,7 @@ __gnat_setup_winsize (void *desc ATTRIBUTE_UNUSED,
 {
 }
 
-#else /* defined(_WIN32, implementatin for all UNIXes */
+#else /* defined(_WIN32, implementation for all UNIXes */
 
 /* First defined some macro to identify easily some systems */
 #if defined (__FreeBSD__) \
@@ -1104,6 +1107,7 @@ __gnat_setup_winsize (void *desc ATTRIBUTE_UNUSED,
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <fcntl.h>
@@ -1120,6 +1124,12 @@ __gnat_setup_winsize (void *desc ATTRIBUTE_UNUSED,
 #endif
 #if defined (__hpux__)
 #   include <sys/stropts.h>
+#endif
+#if defined (__APPLE__)
+#   include <util.h>
+#endif
+#if defined (__FreeBSD__)
+#   include <libutil.h>
 #endif
 
 #define CDISABLE _POSIX_VDISABLE
@@ -1261,10 +1271,12 @@ allocate_pty_desc (pty_desc **desc) {
 #ifndef NLDLY
 #define NLDLY 0
 #define CRDLY 0
-#define TABDLY 0
 #define BSDLY 0
 #define VTDLY 0
 #define FFDLY 0
+#endif
+#ifndef TABDLY
+#define TABDLY 0
 #endif
 
 /* child_setup_tty - set terminal properties

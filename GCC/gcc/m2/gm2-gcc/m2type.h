@@ -1,6 +1,6 @@
 /* m2type.h header file for m2type.cc.
 
-Copyright (C) 2012-2023 Free Software Foundation, Inc.
+Copyright (C) 2012-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius@glam.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -87,13 +87,6 @@ EXTERN tree m2type_BuildArrayStringConstructor (location_t location,
                                                 tree arrayType, tree str,
                                                 tree length);
 
-#if 0
-EXTERN tree m2type_GetPointerOne (void);
-EXTERN tree m2type_GetPointerZero (void);
-EXTERN tree m2type_GetWordOne (void);
-EXTERN tree m2type_GetWordZero (void);
-#endif
-
 EXTERN tree m2type_GetM2CharType (void);
 EXTERN tree m2type_GetM2IntegerType (void);
 EXTERN tree m2type_GetM2ShortRealType (void);
@@ -137,7 +130,7 @@ EXTERN tree m2type_GetShortCardType (void);
 EXTERN tree m2type_GetProcType (void);
 EXTERN tree m2type_GetCSizeTType (void);
 EXTERN tree m2type_GetCSSizeTType (void);
-
+EXTERN tree m2type_GetCOffTType (void);
 EXTERN tree m2type_GetM2CType (void);
 
 EXTERN tree m2type_GetBitsetType (void);
@@ -190,14 +183,14 @@ EXTERN tree m2type_BuildStartEnumeration (location_t location, char *name,
                                           bool ispacked);
 EXTERN tree m2type_BuildEndEnumeration (location_t location, tree enumtype,
                                         tree enumvalues);
-EXTERN tree m2type_BuildEnumerator (location_t location, char *name,
+EXTERN tree m2type_BuildEnumerator (location_t location, const char *name,
                                     tree value, tree *enumvalues);
 EXTERN tree m2type_BuildPointerType (tree totype);
 EXTERN tree m2type_BuildConstPointerType (tree totype);
 EXTERN tree m2type_BuildSetType (location_t location, char *name, tree type,
                                  tree lowval, tree highval, bool ispacked);
 EXTERN void *m2type_BuildStartSetConstructor (tree type);
-EXTERN void m2type_BuildSetConstructorElement (void *p, tree value);
+EXTERN void m2type_BuildSetConstructorElement (location_t location, void *p, tree value);
 EXTERN tree m2type_BuildEndSetConstructor (void *p);
 EXTERN void *m2type_BuildStartRecordConstructor (tree type);
 EXTERN tree m2type_BuildEndRecordConstructor (void *p);
@@ -217,8 +210,12 @@ EXTERN tree m2type_gm2_type_for_size (unsigned int bits, int unsignedp);
 EXTERN tree m2type_BuildProcTypeParameterDeclaration (location_t location,
                                                       tree type,
                                                       bool isreference);
-EXTERN int m2type_IsAddress (tree type);
+EXTERN bool m2type_IsAddress (tree type);
 EXTERN tree m2type_GetCardinalAddressType (void);
+EXTERN bool m2type_SameRealType (tree a, tree b);
+EXTERN bool m2type_IsGccStrictTypeEquivalent (tree left, tree right);
+EXTERN tree m2type_GetBooleanEnumList (location_t location);
+EXTERN void m2type_ReverseArrayConstructorElements (void *p);
 
 #undef EXTERN
 #endif /* m2type_h  */

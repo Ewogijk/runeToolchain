@@ -1,6 +1,6 @@
 // Debugging mode support code -*- C++ -*-
 
-// Copyright (C) 2003-2023 Free Software Foundation, Inc.
+// Copyright (C) 2003-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -24,6 +24,7 @@
 
 #include <bits/move.h>
 #include <bits/stl_iterator_base_types.h>
+#include <ext/atomicity.h> // __is_single_threaded
 
 #include <debug/formatter.h>
 #include <debug/safe_base.h>
@@ -45,24 +46,6 @@
 
 #include "mutex_pool.h"
 
-#ifdef _GLIBCXX_VERBOSE_ASSERT
-namespace std
-{
-  [[__noreturn__]]
-  void
-  __glibcxx_assert_fail(const char* file, int line,
-			const char* function, const char* condition) noexcept
-  {
-    if (file && function && condition)
-      fprintf(stderr, "%s:%d: %s: Assertion '%s' failed.\n",
-	      file, line, function, condition);
-    else if (function)
-      fprintf(stderr, "%s: Undefined behavior detected.\n", function);
-    abort();
-  }
-}
-#endif
-
 using namespace std;
 
 namespace
@@ -71,7 +54,7 @@ namespace
    *  in order to limit contention without breaking current library binary
    *  compatibility. */
   __gnu_cxx::__mutex&
-  get_safe_base_mutex(void* address)
+  get_safe_base_mutex(const void* address)
   {
     // Use arbitrarily __gnu_debug::vector<int> as the container giving
     // alignment of debug containers.
@@ -87,9 +70,9 @@ namespace
 #pragma GCC diagnostic warning "-Wabi=6"
 
   void
-  swap_its(__gnu_debug::_Safe_sequence_base& __lhs,
+  swap_its(const __gnu_debug::_Safe_sequence_base& __lhs,
 	   __gnu_debug::_Safe_iterator_base*& __lhs_its,
-	   __gnu_debug::_Safe_sequence_base& __rhs,
+	   const __gnu_debug::_Safe_sequence_base& __rhs,
 	   __gnu_debug::_Safe_iterator_base*& __rhs_its)
   {
     swap(__lhs_its, __rhs_its);
@@ -101,8 +84,8 @@ namespace
   }
 
   void
-  swap_seq_single(__gnu_debug::_Safe_sequence_base& __lhs,
-		  __gnu_debug::_Safe_sequence_base& __rhs)
+  swap_seq_single(const __gnu_debug::_Safe_sequence_base& __lhs,
+		  const __gnu_debug::_Safe_sequence_base& __rhs)
   {
     swap(__lhs._M_version, __rhs._M_version);
     swap_its(__lhs, __lhs._M_iterators,
@@ -135,17 +118,17 @@ namespace
 
   void
   swap_seq(__gnu_cxx::__mutex& lhs_mutex,
-	   __gnu_debug::_Safe_sequence_base& lhs,
+	   const __gnu_debug::_Safe_sequence_base& lhs,
 	   __gnu_cxx::__mutex& rhs_mutex,
-	   __gnu_debug::_Safe_sequence_base& rhs)
+	   const __gnu_debug::_Safe_sequence_base& rhs)
   {
     lock_and_run(lhs_mutex, rhs_mutex,
 		 [&lhs, &rhs]() { swap_seq_single(lhs, rhs); });
   }
 
   void
-  swap_ucont_single(__gnu_debug::_Safe_unordered_container_base& __lhs,
-		    __gnu_debug::_Safe_unordered_container_base& __rhs)
+  swap_ucont_single(const __gnu_debug::_Safe_unordered_container_base& __lhs,
+		    const __gnu_debug::_Safe_unordered_container_base& __rhs)
   {
     swap_seq_single(__lhs, __rhs);
     swap_its(__lhs, __lhs._M_local_iterators,
@@ -156,9 +139,9 @@ namespace
 
   void
   swap_ucont(__gnu_cxx::__mutex& lhs_mutex,
-	     __gnu_debug::_Safe_unordered_container_base& lhs,
+	     const __gnu_debug::_Safe_unordered_container_base& lhs,
 	     __gnu_cxx::__mutex& rhs_mutex,
-	     __gnu_debug::_Safe_unordered_container_base& rhs)
+	     const __gnu_debug::_Safe_unordered_container_base& rhs)
   {
     lock_and_run(lhs_mutex, rhs_mutex,
 		 [&lhs, &rhs]() { swap_ucont_single(lhs, rhs); });
@@ -174,6 +157,31 @@ namespace
 	__old->_M_reset();
       }
   }
+
+  const void*
+  acquire_sequence_ptr_for_lock(__gnu_debug::_Safe_sequence_base const*& seq)
+  {
+#ifdef __GTHREADS
+    if (!__gnu_cxx::__is_single_threaded())
+      return __atomic_load_n(&seq, __ATOMIC_ACQUIRE);
+#endif
+    return seq;
+  }
+
+  void
+  reset_sequence_ptr(__gnu_debug::_Safe_sequence_base const*& seq)
+  {
+#ifdef __GTHREADS
+    if (!__gnu_cxx::__is_single_threaded())
+      {
+	__atomic_store_n(&seq, (__gnu_debug::_Safe_sequence_base*)nullptr,
+			 __ATOMIC_RELEASE);
+	return;
+      }
+#endif
+    seq = nullptr;
+  }
+
 } // anonymous namespace
 
 namespace __gnu_debug
@@ -319,7 +327,7 @@ namespace __gnu_debug
 
   void
   _Safe_sequence_base::
-  _M_detach_all()
+  _M_detach_all() const
   {
     __gnu_cxx::__scoped_lock sentry(_M_get_mutex());
     detach_all(_M_iterators);
@@ -331,7 +339,7 @@ namespace __gnu_debug
 
   void
   _Safe_sequence_base::
-  _M_detach_singular()
+  _M_detach_singular() const
   {
     __gnu_cxx::__scoped_lock sentry(_M_get_mutex());
     for (_Safe_iterator_base* __iter = _M_iterators; __iter;)
@@ -353,7 +361,7 @@ namespace __gnu_debug
 
   void
   _Safe_sequence_base::
-  _M_revalidate_singular()
+  _M_revalidate_singular() const
   {
     __gnu_cxx::__scoped_lock sentry(_M_get_mutex());
     for (_Safe_iterator_base* __iter = _M_iterators; __iter;
@@ -367,17 +375,59 @@ namespace __gnu_debug
 
   void
   _Safe_sequence_base::
-  _M_swap(_Safe_sequence_base& __x) noexcept
+  _M_swap(const _Safe_sequence_base& __x) const noexcept
   { swap_seq(_M_get_mutex(), *this, __x._M_get_mutex(), __x); }
 
   __gnu_cxx::__mutex&
   _Safe_sequence_base::
-  _M_get_mutex() throw ()
+  _M_get_mutex() const noexcept
   { return get_safe_base_mutex(this); }
+
+#if !_GLIBCXX_INLINE_VERSION
+  void
+  _Safe_sequence_base::
+  _M_detach_all()
+  {
+    const _Safe_sequence_base* __this = this;
+    __this->_M_detach_all();
+  }
 
   void
   _Safe_sequence_base::
-  _M_attach(_Safe_iterator_base* __it, bool __constant)
+  _M_detach_singular()
+  {
+    const _Safe_sequence_base* __this = this;
+    __this->_M_detach_singular();
+  }
+
+  void
+  _Safe_sequence_base::
+  _M_revalidate_singular()
+  {
+    const _Safe_sequence_base* __this = this;
+    __this->_M_revalidate_singular();
+  }
+
+  void
+  _Safe_sequence_base::
+  _M_swap(_Safe_sequence_base& __x) noexcept
+  {
+    const _Safe_sequence_base* __this = this;
+    __this->_M_swap(__x);
+  }
+
+  __gnu_cxx::__mutex&
+  _Safe_sequence_base::
+  _M_get_mutex() noexcept
+  {
+    const _Safe_sequence_base* __this = this;
+    return __this->_M_get_mutex();
+  }
+#endif
+
+  void
+  _Safe_sequence_base::
+  _M_attach(_Safe_iterator_base* __it, bool __constant) const
   {
     __gnu_cxx::__scoped_lock sentry(_M_get_mutex());
     _M_attach_single(__it, __constant);
@@ -385,7 +435,7 @@ namespace __gnu_debug
 
   void
   _Safe_sequence_base::
-  _M_attach_single(_Safe_iterator_base* __it, bool __constant) throw ()
+  _M_attach_single(_Safe_iterator_base* __it, bool __constant) const noexcept
   {
     _Safe_iterator_base*& __its =
       __constant ? _M_const_iterators : _M_iterators;
@@ -397,7 +447,7 @@ namespace __gnu_debug
 
   void
   _Safe_sequence_base::
-  _M_detach(_Safe_iterator_base* __it)
+  _M_detach(_Safe_iterator_base* __it) const
   {
     // Remove __it from this sequence's list
     __gnu_cxx::__scoped_lock sentry(_M_get_mutex());
@@ -406,19 +456,19 @@ namespace __gnu_debug
 
   void
   _Safe_sequence_base::
-  _M_detach_single(_Safe_iterator_base* __it) throw ()
+  _M_detach_single(_Safe_iterator_base* __it) const noexcept
   {
     // Remove __it from this sequence's list
     __it->_M_unlink();
     if (_M_const_iterators == __it)
       _M_const_iterators = __it->_M_next;
-    if (_M_iterators == __it)
+    else if (_M_iterators == __it)
       _M_iterators = __it->_M_next;
   }
 
   void
   _Safe_iterator_base::
-  _M_attach(_Safe_sequence_base* __seq, bool __constant)
+  _M_attach(const _Safe_sequence_base* __seq, bool __constant)
   {
     _M_detach();
 
@@ -429,11 +479,13 @@ namespace __gnu_debug
 	_M_version = _M_sequence->_M_version;
 	_M_sequence->_M_attach(this, __constant);
       }
+    else
+      _M_version = 0;
   }
 
   void
   _Safe_iterator_base::
-  _M_attach_single(_Safe_sequence_base* __seq, bool __constant) throw ()
+  _M_attach_single(const _Safe_sequence_base* __seq, bool __constant) noexcept
   {
     _M_detach_single();
 
@@ -444,6 +496,8 @@ namespace __gnu_debug
 	_M_version = _M_sequence->_M_version;
 	_M_sequence->_M_attach_single(this, __constant);
       }
+    else
+      _M_version = 0;
   }
 
   void
@@ -457,7 +511,7 @@ namespace __gnu_debug
     // If the sequence destructor runs between loading the pointer and
     // locking the mutex, it will detach this iterator and set _M_sequence
     // to null, and then _M_detach_single() will do nothing.
-    if (auto seq = __atomic_load_n(&_M_sequence, __ATOMIC_ACQUIRE))
+    if (auto seq = acquire_sequence_ptr_for_lock(_M_sequence))
       {
 	__gnu_cxx::__scoped_lock sentry(get_safe_base_mutex(seq));
 	_M_detach_single();
@@ -466,7 +520,7 @@ namespace __gnu_debug
 
   void
   _Safe_iterator_base::
-  _M_detach_single() throw ()
+  _M_detach_single() noexcept
   {
     if (_M_sequence)
       {
@@ -477,9 +531,9 @@ namespace __gnu_debug
 
   void
   _Safe_iterator_base::
-  _M_reset() throw ()
+  _M_reset() noexcept
   {
-    __atomic_store_n(&_M_sequence, (_Safe_sequence_base*)0, __ATOMIC_RELEASE);
+    reset_sequence_ptr(_M_sequence);
     // Do not reset version, so that a detached iterator does not look like a
     // value-initialized one.
     // _M_version = 0;
@@ -489,27 +543,40 @@ namespace __gnu_debug
 
   bool
   _Safe_iterator_base::
-  _M_singular() const throw ()
+  _M_singular() const noexcept
   { return !_M_sequence || _M_version != _M_sequence->_M_version; }
 
   bool
   _Safe_iterator_base::
-  _M_can_compare(const _Safe_iterator_base& __x) const throw ()
+  _M_can_compare(const _Safe_iterator_base& __x) const noexcept
   { return _M_sequence == __x._M_sequence; }
 
   __gnu_cxx::__mutex&
   _Safe_iterator_base::
-  _M_get_mutex() throw ()
+  _M_get_mutex() noexcept
   { return _M_sequence->_M_get_mutex(); }
 
-  _Safe_unordered_container_base*
-  _Safe_local_iterator_base::
-  _M_get_container() const noexcept
-  { return static_cast<_Safe_unordered_container_base*>(_M_sequence); }
+#if !_GLIBCXX_INLINE_VERSION
+  void
+  _Safe_iterator_base::
+  _M_attach(_Safe_sequence_base* __seq, bool __constant)
+  {
+    const _Safe_sequence_base* __cseq = __seq;
+    _M_attach(__cseq, __constant);
+  }
+
+  void
+  _Safe_iterator_base::
+  _M_attach_single(_Safe_sequence_base* __seq, bool __constant) noexcept
+  {
+    const _Safe_sequence_base* __cseq = __seq;
+    _M_attach_single(__cseq, __constant);
+  }
+#endif
 
   void
   _Safe_local_iterator_base::
-  _M_attach(_Safe_sequence_base* __cont, bool __constant)
+  _M_attach(const _Safe_unordered_container_base* __cont, bool __constant)
   {
     _M_detach();
 
@@ -518,13 +585,16 @@ namespace __gnu_debug
       {
 	_M_sequence = __cont;
 	_M_version = _M_sequence->_M_version;
-	_M_get_container()->_M_attach_local(this, __constant);
+	_M_safe_container()->_M_attach_local(this, __constant);
       }
+    else
+      _M_version = 0;
   }
 
   void
   _Safe_local_iterator_base::
-  _M_attach_single(_Safe_sequence_base* __cont, bool __constant) throw ()
+  _M_attach_single(const _Safe_unordered_container_base* __cont,
+		   bool __constant) noexcept
   {
     _M_detach_single();
 
@@ -533,15 +603,17 @@ namespace __gnu_debug
       {
 	_M_sequence = __cont;
 	_M_version = _M_sequence->_M_version;
-	_M_get_container()->_M_attach_local_single(this, __constant);
+	_M_safe_container()->_M_attach_local_single(this, __constant);
       }
+    else
+      _M_version = 0;
   }
 
   void
   _Safe_local_iterator_base::
   _M_detach()
   {
-    if (auto seq = __atomic_load_n(&_M_sequence, __ATOMIC_ACQUIRE))
+    if (auto seq = acquire_sequence_ptr_for_lock(_M_sequence))
       {
 	__gnu_cxx::__scoped_lock sentry(get_safe_base_mutex(seq));
 	_M_detach_single();
@@ -550,18 +622,38 @@ namespace __gnu_debug
 
   void
   _Safe_local_iterator_base::
-  _M_detach_single() throw ()
+  _M_detach_single() noexcept
   {
     if (_M_sequence)
       {
-	_M_get_container()->_M_detach_local_single(this);
+	_M_safe_container()->_M_detach_local_single(this);
 	_M_reset();
       }
   }
 
+#if !_GLIBCXX_INLINE_VERSION
+  void
+  _Safe_local_iterator_base::
+  _M_attach(_Safe_sequence_base* __seq, bool __constant)
+  {
+    const _Safe_unordered_container_base* __cont
+      = static_cast<_Safe_unordered_container_base*>(__seq);
+    _M_attach(__cont, __constant);
+  }
+
+  void
+  _Safe_local_iterator_base::
+  _M_attach_single(_Safe_sequence_base* __seq, bool __constant) noexcept
+  {
+    const _Safe_unordered_container_base* __cont
+      = static_cast<_Safe_unordered_container_base*>(__seq);
+    _M_attach_single(__cont, __constant);
+  }
+#endif
+
   void
   _Safe_unordered_container_base::
-  _M_detach_all()
+  _M_detach_all() const
   {
     __gnu_cxx::__scoped_lock sentry(_M_get_mutex());
     detach_all(_M_iterators);
@@ -579,12 +671,12 @@ namespace __gnu_debug
 
   void
   _Safe_unordered_container_base::
-  _M_swap(_Safe_unordered_container_base& __x) noexcept
+  _M_swap(const _Safe_unordered_container_base& __x) const noexcept
   { swap_ucont(_M_get_mutex(), *this, __x._M_get_mutex(), __x); }
 
   void
   _Safe_unordered_container_base::
-  _M_attach_local(_Safe_iterator_base* __it, bool __constant)
+  _M_attach_local(_Safe_iterator_base* __it, bool __constant) const
   {
     __gnu_cxx::__scoped_lock sentry(_M_get_mutex());
     _M_attach_local_single(__it, __constant);
@@ -592,7 +684,7 @@ namespace __gnu_debug
 
   void
   _Safe_unordered_container_base::
-  _M_attach_local_single(_Safe_iterator_base* __it, bool __constant) throw ()
+  _M_attach_local_single(_Safe_iterator_base* __it, bool __constant) const noexcept
   {
     _Safe_iterator_base*& __its =
       __constant ? _M_const_local_iterators : _M_local_iterators;
@@ -604,7 +696,7 @@ namespace __gnu_debug
 
   void
   _Safe_unordered_container_base::
-  _M_detach_local(_Safe_iterator_base* __it)
+  _M_detach_local(_Safe_iterator_base* __it) const
   {
     // Remove __it from this container's list
     __gnu_cxx::__scoped_lock sentry(_M_get_mutex());
@@ -613,15 +705,33 @@ namespace __gnu_debug
 
   void
   _Safe_unordered_container_base::
-  _M_detach_local_single(_Safe_iterator_base* __it) throw ()
+  _M_detach_local_single(_Safe_iterator_base* __it) const noexcept
   {
     // Remove __it from this container's list
     __it->_M_unlink();
     if (_M_const_local_iterators == __it)
       _M_const_local_iterators = __it->_M_next;
-    if (_M_local_iterators == __it)
+    else if (_M_local_iterators == __it)
       _M_local_iterators = __it->_M_next;
   }
+
+#if !_GLIBCXX_INLINE_VERSION
+  void
+  _Safe_unordered_container_base::
+  _M_detach_all()
+  {
+    const _Safe_unordered_container_base* __this = this;
+    __this->_M_detach_all();
+  }
+
+  void
+  _Safe_unordered_container_base::
+  _M_swap(_Safe_unordered_container_base& __x) noexcept
+  {
+    const _Safe_unordered_container_base* __this = this;
+    __this->_M_swap(__x);
+  }
+#endif
 }
 
 namespace
@@ -1217,7 +1327,7 @@ namespace
 namespace __gnu_debug
 {
   _Error_formatter&
-  _Error_formatter::_M_message(_Debug_msg_id __id) const throw ()
+  _Error_formatter::_M_message(_Debug_msg_id __id) const noexcept
   {
     return const_cast<_Error_formatter*>(this)
       ->_M_message(_S_debug_messages[__id]);
@@ -1318,7 +1428,7 @@ namespace __gnu_debug
   template<typename _Tp>
     void
     _Error_formatter::_M_format_word(char*, int, const char*, _Tp)
-    const throw ()
+    const noexcept
     { }
 
   void
@@ -1330,7 +1440,7 @@ namespace __gnu_debug
   { }
 
   void
-  _Error_formatter::_M_get_max_length() const throw ()
+  _Error_formatter::_M_get_max_length() const noexcept
   { }
 
   // Instantiations.

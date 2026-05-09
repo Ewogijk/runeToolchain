@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -20,6 +20,8 @@
 #define RUST_AST_LOWER_EXPR
 
 #include "rust-ast-lower-base.h"
+#include "rust-ast.h"
+#include "rust-expr.h"
 
 namespace Rust {
 namespace HIR {
@@ -29,10 +31,10 @@ class ASTLowerPathInExpression : public ASTLoweringBase
   using Rust::HIR::ASTLoweringBase::visit;
 
 public:
-  static HIR::PathInExpression *translate (AST::PathInExpression *expr)
+  static HIR::PathInExpression *translate (AST::PathInExpression &expr)
   {
     ASTLowerPathInExpression compiler;
-    expr->accept_vis (compiler);
+    expr.accept_vis (compiler);
     rust_assert (compiler.translated);
     return compiler.translated;
   }
@@ -51,10 +53,10 @@ class ASTLowerQualPathInExpression : public ASTLoweringBase
 
 public:
   static HIR::QualifiedPathInExpression *
-  translate (AST::QualifiedPathInExpression *expr)
+  translate (AST::QualifiedPathInExpression &expr)
   {
     ASTLowerQualPathInExpression compiler;
-    expr->accept_vis (compiler);
+    expr.accept_vis (compiler);
     rust_assert (compiler.translated);
     return compiler.translated;
   }
@@ -72,17 +74,21 @@ class ASTLoweringExpr : public ASTLoweringBase
   using Rust::HIR::ASTLoweringBase::visit;
 
 public:
-  static HIR::Expr *translate (AST::Expr *expr, bool *terminated = nullptr);
+  static HIR::Expr *translate (AST::Expr &expr, bool *terminated = nullptr);
 
   void visit (AST::TupleIndexExpr &expr) override;
   void visit (AST::TupleExpr &expr) override;
   void visit (AST::IfExpr &expr) override;
   void visit (AST::IfExprConseqElse &expr) override;
-  void visit (AST::IfExprConseqIf &expr) override;
+  void visit (AST::IfLetExpr &expr) override;
+  void visit (AST::IfLetExprConseqElse &expr) override;
   void visit (AST::BlockExpr &expr) override;
+  void visit (AST::AnonConst &expr) override;
+  void visit (AST::ConstBlock &expr) override;
   void visit (AST::UnsafeBlockExpr &expr) override;
   void visit (AST::PathInExpression &expr) override;
   void visit (AST::QualifiedPathInExpression &expr) override;
+  void visit (AST::BoxExpr &expr) override;
   void visit (AST::ReturnExpr &expr) override;
   void visit (AST::CallExpr &expr) override;
   void visit (AST::MethodCallExpr &expr) override;
@@ -105,7 +111,6 @@ public:
   void visit (AST::FieldAccessExpr &expr) override;
   void visit (AST::LoopExpr &expr) override;
   void visit (AST::WhileLoopExpr &expr) override;
-  void visit (AST::ForLoopExpr &expr) override;
   void visit (AST::BreakExpr &expr) override;
   void visit (AST::ContinueExpr &expr) override;
   void visit (AST::BorrowExpr &expr) override;
@@ -118,6 +123,12 @@ public:
   void visit (AST::RangeFromToInclExpr &expr) override;
   void visit (AST::ClosureExprInner &expr) override;
   void visit (AST::ClosureExprInnerTyped &expr) override;
+  void visit (AST::InlineAsm &expr) override;
+  void visit (AST::LlvmInlineAsm &expr) override;
+
+  // Extra visitor for builtin macro nodes
+  void visit (AST::FormatArgs &fmt) override;
+  void visit (AST::OffsetOf &offset_of) override;
 
 private:
   ASTLoweringExpr ();

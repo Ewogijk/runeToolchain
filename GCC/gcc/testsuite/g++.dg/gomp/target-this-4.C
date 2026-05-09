@@ -1,5 +1,7 @@
 // We use 'auto' without a function return type, so specify dialect here
 // { dg-additional-options "-std=c++14 -fdump-tree-gimple" }
+// { dg-skip-if "requires hosted libstdc++ for cstring" { ! hostedlib } }
+
 #include <cstdlib>
 #include <cstring>
 
@@ -78,7 +80,7 @@ int main (void)
     if (ptr2[i] != 0)
       abort ();
 
-  #pragma omp target data map(ptr1[:N], ptr2[:N])
+  #pragma omp target data map(ptr1[ :N], ptr2[ :N])
   {
     if (!p1 ())
       abort ();

@@ -6,14 +6,6 @@ _start:
 	aadd	%r31,0x123(%r31,%rax,4)
 	aand	%r25d,0x123(%r31,%rax,4)
 	aand	%r31,0x123(%r31,%rax,4)
-	aesdec128kl	0x123(%r31,%rax,4),%xmm22
-	aesdec256kl	0x123(%r31,%rax,4),%xmm22
-	aesdecwide128kl	0x123(%r31,%rax,4)
-	aesdecwide256kl	0x123(%r31,%rax,4)
-	aesenc128kl	0x123(%r31,%rax,4),%xmm22
-	aesenc256kl	0x123(%r31,%rax,4),%xmm22
-	aesencwide128kl	0x123(%r31,%rax,4)
-	aesencwide256kl	0x123(%r31,%rax,4)
 	aor	%r25d,0x123(%r31,%rax,4)
 	aor	%r31,0x123(%r31,%rax,4)
 	axor	%r25d,0x123(%r31,%rax,4)
@@ -78,8 +70,6 @@ _start:
 	crc32w	%r31w, %r21d
 	crc32w	(%r31),%r21d
 	crc32	%rax, %r18
-	encodekey128	%r25d,%edx
-	encodekey256	%r25d,%edx
 	enqcmd	0x123(%r31d,%eax,4),%r25d
 	enqcmd	0x123(%r31,%rax,4),%r31
 	enqcmds	0x123(%r31d,%eax,4),%r25d
@@ -105,11 +95,14 @@ _start:
 	kmovw	0x123(%r31,%rax,4),%k5
 	ldtilecfg	0x123(%r31,%rax,4)
 	movbe	%r18w,%ax
+	movbe	%r15w,%ax
 	movbe	%r18w,0x123(%r16,%rax,4)
 	movbe	%r18w,0x123(%r31,%rax,4)
 	movbe	%r25d,%edx
+	movbe	%r15d,%edx
 	movbe	%r25d,0x123(%r16,%rax,4)
 	movbe	%r31,%r15
+	movbe	%r8,%r15
 	movbe	%r31,0x123(%r16,%rax,4)
 	movbe	%r31,0x123(%r31,%rax,4)
 	movbe	0x123(%r16,%rax,4),%r31
@@ -119,6 +112,10 @@ _start:
 	movdir64b	0x123(%r31,%rax,4),%r31
 	movdiri	%r25d,0x123(%r31,%rax,4)
 	movdiri	%r31,0x123(%r31,%rax,4)
+	movrs	0x123(%r31,%rax,4),%r16b
+	movrs	0x123(%r16,%rax,4),%r18w
+	movrs	0x123(%r31,%rax,4),%r25d
+	movrs	0x123(%r16,%rax,4),%r31
 	pdep	%r25d,%edx,%r10d
 	pdep	%r31,%r15,%r11
 	pdep	0x123(%r31,%rax,4),%r25d,%edx
@@ -127,19 +124,6 @@ _start:
 	pext	%r31,%r15,%r11
 	pext	0x123(%r31,%rax,4),%r25d,%edx
 	pext	0x123(%r31,%rax,4),%r31,%r15
-	sha1msg1	%xmm23,%xmm22
-	sha1msg1	0x123(%r31,%rax,4),%xmm22
-	sha1msg2	%xmm23,%xmm22
-	sha1msg2	0x123(%r31,%rax,4),%xmm22
-	sha1nexte	%xmm23,%xmm22
-	sha1nexte	0x123(%r31,%rax,4),%xmm22
-	sha1rnds4	$0x7b,%xmm23,%xmm22
-	sha1rnds4	$0x7b,0x123(%r31,%rax,4),%xmm22
-	sha256msg1	%xmm23,%xmm22
-	sha256msg1	0x123(%r31,%rax,4),%xmm22
-	sha256msg2	%xmm23,%xmm22
-	sha256msg2	0x123(%r31,%rax,4),%xmm22
-	sha256rnds2	0x123(%r31,%rax,4),%xmm12
 	shlx	%r25d,%edx,%r10d
 	shlx	%r25d,0x123(%r31,%rax,4),%edx
 	shlx	%r31,%r15,%r11
@@ -150,12 +134,12 @@ _start:
 	shrx	%r31,0x123(%r31,%rax,4),%r15
 	sttilecfg	0x123(%r31,%rax,4)
 	tileloadd	0x123(%r31,%rax,4),%tmm6
+	tileloaddrs     0x10000000(%rbp, %r31, 8), %tmm6
+	tileloaddrs     (%r16), %tmm3
+	tileloaddrst1   0x10000000(%r31, %r14, 8), %tmm6
+	tileloaddrst1   (%r16), %tmm3
 	tileloaddt1	0x123(%r31,%rax,4),%tmm6
 	tilestored	%tmm6,0x123(%r31,%rax,4)
-	vroundpd $1,(%r24),%xmm6
-	vroundps $2,(%r24),%xmm6
-	vroundsd $3,(%r24),%xmm6,%xmm3
-	vroundss $4,(%r24),%xmm6,%xmm3
 	wrssd	%r25d,0x123(%r31,%rax,4)
 	wrssq	%r31,0x123(%r31,%rax,4)
 	wrussd	%r25d,0x123(%r31,%rax,4)
@@ -166,14 +150,6 @@ _start:
 	aadd	[r31+rax*4+0x123],r31
 	aand	[r31+rax*4+0x123],r25d
 	aand	[r31+rax*4+0x123],r31
-	aesdec128kl	xmm22,[r31+rax*4+0x123]
-	aesdec256kl	xmm22,[r31+rax*4+0x123]
-	aesdecwide128kl	[r31+rax*4+0x123]
-	aesdecwide256kl	[r31+rax*4+0x123]
-	aesenc128kl	xmm22,[r31+rax*4+0x123]
-	aesenc256kl	xmm22,[r31+rax*4+0x123]
-	aesencwide128kl	[r31+rax*4+0x123]
-	aesencwide256kl	[r31+rax*4+0x123]
 	aor	[r31+rax*4+0x123],r25d
 	aor	[r31+rax*4+0x123],r31
 	axor	[r31+rax*4+0x123],r25d
@@ -238,8 +214,6 @@ _start:
 	crc32	r21d,r31w
 	crc32	r21d,WORD PTR [r31]
 	crc32	r18,rax
-	encodekey128	edx,r25d
-	encodekey256	edx,r25d
 	enqcmd	r25d,[r31d+eax*4+0x123]
 	enqcmd	r31,[r31+rax*4+0x123]
 	enqcmds	r25d,[r31d+eax*4+0x123]
@@ -279,6 +253,10 @@ _start:
 	movdir64b	r31,[r31+rax*4+0x123]
 	movdiri	DWORD PTR [r31+rax*4+0x123],r25d
 	movdiri	QWORD PTR [r31+rax*4+0x123],r31
+	movrs	r16b,BYTE PTR [r31+rax*4+0x123]
+	movrs	r18w,WORD PTR [r16+rax*4+0x123]
+	movrs	r25d,DWORD PTR [r31+rax*4+0x123]
+	movrs	r31,QWORD PTR [r16+rax*4+0x123]
 	pdep	r10d,edx,r25d
 	pdep	r11,r15,r31
 	pdep	edx,r25d,DWORD PTR [r31+rax*4+0x123]
@@ -287,19 +265,6 @@ _start:
 	pext	r11,r15,r31
 	pext	edx,r25d,DWORD PTR [r31+rax*4+0x123]
 	pext	r15,r31,QWORD PTR [r31+rax*4+0x123]
-	sha1msg1	xmm22,xmm23
-	sha1msg1	xmm22,XMMWORD PTR [r31+rax*4+0x123]
-	sha1msg2	xmm22,xmm23
-	sha1msg2	xmm22,XMMWORD PTR [r31+rax*4+0x123]
-	sha1nexte	xmm22,xmm23
-	sha1nexte	xmm22,XMMWORD PTR [r31+rax*4+0x123]
-	sha1rnds4	xmm22,xmm23,0x7b
-	sha1rnds4	xmm22,XMMWORD PTR [r31+rax*4+0x123],0x7b
-	sha256msg1	xmm22,xmm23
-	sha256msg1	xmm22,XMMWORD PTR [r31+rax*4+0x123]
-	sha256msg2	xmm22,xmm23
-	sha256msg2	xmm22,XMMWORD PTR [r31+rax*4+0x123]
-	sha256rnds2	xmm12,XMMWORD PTR [r31+rax*4+0x123]
 	shlx	r10d,edx,r25d
 	shlx	edx,DWORD PTR [r31+rax*4+0x123],r25d
 	shlx	r11,r15,r31
@@ -310,6 +275,10 @@ _start:
 	shrx	r15,QWORD PTR [r31+rax*4+0x123],r31
 	sttilecfg	[r31+rax*4+0x123]
 	tileloadd	tmm6,[r31+rax*4+0x123]
+	tileloaddrs	tmm6, [rbp+r31*8+0x10000000]
+	tileloaddrs	tmm3, [r16]
+	tileloaddrst1	tmm6, [r31+r14*8+0x10000000]
+	tileloaddrst1	tmm3, [r16]
 	tileloaddt1	tmm6,[r31+rax*4+0x123]
 	tilestored	[r31+rax*4+0x123],tmm6
 	wrssd	DWORD PTR [r31+rax*4+0x123],r25d

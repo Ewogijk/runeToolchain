@@ -1,4 +1,5 @@
 // { dg-do preprocess { target c++14 } }
+// { dg-add-options no_pch }
 
 #include <utility>
 #include <tuple>
@@ -8,15 +9,17 @@
 #include <chrono>
 #include <string>
 #include <complex>
+#include <algorithm>
 #include <iomanip>
 #include <shared_mutex>
 #include <map>
 #include <set>
+#include <iterator>
 
 #ifndef  __cpp_lib_integer_sequence
 #  error "__cpp_lib_integer_sequence"
-#elif  __cpp_lib_integer_sequence != 201304
-#  error "__cpp_lib_integer_sequence != 201304"
+#elif  __cpp_lib_integer_sequence < 201304
+#  error "__cpp_lib_integer_sequence < 201304"
 #endif
 
 #ifndef  __cpp_lib_exchange_function

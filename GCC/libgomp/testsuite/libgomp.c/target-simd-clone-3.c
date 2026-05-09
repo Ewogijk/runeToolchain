@@ -1,5 +1,6 @@
 /* { dg-do link { target { offload_target_amdgcn } } } */
 /* { dg-additional-options "-O2 -foffload-options=-fdump-ipa-simdclone-details" } */
+/* { dg-additional-options -Wno-deprecated-openmp } */
 
 /* Test that device simd clones are not generated for functions with the host
    "declare target" clause only.  */
@@ -36,5 +37,5 @@ int main (void)
   return 0;
 }
 
-/* { dg-final { scan-offload-ipa-dump "device doesn't match" "simdclone" { target x86_64-*-* } } } */
-/* { dg-final { scan-offload-ipa-dump-not "Generated .* clone" "simdclone" { target x86_64-*-* } } } */
+/* { dg-final { only_for_offload_target amdgcn-amdhsa scan-offload-ipa-dump "device doesn't match" "simdclone" { target x86_64-*-* } } } */
+/* { dg-final { only_for_offload_target amdgcn-amdhsa scan-offload-ipa-dump-not "Generated .* clone" "simdclone" { target x86_64-*-* } } } */

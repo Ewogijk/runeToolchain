@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -532,6 +532,15 @@ package body Ch10 is
             Unit_Node := Specification (Unit_Node);
          end if;
 
+         --  Disallow null procedures as library units and subunits
+
+         if Nkind (Unit_Node) = N_Procedure_Specification
+           and then Null_Present (Unit_Node)
+         then
+            Error_Msg_N
+              ("null procedure cannot be used as compilation unit", Unit_Node);
+         end if;
+
          if Nkind (Unit_Node) in N_Task_Body
                                | N_Protected_Body
                                | N_Task_Type_Declaration
@@ -916,7 +925,7 @@ package body Ch10 is
                   --  then the compilation of the child unit itself is the
                   --  place where such an "error" should be caught.
 
-                  Set_Name (With_Node, P_Qualified_Simple_Name);
+                  Set_Name (With_Node, P_Library_Unit_Name);
                   if Name (With_Node) = Error then
                      Remove (With_Node);
                   end if;
@@ -1029,7 +1038,7 @@ package body Ch10 is
       Scan; -- past SEPARATE;
 
       U_Left_Paren;
-      Set_Name (Subunit_Node, P_Qualified_Simple_Name);
+      Set_Name (Subunit_Node, P_Parent_Unit_Name);
       U_Right_Paren;
 
       Ignore (Tok_Semicolon);

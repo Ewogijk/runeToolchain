@@ -1,7 +1,7 @@
-// { dg-options "-std=gnu++23" }
 // { dg-do compile { target c++23 } }
 // This test relies on std::string.
 // { dg-require-effective-target hosted }
+// { dg-add-options no_pch }
 
 #include <bitset>
 
@@ -18,8 +18,6 @@ constexpr bool test_ntbs()
   VERIFY( std::bitset<0>("000").all() );
   VERIFY( std::bitset<0>("000", 2).all() );
   VERIFY( std::bitset<1>("100", 2).all() );
-  VERIFY( std::bitset<1>("z00", 2, 'z').none() );
-  VERIFY( std::bitset<2>("ab0", 3, 'a', 'b').count() == 1 );
 
   return true;
 }

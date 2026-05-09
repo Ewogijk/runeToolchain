@@ -1,1 +1,4 @@
-struct Foo<A, 'a>; // { dg-error "invalid order for generic parameters: lifetimes should always come before types" }
+#![feature(no_core)]
+#![no_core]
+
+struct Foo<A, 'a>; // { dg-error "invalid order for generic parameters: lifetime parameters must be declared prior to type and const parameters" }

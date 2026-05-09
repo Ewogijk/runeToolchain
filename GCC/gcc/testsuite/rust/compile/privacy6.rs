@@ -1,4 +1,11 @@
 // { dg-additional-options "-w" }
+#![feature(no_core)]
+#![no_core]
+
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
 
 struct Adt;
 enum EAdt {
@@ -33,7 +40,6 @@ fn foo17(value: (i32, [f64; 5])) {}
 fn foo18(value: Registers) {}
 fn foo19(value: &dyn Foo) {}
 fn foo20(value: &[Adt]) {}
-// FIXME: Uncomment once #1257 is fixed
-// fn foo21(value: fn(i32)) {}
-// fn foo22(value: fn()) {}
+fn foo21(value: fn(i32)) {}
+fn foo22(value: fn()) {}
 fn foo23(value: fn() -> i32) {}

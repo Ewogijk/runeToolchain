@@ -1,3 +1,6 @@
+#![feature(no_core)]
+#![no_core]
+
 mod orange {
     mod green {
         fn sain_void() {}
@@ -8,7 +11,7 @@ mod orange {
     }
 
     fn brown() {
-        if green::sain() {
+        if green::sain() {// E0603
             // { dg-error "definition is private in this context" "" { target *-*-* } .-1 }
             green::doux();
         }

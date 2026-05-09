@@ -1,5 +1,5 @@
 /* General AST-related method implementations for Rust frontend.
-   Copyright (C) 2009-2023 Free Software Foundation, Inc.
+   Copyright (C) 2009-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -17,6 +17,11 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
+#include "rust-ast.h"
+#include "optional.h"
+#include "rust-builtin-ast-nodes.h"
+#include "rust-common.h"
+#include "rust-expr.h"
 #include "rust-system.h"
 #include "rust-ast-full.h"
 #include "rust-diagnostics.h"
@@ -26,6 +31,9 @@ along with GCC; see the file COPYING3.  If not see
 #include "rust-lex.h"
 #include "rust-parse.h"
 #include "rust-operators.h"
+#include "rust-dir-owner.h"
+#include "rust-attribute-values.h"
+#include "rust-macro-invoc-lexer.h"
 
 /* Compilation unit used for various AST-related functions that would make
  * the headers too long if they were defined inline and don't receive any
@@ -35,100 +43,161 @@ along with GCC; see the file COPYING3.  If not see
 namespace Rust {
 namespace AST {
 
-enum indent_mode
+SingleASTNode::SingleASTNode (SingleASTNode const &other)
 {
-  enter,
-  out,
-  stay
-};
-
-std::string
-indent_spaces (enum indent_mode mode)
-{
-  static int indent = 0;
-  std::string str = "";
-  if (out == mode)
-    indent--;
-  for (int i = 0; i < indent; i++)
-    str += " ";
-  if (enter == mode)
-    indent++;
-
-  return str;
-}
-
-// Gets a string in a certain delim type.
-std::string
-get_string_in_delims (std::string str_input, DelimType delim_type)
-{
-  switch (delim_type)
+  kind = other.kind;
+  switch (kind)
     {
-    case PARENS:
-      return "(" + str_input + ")";
-    case SQUARE:
-      return "[" + str_input + "]";
-    case CURLY:
-      return "{" + str_input + "}";
-    default:
-      return "ERROR-MARK-STRING (delims)";
-    }
-  gcc_unreachable ();
-}
+    case Kind::Expr:
+      expr = other.expr->clone_expr ();
+      break;
 
-enum AttrMode
-{
-  OUTER,
-  INNER
-};
+    case Kind::Item:
+      item = other.item->clone_item ();
+      break;
 
-std::string
-get_mode_dump_desc (AttrMode mode)
-{
-  switch (mode)
-    {
-    case OUTER:
-      return "outer attributes";
-    case INNER:
-      return "inner attributes";
-    default:
-      gcc_unreachable ();
-      return "";
+    case Kind::Stmt:
+      stmt = other.stmt->clone_stmt ();
+      break;
+
+    case Kind::Extern:
+      external_item = other.external_item->clone_external_item ();
+      break;
+
+    case Kind::Assoc:
+      assoc_item = other.assoc_item->clone_associated_item ();
+      break;
+
+    case Kind::Type:
+      type = other.type->clone_type ();
+      break;
+
+    case Kind::Pattern:
+      pattern = other.pattern->clone_pattern ();
+      break;
     }
 }
 
-// Adds lines below adding attributes
-std::string
-append_attributes (std::vector<Attribute> attrs, AttrMode mode)
+SingleASTNode
+SingleASTNode::operator= (SingleASTNode const &other)
 {
-  indent_spaces (enter);
-
-  std::string str
-    = "\n" + indent_spaces (stay) + get_mode_dump_desc (mode) + ": ";
-  // str += "\n" + indent_spaces (stay) + "inner attributes: ";
-  if (attrs.empty ())
+  kind = other.kind;
+  switch (kind)
     {
-      str += "none";
-    }
-  else
-    {
-      /* note that this does not print them with outer or "inner attribute"
-       * syntax - just prints the body */
-      for (const auto &attr : attrs)
-	str += "\n" + indent_spaces (stay) + attr.as_string ();
-    }
+    case Kind::Expr:
+      expr = other.expr->clone_expr ();
+      break;
 
-  indent_spaces (out);
+    case Kind::Item:
+      item = other.item->clone_item ();
+      break;
 
-  return str;
+    case Kind::Stmt:
+      stmt = other.stmt->clone_stmt ();
+      break;
+
+    case Kind::Extern:
+      external_item = other.external_item->clone_external_item ();
+      break;
+
+    case Kind::Assoc:
+      assoc_item = other.assoc_item->clone_associated_item ();
+      break;
+
+    case Kind::Type:
+      type = other.type->clone_type ();
+      break;
+
+    case Kind::Pattern:
+      pattern = other.pattern->clone_pattern ();
+      break;
+    }
+  return *this;
 }
 
-// Removes the beginning and end quotes of a quoted string.
-std::string
-unquote_string (std::string input)
+void
+SingleASTNode::accept_vis (ASTVisitor &vis)
 {
-  rust_assert (input.front () == '"');
-  rust_assert (input.back () == '"');
-  return input.substr (1, input.length () - 2);
+  switch (kind)
+    {
+    case Kind::Expr:
+      expr->accept_vis (vis);
+      break;
+
+    case Kind::Item:
+      item->accept_vis (vis);
+      break;
+
+    case Kind::Stmt:
+      stmt->accept_vis (vis);
+      break;
+
+    case Kind::Extern:
+      external_item->accept_vis (vis);
+      break;
+
+    case Kind::Assoc:
+      assoc_item->accept_vis (vis);
+      break;
+
+    case Kind::Type:
+      type->accept_vis (vis);
+      break;
+
+    case Kind::Pattern:
+      pattern->accept_vis (vis);
+      break;
+    }
+}
+
+bool
+SingleASTNode::is_error ()
+{
+  switch (kind)
+    {
+    case Kind::Expr:
+      return expr == nullptr;
+    case Kind::Item:
+      return item == nullptr;
+    case Kind::Stmt:
+      return stmt == nullptr;
+    case Kind::Extern:
+      return external_item == nullptr;
+    case Kind::Assoc:
+      return assoc_item == nullptr;
+    case Kind::Type:
+      return type == nullptr;
+    case Kind::Pattern:
+      return pattern == nullptr;
+    }
+
+  rust_unreachable ();
+  return true;
+}
+
+std::string
+SingleASTNode::as_string () const
+{
+  switch (kind)
+    {
+    case Kind::Expr:
+      return "Expr: " + expr->as_string ();
+    case Kind::Item:
+      return "Item: " + item->as_string ();
+    case Kind::Stmt:
+      return "Stmt: " + stmt->as_string ();
+    case Kind::Extern:
+      return "External Item: " + external_item->as_string ();
+    case Kind::Assoc:
+      return "Associated Item: " + assoc_item->as_string ();
+    case Kind::Type:
+      return "Type: " + type->as_string ();
+    case Kind::Pattern:
+      return "Pattern: " + pattern->as_string ();
+    }
+
+  rust_unreachable ();
+  return "";
 }
 
 std::string
@@ -166,6 +235,20 @@ Crate::as_string () const
   return str + "\n";
 }
 
+void
+Crate::inject_extern_crate (std::string name)
+{
+  items.push_back (std::make_unique<AST::ExternCrate> (
+    AST::ExternCrate (name, AST::Visibility::create_public (UNKNOWN_LOCATION),
+		      {}, UNKNOWN_LOCATION)));
+}
+
+void
+Crate::inject_inner_attribute (Attribute attribute)
+{
+  inner_attrs.push_back (attribute);
+}
+
 std::string
 Attribute::as_string () const
 {
@@ -176,9 +259,102 @@ Attribute::as_string () const
     return path_str + attr_input->as_string ();
 }
 
+void
+Attribute::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+bool
+Attribute::is_derive () const
+{
+  return has_attr_input () && get_path () == Values::Attributes::DERIVE_ATTR;
+}
+
+/**
+ * Returns a list of traits to derive from within a given attribute.
+ *
+ * @param attrs The attributes on the item to derive
+ */
+std::vector<std::reference_wrapper<AST::SimplePath>>
+Attribute::get_traits_to_derive ()
+{
+  rust_assert (this->is_derive ());
+
+  this->parse_attr_to_meta_item ();
+  std::vector<std::reference_wrapper<AST::SimplePath>> result;
+  auto &input = get_attr_input ();
+  switch (input.get_attr_input_type ())
+    {
+    case AST::AttrInput::META_ITEM:
+      {
+	auto &meta = static_cast<AST::AttrInputMetaItemContainer &> (input);
+	for (auto &current : meta.get_items ())
+	  {
+	    // HACK: Find a better way to achieve the downcast.
+	    switch (current->get_kind ())
+	      {
+	      case AST::MetaItemInner::Kind::MetaItem:
+		{
+		  // Let raw pointer go out of scope without freeing, it doesn't
+		  // own the data anyway
+		  auto meta_item
+		    = static_cast<AST::MetaItem *> (current.get ());
+		  switch (meta_item->get_item_kind ())
+		    {
+		    case AST::MetaItem::ItemKind::Path:
+		      {
+			auto path
+			  = static_cast<AST::MetaItemPath *> (meta_item);
+			result.push_back (path->get_path ());
+		      }
+		      break;
+		    case AST::MetaItem::ItemKind::Word:
+		      {
+			auto word = static_cast<AST::MetaWord *> (meta_item);
+			// Convert current word to path
+			current = std::make_unique<AST::MetaItemPath> (
+			  AST::MetaItemPath (AST::SimplePath::from_str (
+			    word->get_ident ().as_string (),
+			    word->get_locus ())));
+			auto path
+			  = static_cast<AST::MetaItemPath *> (current.get ());
+
+			result.push_back (path->get_path ());
+		      }
+		      break;
+		    case AST::MetaItem::ItemKind::ListPaths:
+		    case AST::MetaItem::ItemKind::NameValueStr:
+		    case AST::MetaItem::ItemKind::PathExpr:
+		    case AST::MetaItem::ItemKind::Seq:
+		    case AST::MetaItem::ItemKind::ListNameValueStr:
+		    default:
+		      gcc_unreachable ();
+		      break;
+		    }
+		}
+		break;
+	      case AST::MetaItemInner::Kind::LitExpr:
+	      default:
+		gcc_unreachable ();
+		break;
+	      }
+	  }
+      }
+      break;
+    case AST::AttrInput::TOKEN_TREE:
+    case AST::AttrInput::LITERAL:
+    case AST::AttrInput::EXPR:
+      rust_unreachable ();
+      break;
+    }
+  return result;
+}
+
 // Copy constructor must deep copy attr_input as unique pointer
 Attribute::Attribute (Attribute const &other)
-  : path (other.path), locus (other.locus)
+  : path (other.path), locus (other.locus),
+    inner_attribute (other.inner_attribute)
 {
   // guard to protect from null pointer dereference
   if (other.attr_input != nullptr)
@@ -191,6 +367,7 @@ Attribute::operator= (Attribute const &other)
 {
   path = other.path;
   locus = other.locus;
+  inner_attribute = other.inner_attribute;
   // guard to protect from null pointer dereference
   if (other.attr_input != nullptr)
     attr_input = other.attr_input->clone_attr_input ();
@@ -249,7 +426,7 @@ DelimTokenTree::as_string () const
 std::string
 Token::as_string () const
 {
-  if (tok_ref->has_str ())
+  if (tok_ref->should_have_str ())
     {
       std::string str = tok_ref->get_str ();
 
@@ -268,11 +445,11 @@ SimplePathSegment::as_string () const
   return segment_name;
 }
 
-std::string
+const std::string
 SimplePath::as_string () const
 {
   std::string path;
-  if (has_opening_scope_resolution)
+  if (opening_scope_resolution)
     path = "::";
 
   // crappy hack because doing proper for loop would be more code
@@ -320,7 +497,7 @@ Visibility::as_string () const
     case PUB_IN_PATH:
       return std::string ("pub(in ") + in_path.as_string () + std::string (")");
     default:
-      gcc_unreachable ();
+      rust_unreachable ();
     }
 }
 
@@ -346,7 +523,7 @@ VisItem::as_string () const
 std::string
 Module::as_string () const
 {
-  std::string str = VisItem::as_string () + "mod " + module_name;
+  std::string str = VisItem::as_string () + "mod " + module_name.as_string ();
 
   // Return early if we're dealing with an unloaded module as their body resides
   // in a different file
@@ -393,7 +570,7 @@ StaticItem::as_string () const
   if (has_mut)
     str += " mut";
 
-  str += " " + name;
+  str += " " + name.as_string ();
 
   // DEBUG: null pointer check
   if (type == nullptr)
@@ -434,7 +611,7 @@ TupleStruct::as_string () const
 {
   std::string str = VisItem::as_string ();
 
-  str += "struct " + struct_name;
+  str += "struct " + struct_name.as_string ();
 
   // generic params
   str += "\n Generic params: ";
@@ -485,7 +662,7 @@ ConstantItem::as_string () const
 {
   std::string str = VisItem::as_string ();
 
-  str += "const " + identifier;
+  str += "const " + identifier.as_string ();
 
   // DEBUG: null pointer check
   if (type == nullptr)
@@ -496,14 +673,8 @@ ConstantItem::as_string () const
     }
   str += "\n  Type: " + type->as_string ();
 
-  // DEBUG: null pointer check
-  if (const_expr == nullptr)
-    {
-      rust_debug ("something really terrible has gone wrong - null "
-		  "pointer expr in const item.");
-      return "NULL_POINTER_MARK";
-    }
-  str += "\n  Expression: " + const_expr->as_string ();
+  if (has_expr ())
+    str += "\n  Expression: " + const_expr->as_string ();
 
   return str + "\n";
 }
@@ -565,74 +736,11 @@ InherentImpl::as_string () const
 }
 
 std::string
-Method::as_string () const
-{
-  std::string str ("Method: \n ");
-
-  str += vis.as_string () + " " + qualifiers.as_string ();
-
-  str += " fn " + method_name;
-
-  // generic params
-  str += "\n Generic params: ";
-  if (generic_params.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &param : generic_params)
-	{
-	  // DEBUG: null pointer check
-	  if (param == nullptr)
-	    {
-	      rust_debug (
-		"something really terrible has gone wrong - null pointer "
-		"generic param in method.");
-	      return "NULL_POINTER_MARK";
-	    }
-
-	  str += "\n  " + param->as_string ();
-	}
-    }
-
-  str += "\n Self param: " + self_param.as_string ();
-
-  str += "\n Function params: ";
-  if (function_params.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &param : function_params)
-	str += "\n  " + param.as_string ();
-    }
-
-  str += "\n Return type: ";
-  if (has_return_type ())
-    str += return_type->as_string ();
-  else
-    str += "none (void)";
-
-  str += "\n Where clause: ";
-  if (has_where_clause ())
-    str += where_clause.as_string ();
-  else
-    str += "none";
-
-  str += "\n Block expr (body): \n  ";
-  str += function_body->as_string ();
-
-  return str;
-}
-
-std::string
 StructStruct::as_string () const
 {
   std::string str = VisItem::as_string ();
 
-  str += "struct " + struct_name;
+  str += "struct " + struct_name.as_string ();
 
   // generic params
   str += "\n Generic params: ";
@@ -710,7 +818,8 @@ UseTreeGlob::as_string () const
       return "*";
     case GLOBAL:
       return "::*";
-      case PATH_PREFIXED: {
+    case PATH_PREFIXED:
+      {
 	std::string path_str = path.as_string ();
 	return path_str + "::*";
       }
@@ -718,7 +827,7 @@ UseTreeGlob::as_string () const
       // some kind of error
       return "ERROR-PATH";
     }
-  gcc_unreachable ();
+  rust_unreachable ();
 }
 
 std::string
@@ -733,7 +842,8 @@ UseTreeList::as_string () const
     case GLOBAL:
       path_str = "::{";
       break;
-      case PATH_PREFIXED: {
+    case PATH_PREFIXED:
+      {
 	path_str = path.as_string () + "::{";
 	break;
       }
@@ -781,7 +891,7 @@ UseTreeRebind::as_string () const
       // nothing to add, just path
       break;
     case IDENTIFIER:
-      path_str += " as " + identifier;
+      path_str += " as " + identifier.as_string ();
       break;
     case WILDCARD:
       path_str += " as _";
@@ -798,7 +908,7 @@ std::string
 Enum::as_string () const
 {
   std::string str = VisItem::as_string ();
-  str += enum_name;
+  str += enum_name.as_string ();
 
   // generic params
   str += "\n Generic params: ";
@@ -863,7 +973,7 @@ Trait::as_string () const
   if (has_unsafe)
     str += "unsafe ";
 
-  str += "trait " + name;
+  str += "trait " + name.as_string ();
 
   // generic params
   str += "\n Generic params: ";
@@ -946,7 +1056,7 @@ Union::as_string () const
 {
   std::string str = VisItem::as_string ();
 
-  str += "union " + union_name;
+  str += "union " + union_name.as_string ();
 
   // generic params
   str += "\n Generic params: ";
@@ -992,6 +1102,65 @@ Union::as_string () const
   return str;
 }
 
+Function::Function (Function const &other)
+  : VisItem (other), ExternalItem (other.get_node_id ()),
+    qualifiers (other.qualifiers), function_name (other.function_name),
+    where_clause (other.where_clause), locus (other.locus),
+    is_external_function (other.is_external_function)
+{
+  // guard to prevent null dereference (always required)
+  if (other.return_type != nullptr)
+    return_type = other.return_type->clone_type ();
+
+  // guard to prevent null dereference (only required if error state)
+  if (other.has_body ())
+    function_body = other.function_body.value ()->clone_block_expr ();
+  else
+    function_body = tl::nullopt;
+
+  generic_params.reserve (other.generic_params.size ());
+  for (const auto &e : other.generic_params)
+    generic_params.push_back (e->clone_generic_param ());
+
+  function_params.reserve (other.function_params.size ());
+  for (const auto &e : other.function_params)
+    function_params.push_back (e->clone_param ());
+}
+
+Function &
+Function::operator= (Function const &other)
+{
+  VisItem::operator= (other);
+  function_name = other.function_name;
+  qualifiers = other.qualifiers;
+  where_clause = other.where_clause;
+  // visibility = other.visibility->clone_visibility();
+  // outer_attrs = other.outer_attrs;
+  locus = other.locus;
+  is_external_function = other.is_external_function;
+
+  // guard to prevent null dereference (always required)
+  if (other.return_type != nullptr)
+    return_type = other.return_type->clone_type ();
+  else
+    return_type = nullptr;
+
+  // guard to prevent null dereference (only required if error state)
+  if (other.has_body ())
+    function_body = other.function_body.value ()->clone_block_expr ();
+  else
+    function_body = tl::nullopt;
+
+  generic_params.reserve (other.generic_params.size ());
+  for (const auto &e : other.generic_params)
+    generic_params.push_back (e->clone_generic_param ());
+
+  function_params.reserve (other.function_params.size ());
+  for (const auto &e : other.function_params)
+    function_params.push_back (e->clone_param ());
+
+  return *this;
+}
 std::string
 Function::as_string () const
 {
@@ -1018,7 +1187,7 @@ Function::as_string () const
       str += "void ";
     }
 
-  str += function_name;
+  str += function_name.as_string ();
 
   if (has_generics ())
     {
@@ -1051,7 +1220,7 @@ Function::as_string () const
       str += "(";
       for (; i != e; i++)
 	{
-	  str += (*i).as_string ();
+	  str += (*i)->as_string ();
 	  if (e != i + 1)
 	    str += ", ";
 	}
@@ -1067,15 +1236,8 @@ Function::as_string () const
 
   str += "\n";
 
-  // DEBUG: null pointer check
-  if (function_body == nullptr)
-    {
-      rust_debug (
-	"something really terrible has gone wrong - null pointer function "
-	"body in function.");
-      return "NULL_POINTER_MARK";
-    }
-  str += function_body->as_string () + "\n";
+  if (has_body ())
+    str += function_body.value ()->as_string () + "\n";
 
   return str;
 }
@@ -1146,6 +1308,25 @@ BlockExpr::as_string () const
 }
 
 std::string
+AnonConst::as_string () const
+{
+  std::string str = "AnonConst: ";
+
+  if (kind == AnonConst::Kind::DeferredInference)
+    str += "_";
+  else
+    str += expr.value ()->as_string ();
+
+  return str;
+}
+
+std::string
+ConstBlock::as_string () const
+{
+  return "ConstBlock: " + expr.as_string ();
+}
+
+std::string
 TraitImpl::as_string () const
 {
   std::string str = VisItem::as_string ();
@@ -1205,7 +1386,7 @@ TypeAlias::as_string () const
 {
   std::string str = VisItem::as_string ();
 
-  str += " " + new_type_name;
+  str += " " + new_type_name.as_string ();
 
   // generic params
   str += "\n Generic params: ";
@@ -1287,7 +1468,7 @@ MacroRulesDefinition::as_string () const
   // TODO: deal with macro_2_0
   str += "macro_rules!";
 
-  str += rule_name;
+  str += rule_name.as_string ();
 
   str += "\n Macro rules: ";
   if (rules.empty ())
@@ -1357,20 +1538,9 @@ MacroInvocData::as_string () const
 }
 
 std::string
-PathInExpression::as_string () const
+ExprStmt::as_string () const
 {
-  std::string str;
-
-  if (has_opening_scope_resolution)
-    str = "::";
-
-  return str + PathPattern::as_string ();
-}
-
-std::string
-ExprStmtWithBlock::as_string () const
-{
-  std::string str = indent_spaces (enter) + "ExprStmtWithBlock: \n";
+  std::string str = indent_spaces (enter) + "ExprStmt: \n";
 
   if (expr == nullptr)
     {
@@ -1380,6 +1550,8 @@ ExprStmtWithBlock::as_string () const
     {
       indent_spaces (enter);
       str += expr->as_string ();
+      if (semicolon_followed)
+	str += ";";
       indent_spaces (out);
     }
 
@@ -1438,20 +1610,6 @@ ClosureExprInnerTyped::as_string () const
 }
 
 std::string
-PathPattern::as_string () const
-{
-  std::string str;
-
-  for (const auto &segment : segments)
-    str += segment.as_string () + "::";
-
-  // basically a hack - remove last two characters of string (remove final ::)
-  str.erase (str.length () - 2);
-
-  return str;
-}
-
-std::string
 QualifiedPathType::as_string () const
 {
   std::string str ("<");
@@ -1464,12 +1622,6 @@ QualifiedPathType::as_string () const
 }
 
 std::string
-QualifiedPathInExpression::as_string () const
-{
-  return path_type.as_string () + "::" + PathPattern::as_string ();
-}
-
-std::string
 BorrowExpr::as_string () const
 {
   /* TODO: find way to incorporate outer attrs - may have to represent in
@@ -1477,15 +1629,34 @@ BorrowExpr::as_string () const
 
   std::string str ("&");
 
-  if (double_borrow)
-    str += "&";
+  if (raw_borrow)
+    {
+      str += "raw ";
+      str += get_is_mut () ? "const " : "mut ";
+    }
+  else
+    {
+      if (double_borrow)
+	str += "&";
 
-  if (is_mut)
-    str += "mut ";
-
+      if (get_is_mut ())
+	str += "mut ";
+    }
   str += main_or_left_expr->as_string ();
 
   return str;
+}
+
+std::string
+BoxExpr::as_string () const
+{
+  return "box " + expr->as_string ();
+}
+
+void
+BoxExpr::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
 }
 
 std::string
@@ -1497,23 +1668,20 @@ ReturnExpr::as_string () const
   std::string str ("return ");
 
   if (has_returned_expr ())
-    str += return_expr->as_string ();
+    str += get_returned_expr ().as_string ();
 
   return str;
 }
 
 std::string
-GroupedExpr::as_string () const
+TryExpr::as_string () const
 {
-  std::string str ("Grouped expr:");
+  /* TODO: find way to incorporate outer attrs - may have to represent in
+   * different style (i.e. something more like BorrowExpr: \n outer attrs) */
 
-  // outer attrs
-  str += append_attributes (outer_attrs, OUTER);
+  std::string str ("try ");
 
-  // inner attributes
-  str += append_attributes (inner_attrs, INNER);
-
-  str += "\n Expr in parens: " + expr_in_parens->as_string ();
+  str += block_expr->as_string ();
 
   return str;
 }
@@ -1531,7 +1699,7 @@ ContinueExpr::as_string () const
   std::string str ("continue ");
 
   if (has_label ())
-    str += label.as_string ();
+    str += get_label_unchecked ().as_string ();
 
   return str;
 }
@@ -1699,7 +1867,7 @@ std::string
 FieldAccessExpr::as_string () const
 {
   // TODO: rewrite dump to better reflect non-literal exprs
-  return receiver->as_string () + "." + field;
+  return receiver->as_string () + "." + field.as_string ();
 }
 
 std::string
@@ -1781,27 +1949,7 @@ IfExprConseqElse::as_string () const
 {
   std::string str = IfExpr::as_string ();
 
-  str += "\n Else block expr: " + else_block->as_string ();
-
-  return str;
-}
-
-std::string
-IfExprConseqIf::as_string () const
-{
-  std::string str = IfExpr::as_string ();
-
-  str += "\n Else if expr: \n  " + conseq_if_expr->as_string ();
-
-  return str;
-}
-
-std::string
-IfExprConseqIfLet::as_string () const
-{
-  std::string str = IfExpr::as_string ();
-
-  str += "\n Else if let expr: \n  " + if_let_expr->as_string ();
+  str += "\n Else expr: " + else_block->as_string ();
 
   return str;
 }
@@ -1814,14 +1962,13 @@ IfLetExpr::as_string () const
   str += append_attributes (outer_attrs, OUTER);
 
   str += "\n Condition match arm patterns: ";
-  if (match_arm_patterns.empty ())
+  if (match_arm_pattern == nullptr)
     {
       str += "none";
     }
   else
     {
-      for (const auto &pattern : match_arm_patterns)
-	str += "\n  " + pattern->as_string ();
+      str += "\n  " + match_arm_pattern->as_string ();
     }
 
   str += "\n Scrutinee expr: " + value->as_string ();
@@ -1836,27 +1983,7 @@ IfLetExprConseqElse::as_string () const
 {
   std::string str = IfLetExpr::as_string ();
 
-  str += "\n Else block expr: " + else_block->as_string ();
-
-  return str;
-}
-
-std::string
-IfLetExprConseqIf::as_string () const
-{
-  std::string str = IfLetExpr::as_string ();
-
-  str += "\n Else if expr: \n  " + if_expr->as_string ();
-
-  return str;
-}
-
-std::string
-IfLetExprConseqIfLet::as_string () const
-{
-  std::string str = IfLetExpr::as_string ();
-
-  str += "\n Else if let expr: \n  " + if_let_expr->as_string ();
+  str += "\n Else expr: " + else_block->as_string ();
 
   return str;
 }
@@ -2035,7 +2162,7 @@ WhileLoopExpr::as_string () const
   if (!has_loop_label ())
     str += "none";
   else
-    str += loop_label.as_string ();
+    str += get_loop_label ().as_string ();
 
   str += "\n Conditional expr: " + condition->as_string ();
 
@@ -2055,17 +2182,16 @@ WhileLetLoopExpr::as_string () const
   if (!has_loop_label ())
     str += "none";
   else
-    str += loop_label.as_string ();
+    str += get_loop_label ().as_string ();
 
   str += "\n Match arm patterns: ";
-  if (match_arm_patterns.empty ())
+  if (match_arm_pattern == nullptr)
     {
       str += "none";
     }
   else
     {
-      for (const auto &pattern : match_arm_patterns)
-	str += "\n  " + pattern->as_string ();
+      str += "\n  " + match_arm_pattern->as_string ();
     }
 
   str += "\n Scrutinee expr: " + scrutinee->as_string ();
@@ -2086,7 +2212,7 @@ LoopExpr::as_string () const
   if (!has_loop_label ())
     str += "none";
   else
-    str += loop_label.as_string ();
+    str += get_loop_label ().as_string ();
 
   str += "\n Loop block: " + loop_block->as_string ();
 
@@ -2123,10 +2249,10 @@ BreakExpr::as_string () const
   std::string str ("break ");
 
   if (has_label ())
-    str += label.as_string () + " ";
+    str += get_label_unchecked ().as_string () + " ";
 
   if (has_break_expr ())
-    str += break_expr->as_string ();
+    str += get_break_expr_unchecked ().as_string ();
 
   return str;
 }
@@ -2144,14 +2270,13 @@ MatchArm::as_string () const
   std::string str = append_attributes (outer_attrs, OUTER);
 
   str += "\nPatterns: ";
-  if (match_arm_patterns.empty ())
+  if (match_arm_pattern == nullptr)
     {
       str += "none";
     }
   else
     {
-      for (const auto &pattern : match_arm_patterns)
-	str += "\n " + pattern->as_string ();
+      str += "\n " + match_arm_pattern->as_string ();
     }
 
   str += "\nGuard expr: ";
@@ -2226,26 +2351,37 @@ TupleExpr::as_string () const
 }
 
 std::string
-ExprStmtWithoutBlock::as_string () const
-{
-  std::string str ("ExprStmtWithoutBlock:\n");
-  indent_spaces (enter);
-  str += indent_spaces (stay);
-
-  if (expr == nullptr)
-    str += "none (this shouldn't happen and is probably an error)";
-  else
-    str += expr->as_string ();
-  indent_spaces (out);
-
-  return str;
-}
-
-std::string
 FunctionParam::as_string () const
 {
   // TODO: rewrite dump to allow non-literal types
   return param_name->as_string () + " : " + type->as_string ();
+}
+
+void
+FunctionParam::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+SelfParam::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+VariadicParam::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+std::string
+VariadicParam::as_string () const
+{
+  if (has_pattern ())
+    return get_pattern ().as_string () + " : ...";
+  else
+    return "...";
 }
 
 std::string
@@ -2253,22 +2389,11 @@ FunctionQualifiers::as_string () const
 {
   std::string str;
 
-  switch (const_status)
-    {
-    case NONE:
-      // do nothing
-      break;
-    case CONST_FN:
-      str += "const ";
-      break;
-    case ASYNC_FN:
-      str += "async ";
-      break;
-    default:
-      return "ERROR_MARK_STRING: async-const status failure";
-    }
-
-  if (has_unsafe)
+  if (is_async ())
+    str += "async ";
+  if (is_const ())
+    str += "const ";
+  if (is_unsafe ())
     str += "unsafe ";
 
   if (has_extern)
@@ -2350,11 +2475,11 @@ LifetimeParam::as_string () const
 {
   std::string str ("LifetimeParam: ");
 
-  str += "\n Outer attribute: ";
+  str += "\n Outer attribute:";
   if (!has_outer_attribute ())
     str += "none";
-  else
-    str += outer_attr.as_string ();
+  for (auto &attr : outer_attrs)
+    str += " " + attr.as_string ();
 
   str += "\n Lifetime: " + lifetime.as_string ();
 
@@ -2373,34 +2498,9 @@ LifetimeParam::as_string () const
 }
 
 std::string
-ConstGenericParam::as_string () const
-{
-  std::string str ("ConstGenericParam: ");
-  str += "const " + name + ": " + type->as_string ();
-
-  if (has_default_value ())
-    str += " = " + get_default_value ().as_string ();
-
-  return str;
-}
-
-std::string
 MacroMatchFragment::as_string () const
 {
-  return "$" + ident + ": " + frag_spec.as_string ();
-}
-
-std::string
-QualifiedPathInType::as_string () const
-{
-  /* TODO: this may need adjusting if segments (e.g. with functions) can't be
-   * literalised */
-  std::string str = path_type.as_string ();
-
-  for (const auto &segment : segments)
-    str += "::" + segment->as_string ();
-
-  return str;
+  return "$" + ident.as_string () + ": " + frag_spec.as_string ();
 }
 
 std::string
@@ -2450,9 +2550,6 @@ MacroMatchRepetition::as_string () const
 std::string
 Lifetime::as_string () const
 {
-  if (is_error ())
-    return "error lifetime";
-
   switch (lifetime_type)
     {
     case NAMED:
@@ -2467,36 +2564,17 @@ Lifetime::as_string () const
 }
 
 std::string
-TypePath::as_string () const
-{
-  /* TODO: this may need to be rewritten if a segment (e.g. function) can't be
-   * literalised */
-  std::string str;
-
-  if (has_opening_scope_resolution)
-    str = "::";
-
-  for (const auto &segment : segments)
-    str += segment->as_string () + "::";
-
-  // kinda hack - remove last 2 '::' characters
-  str.erase (str.length () - 2);
-
-  return str;
-}
-
-std::string
 TypeParam::as_string () const
 {
   std::string str ("TypeParam: ");
 
-  str += "\n Outer attribute: ";
+  str += "\n Outer attribute:";
   if (!has_outer_attribute ())
     str += "none";
-  else
-    str += outer_attr.as_string ();
+  for (auto &attr : outer_attrs)
+    str += " " + attr.as_string ();
 
-  str += "\n Identifier: " + type_representation;
+  str += "\n Identifier: " + type_representation.as_string ();
 
   str += "\n Type param bounds: ";
   if (!has_type_param_bounds ())
@@ -2518,136 +2596,6 @@ TypeParam::as_string () const
   return str;
 }
 
-SimplePath
-PathPattern::convert_to_simple_path (bool with_opening_scope_resolution) const
-{
-  if (!has_segments ())
-    return SimplePath::create_empty ();
-
-  // create vector of reserved size (to minimise reallocations)
-  std::vector<SimplePathSegment> simple_segments;
-  simple_segments.reserve (segments.size ());
-
-  for (const auto &segment : segments)
-    {
-      // return empty path if doesn't meet simple path segment requirements
-      if (segment.is_error () || segment.has_generic_args ()
-	  || segment.as_string () == "Self")
-	return SimplePath::create_empty ();
-
-      // create segment and add to vector
-      std::string segment_str = segment.as_string ();
-      simple_segments.push_back (
-	SimplePathSegment (std::move (segment_str), segment.get_locus ()));
-    }
-
-  // kind of a HACK to get locus depending on opening scope resolution
-  Location locus = Linemap::unknown_location ();
-  if (with_opening_scope_resolution)
-    locus = simple_segments[0].get_locus () - 2; // minus 2 chars for ::
-  else
-    locus = simple_segments[0].get_locus ();
-  // FIXME: this hack probably doesn't actually work
-
-  return SimplePath (std::move (simple_segments), with_opening_scope_resolution,
-		     locus);
-}
-
-SimplePath
-TypePath::as_simple_path () const
-{
-  if (segments.empty ())
-    return SimplePath::create_empty ();
-
-  // create vector of reserved size (to minimise reallocations)
-  std::vector<SimplePathSegment> simple_segments;
-  simple_segments.reserve (segments.size ());
-
-  for (const auto &segment : segments)
-    {
-      // return empty path if doesn't meet simple path segment requirements
-      if (segment == nullptr || segment->is_error ()
-	  || !segment->is_ident_only () || segment->as_string () == "Self")
-	return SimplePath::create_empty ();
-
-      // create segment and add to vector
-      std::string segment_str = segment->as_string ();
-      simple_segments.push_back (
-	SimplePathSegment (std::move (segment_str), segment->get_locus ()));
-    }
-
-  return SimplePath (std::move (simple_segments), has_opening_scope_resolution,
-		     locus);
-}
-
-std::string
-PathExprSegment::as_string () const
-{
-  // TODO: rewrite dump to work with non-literalisable types
-  std::string ident_str = segment_name.as_string ();
-  if (has_generic_args ())
-    ident_str += "::<" + generic_args.as_string () + ">";
-
-  return ident_str;
-}
-
-std::string
-GenericArgs::as_string () const
-{
-  std::string args;
-
-  // lifetime args
-  if (!lifetime_args.empty ())
-    {
-      auto i = lifetime_args.begin ();
-      auto e = lifetime_args.end ();
-
-      for (; i != e; i++)
-	{
-	  args += (*i).as_string ();
-	  if (e != i + 1)
-	    args += ", ";
-	}
-    }
-
-  // type args
-  if (!generic_args.empty ())
-    {
-      auto i = generic_args.begin ();
-      auto e = generic_args.end ();
-
-      for (; i != e; i++)
-	{
-	  args += (*i).as_string ();
-	  if (e != i + 1)
-	    args += ", ";
-	}
-    }
-
-  // binding args
-  if (!binding_args.empty ())
-    {
-      auto i = binding_args.begin ();
-      auto e = binding_args.end ();
-
-      for (; i != e; i++)
-	{
-	  args += (*i).as_string ();
-	  if (e != i + 1)
-	    args += ", ";
-	}
-    }
-
-  return args;
-}
-
-std::string
-GenericArgsBinding::as_string () const
-{
-  // TODO: rewrite to work with non-literalisable types
-  return identifier + " = " + type->as_string ();
-}
-
 std::string
 ForLoopExpr::as_string () const
 {
@@ -2659,293 +2607,13 @@ ForLoopExpr::as_string () const
   if (!has_loop_label ())
     str += "none";
   else
-    str += loop_label.as_string ();
+    str += get_loop_label ().as_string ();
 
   str += "\n Pattern: " + pattern->as_string ();
 
   str += "\n Iterator expr: " + iterator_expr->as_string ();
 
   str += "\n Loop block: " + loop_block->as_string ();
-
-  return str;
-}
-
-std::string
-RangePattern::as_string () const
-{
-  // TODO: maybe rewrite to work with non-linearisable bounds
-  if (has_ellipsis_syntax)
-    return lower->as_string () + "..." + upper->as_string ();
-  else
-    return lower->as_string () + "..=" + upper->as_string ();
-}
-
-std::string
-RangePatternBoundLiteral::as_string () const
-{
-  std::string str;
-
-  if (has_minus)
-    str += "-";
-
-  str += literal.as_string ();
-
-  return str;
-}
-
-std::string
-SlicePattern::as_string () const
-{
-  std::string str ("SlicePattern: ");
-
-  for (const auto &pattern : items)
-    str += "\n " + pattern->as_string ();
-
-  return str;
-}
-
-std::string
-AltPattern::as_string () const
-{
-  std::string str ("AltPattern: ");
-
-  for (const auto &pattern : alts)
-    str += "\n " + pattern->as_string ();
-
-  return str;
-}
-
-std::string
-TuplePatternItemsMultiple::as_string () const
-{
-  std::string str;
-
-  for (const auto &pattern : patterns)
-    str += "\n " + pattern->as_string ();
-
-  return str;
-}
-
-std::string
-TuplePatternItemsRanged::as_string () const
-{
-  std::string str;
-
-  str += "\n Lower patterns: ";
-  if (lower_patterns.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &lower : lower_patterns)
-	str += "\n  " + lower->as_string ();
-    }
-
-  str += "\n Upper patterns: ";
-  if (upper_patterns.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &upper : upper_patterns)
-	str += "\n  " + upper->as_string ();
-    }
-
-  return str;
-}
-
-std::string
-TuplePattern::as_string () const
-{
-  return "TuplePattern: " + items->as_string ();
-}
-
-std::string
-StructPatternField::as_string () const
-{
-  // outer attributes
-  std::string str = append_attributes (outer_attrs, OUTER);
-
-  return str;
-}
-
-std::string
-StructPatternFieldIdent::as_string () const
-{
-  std::string str = StructPatternField::as_string ();
-
-  str += "\n";
-
-  if (has_ref)
-    str += "ref ";
-
-  if (has_mut)
-    str += "mut ";
-
-  str += ident;
-
-  return str;
-}
-
-std::string
-StructPatternFieldTuplePat::as_string () const
-{
-  // TODO: maybe rewrite to work with non-linearisable patterns
-  std::string str = StructPatternField::as_string ();
-
-  str += "\n";
-
-  str += std::to_string (index) + " : " + tuple_pattern->as_string ();
-
-  return str;
-}
-
-std::string
-StructPatternFieldIdentPat::as_string () const
-{
-  // TODO: maybe rewrite to work with non-linearisable patterns
-  std::string str = StructPatternField::as_string ();
-
-  str += "\n";
-
-  str += ident + " : " + ident_pattern->as_string ();
-
-  return str;
-}
-
-std::string
-StructPatternElements::as_string () const
-{
-  std::string str ("\n  Fields: ");
-
-  if (!has_struct_pattern_fields ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &field : fields)
-	str += "\n   " + field->as_string ();
-    }
-
-  str += "\n  Etc: ";
-  if (has_struct_pattern_etc)
-    str += "true";
-  else
-    str += "false";
-
-  return str;
-}
-
-std::string
-StructPattern::as_string () const
-{
-  std::string str ("StructPattern: \n Path: ");
-
-  str += path.as_string ();
-
-  str += "\n Struct pattern elems: ";
-  if (!has_struct_pattern_elems ())
-    str += "none";
-  else
-    str += elems.as_string ();
-
-  return str;
-}
-
-std::string
-LiteralPattern::as_string () const
-{
-  return lit.as_string ();
-}
-
-std::string
-ReferencePattern::as_string () const
-{
-  // TODO: maybe rewrite to work with non-linearisable patterns
-  std::string str ("&");
-
-  if (has_two_amps)
-    str += "&";
-
-  if (is_mut)
-    str += "mut ";
-
-  str += pattern->as_string ();
-
-  return str;
-}
-
-std::string
-IdentifierPattern::as_string () const
-{
-  // TODO: maybe rewrite to work with non-linearisable patterns
-  std::string str;
-
-  if (is_ref)
-    str += "ref ";
-
-  if (is_mut)
-    str += "mut ";
-
-  str += variable_ident;
-
-  if (has_pattern_to_bind ())
-    str += " @ " + to_bind->as_string ();
-
-  return str;
-}
-
-std::string
-TupleStructItemsNoRange::as_string () const
-{
-  std::string str;
-
-  for (const auto &pattern : patterns)
-    str += "\n  " + pattern->as_string ();
-
-  return str;
-}
-
-std::string
-TupleStructItemsRange::as_string () const
-{
-  std::string str ("\n  Lower patterns: ");
-
-  if (lower_patterns.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &lower : lower_patterns)
-	str += "\n   " + lower->as_string ();
-    }
-
-  str += "\n  Upper patterns: ";
-  if (upper_patterns.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &upper : upper_patterns)
-	str += "\n   " + upper->as_string ();
-    }
-
-  return str;
-}
-
-std::string
-TupleStructPattern::as_string () const
-{
-  std::string str ("TupleStructPattern: \n Path: ");
-
-  str += path.as_string ();
-
-  str += "\n Tuple struct items: " + items->as_string ();
 
   return str;
 }
@@ -2965,13 +2633,6 @@ LetStmt::as_string () const
     str += " = " + init_expr->as_string ();
 
   return str;
-}
-
-// hopefully definition here will prevent circular dependency issue
-TraitBound *
-TypePath::to_trait_bound (bool in_parens) const
-{
-  return new TraitBound (TypePath (*this), get_locus (), in_parens);
 }
 
 std::string
@@ -3013,7 +2674,7 @@ ReferenceType::as_string () const
   std::string str ("&");
 
   if (has_lifetime ())
-    str += lifetime.as_string () + " ";
+    str += get_lifetime ().as_string () + " ";
 
   if (has_mut)
     str += "mut ";
@@ -3118,14 +2779,7 @@ ImplTraitTypeOneBound::as_string () const
 {
   std::string str ("ImplTraitTypeOneBound: \n TraitBound: ");
 
-  return str + trait_bound.as_string ();
-}
-
-std::string
-TypePathSegmentGeneric::as_string () const
-{
-  // TODO: rewrite to work with non-linearisable types
-  return TypePathSegment::as_string () + "<" + generic_args.as_string () + ">";
+  return str + trait_bound->as_string ();
 }
 
 std::string
@@ -3144,44 +2798,10 @@ TraitObjectTypeOneBound::as_string () const
 }
 
 std::string
-TypePathFunction::as_string () const
-{
-  // TODO: rewrite to work with non-linearisable types
-  std::string str ("(");
-
-  if (has_inputs ())
-    {
-      auto i = inputs.begin ();
-      auto e = inputs.end ();
-
-      for (; i != e; i++)
-	{
-	  str += (*i)->as_string ();
-	  if (e != i + 1)
-	    str += ", ";
-	}
-    }
-
-  str += ")";
-
-  if (has_return_type ())
-    str += " -> " + return_type->as_string ();
-
-  return str;
-}
-
-std::string
-TypePathSegmentFunction::as_string () const
-{
-  // TODO: rewrite to work with non-linearisable types
-  return TypePathSegment::as_string () + function_path.as_string ();
-}
-
-std::string
 ArrayType::as_string () const
 {
   // TODO: rewrite to work with non-linearisable types and exprs
-  return "[" + elem_type->as_string () + "; " + size->as_string () + "]";
+  return "[" + elem_type->as_string () + "; " + size.as_string () + "]";
 }
 
 std::string
@@ -3263,7 +2883,7 @@ std::string
 StructExprFieldIdentifierValue::as_string () const
 {
   // TODO: rewrite to work with non-linearisable exprs
-  return field_name + " : " + StructExprFieldWithVal::as_string ();
+  return field_name.as_string () + " : " + StructExprFieldWithVal::as_string ();
 }
 
 std::string
@@ -3302,7 +2922,7 @@ std::string
 EnumItem::as_string () const
 {
   std::string str = VisItem::as_string ();
-  str += variant_name;
+  str += variant_name.as_string ();
 
   return str;
 }
@@ -3389,7 +3009,7 @@ StructField::as_string () const
   if (has_visibility ())
     str += "\n" + visibility.as_string ();
 
-  str += " " + field_name + " : " + field_type->as_string ();
+  str += " " + field_name.as_string () + " : " + field_type->as_string ();
 
   return str;
 }
@@ -3402,6 +3022,16 @@ EnumItemDiscriminant::as_string () const
 
   // add equal and expression
   str += " = " + expression->as_string ();
+
+  return str;
+}
+
+std::string
+ExternalTypeItem::as_string () const
+{
+  auto str = append_attributes (outer_attrs, OUTER);
+
+  str += "type " + item_name.as_string () + ";";
 
   return str;
 }
@@ -3421,256 +3051,10 @@ ExternalStaticItem::as_string () const
     str += "mut ";
 
   // add name
-  str += item_name;
+  str += item_name.as_string ();
 
   // add type on new line
   str += "\n Type: " + item_type->as_string ();
-
-  return str;
-}
-
-std::string
-ExternalFunctionItem::as_string () const
-{
-  // outer attributes
-  std::string str = append_attributes (outer_attrs, OUTER);
-
-  // start visibility on new line and with a space
-  str += "\n" + visibility.as_string () + " ";
-
-  str += "fn ";
-
-  // add name
-  str += item_name;
-
-  // generic params
-  str += "\n Generic params: ";
-  if (generic_params.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &param : generic_params)
-	{
-	  // DEBUG: null pointer check
-	  if (param == nullptr)
-	    {
-	      rust_debug (
-		"something really terrible has gone wrong - null pointer "
-		"generic param in external function item.");
-	      return "NULL_POINTER_MARK";
-	    }
-
-	  str += "\n  " + param->as_string ();
-	}
-    }
-
-  // function params
-  str += "\n Function params: ";
-  if (function_params.empty () && !has_variadics)
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &param : function_params)
-	str += "\n  " + param.as_string ();
-
-      if (has_variadics)
-	{
-	  str += "\n  variadic outer attrs: ";
-	  if (has_variadic_outer_attrs ())
-	    {
-	      for (const auto &attr : variadic_outer_attrs)
-		str += "\n   " + attr.as_string ();
-	    }
-	  else
-	    {
-	      str += "none";
-	    }
-	  str += "\n  ... (variadic)";
-	}
-    }
-
-  // add type on new line
-  str += "\n (return) Type: "
-	 + (has_return_type () ? return_type->as_string () : "()");
-
-  // where clause
-  str += "\n Where clause: ";
-  if (has_where_clause ())
-    str += where_clause.as_string ();
-  else
-    str += "none";
-
-  return str;
-}
-
-std::string
-NamedFunctionParam::as_string () const
-{
-  std::string str = append_attributes (outer_attrs, OUTER);
-
-  str += "\n" + name;
-
-  str += "\n Type: " + param_type->as_string ();
-
-  return str;
-}
-
-std::string
-TraitItemFunc::as_string () const
-{
-  std::string str = append_attributes (outer_attrs, OUTER);
-
-  str += "\n" + decl.as_string ();
-
-  str += "\n Definition (block expr): ";
-  if (has_definition ())
-    str += block_expr->as_string ();
-  else
-    str += "none";
-
-  return str;
-}
-
-std::string
-TraitFunctionDecl::as_string () const
-{
-  std::string str = qualifiers.as_string () + "fn " + function_name;
-
-  // generic params
-  str += "\n Generic params: ";
-  if (generic_params.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &param : generic_params)
-	{
-	  // DEBUG: null pointer check
-	  if (param == nullptr)
-	    {
-	      rust_debug (
-		"something really terrible has gone wrong - null pointer "
-		"generic param in trait function decl.");
-	      return "NULL_POINTER_MARK";
-	    }
-
-	  str += "\n  " + param->as_string ();
-	}
-    }
-
-  str += "\n Function params: ";
-  if (has_params ())
-    {
-      for (const auto &param : function_params)
-	str += "\n  " + param.as_string ();
-    }
-  else
-    {
-      str += "none";
-    }
-
-  str += "\n Return type: ";
-  if (has_return_type ())
-    str += return_type->as_string ();
-  else
-    str += "none (void)";
-
-  str += "\n Where clause: ";
-  if (has_where_clause ())
-    str += where_clause.as_string ();
-  else
-    str += "none";
-
-  return str;
-}
-
-std::string
-TraitItemMethod::as_string () const
-{
-  std::string str = append_attributes (outer_attrs, OUTER);
-
-  str += "\n" + decl.as_string ();
-
-  str += "\n Definition (block expr): ";
-  if (has_definition ())
-    str += block_expr->as_string ();
-  else
-    str += "none";
-
-  return str;
-}
-
-std::string
-TraitMethodDecl::as_string () const
-{
-  std::string str = qualifiers.as_string () + "fn " + function_name;
-
-  // generic params
-  str += "\n Generic params: ";
-  if (generic_params.empty ())
-    {
-      str += "none";
-    }
-  else
-    {
-      for (const auto &param : generic_params)
-	{
-	  // DEBUG: null pointer check
-	  if (param == nullptr)
-	    {
-	      rust_debug (
-		"something really terrible has gone wrong - null pointer "
-		"generic param in trait function decl.");
-	      return "NULL_POINTER_MARK";
-	    }
-
-	  str += "\n  " + param->as_string ();
-	}
-    }
-
-  str += "\n Self param: " + self_param.as_string ();
-
-  str += "\n Function params: ";
-  if (has_params ())
-    {
-      for (const auto &param : function_params)
-	str += "\n  " + param.as_string ();
-    }
-  else
-    {
-      str += "none";
-    }
-
-  str += "\n Return type: ";
-  if (has_return_type ())
-    str += return_type->as_string ();
-  else
-    str += "none (void)";
-
-  str += "\n Where clause: ";
-  if (has_where_clause ())
-    str += where_clause.as_string ();
-  else
-    str += "none";
-
-  return str;
-}
-
-std::string
-TraitItemConst::as_string () const
-{
-  // TODO: rewrite to work with non-linearisable exprs
-  std::string str = append_attributes (outer_attrs, OUTER);
-
-  str += "\nconst " + name + " : " + type->as_string ();
-
-  if (has_expression ())
-    str += " = " + expr->as_string ();
 
   return str;
 }
@@ -3680,7 +3064,19 @@ TraitItemType::as_string () const
 {
   std::string str = append_attributes (outer_attrs, OUTER);
 
-  str += "\ntype " + name;
+  str += "\ntype " + name.as_string ();
+
+  if (has_generics ())
+    {
+      str += "<";
+      for (size_t i = 0; i < generic_params.size (); i++)
+	{
+	  if (i > 0)
+	    str += ", ";
+	  str += generic_params[i]->as_string ();
+	}
+      str += ">";
+    }
 
   str += "\n Type param bounds: ";
   if (!has_type_param_bounds ())
@@ -3734,7 +3130,7 @@ SelfParam::as_string () const
       else if (has_lifetime ())
 	{
 	  // ref and lifetime
-	  std::string str = "&" + lifetime.as_string () + " ";
+	  std::string str = "&" + get_lifetime ().as_string () + " ";
 
 	  if (is_mut)
 	    str += "mut ";
@@ -3855,7 +3251,7 @@ MaybeNamedParam::as_string () const
     case UNNAMED:
       break;
     case IDENTIFIER:
-      str = name + " : ";
+      str = name.as_string () + " : ";
       break;
     case WILDCARD:
       str = "_ : ";
@@ -3904,7 +3300,7 @@ MetaItemSeq::as_string () const
 std::string
 MetaListPaths::as_string () const
 {
-  std::string str = ident + "(";
+  std::string str = ident.as_string () + "(";
 
   auto i = paths.begin ();
   auto e = paths.end ();
@@ -3922,7 +3318,7 @@ MetaListPaths::as_string () const
 std::string
 MetaListNameValueStr::as_string () const
 {
-  std::string str = ident + "(";
+  std::string str = ident.as_string () + "(";
 
   auto i = strs.begin ();
   auto e = strs.end ();
@@ -3953,6 +3349,29 @@ AttrInputMetaItemContainer::as_string () const
     }
 
   return str + ")";
+}
+
+AttrInputExpr::AttrInputExpr (const AttrInputExpr &oth)
+  : expr (oth.expr->clone_expr ())
+{}
+
+AttrInputExpr &
+AttrInputExpr::operator= (const AttrInputExpr &oth)
+{
+  expr = oth.expr->clone_expr ();
+  return *this;
+}
+
+std::string
+AttrInputExpr::as_string () const
+{
+  return expr->as_string ();
+}
+
+void
+AttrInputExpr::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
 }
 
 /* Override that calls the function recursively on all items contained within
@@ -3989,25 +3408,51 @@ void
 Module::process_file_path ()
 {
   rust_assert (kind == Module::ModuleKind::UNLOADED);
-  rust_assert (module_file.empty ());
+
+  if (!module_file.empty ())
+    {
+      rust_error_at (locus, "error handling module file for %qs",
+		     module_name.as_string ().c_str ());
+      return;
+    }
 
   // This corresponds to the path of the file 'including' the module. So the
   // file that contains the 'mod <file>;' directive
-  std::string including_fname (outer_filename);
+  std::string including_fpath (outer_filename);
 
-  std::string expected_file_path = module_name + ".rs";
+  std::string expected_file_path = module_name.as_string () + ".rs";
   std::string expected_dir_path = "mod.rs";
 
-  auto dir_slash_pos = including_fname.rfind (file_separator);
+  auto dir_slash_pos = including_fpath.rfind (file_separator);
   std::string current_directory_name;
+  std::string including_fname;
 
-  // If we haven't found a file_separator, then we have to look for files in the
-  // current directory ('.')
+  // If we haven't found a file_separator, then we may have to look for files in
+  // the current directory ('.')
   if (dir_slash_pos == std::string::npos)
-    current_directory_name = std::string (".") + file_separator;
+    {
+      including_fname = std::move (including_fpath);
+      including_fpath = std::string (".") + file_separator + including_fname;
+      dir_slash_pos = 1;
+    }
   else
-    current_directory_name
-      = including_fname.substr (0, dir_slash_pos) + file_separator;
+    {
+      including_fname = including_fpath.substr (dir_slash_pos + 1);
+    }
+
+  current_directory_name
+    = including_fpath.substr (0, dir_slash_pos) + file_separator;
+
+  auto path_string = filename_from_path_attribute (get_outer_attrs ());
+
+  std::string including_subdir;
+  bool subdir_was_added = false;
+  if (path_string.empty () && module_scope.empty ()
+      && get_file_subdir (including_fname, including_subdir))
+    {
+      current_directory_name += including_subdir + file_separator;
+      subdir_was_added = true;
+    }
 
   // Handle inline module declarations adding path components.
   for (auto const &name : module_scope)
@@ -4016,7 +3461,6 @@ Module::process_file_path ()
       current_directory_name.append (file_separator);
     }
 
-  auto path_string = filename_from_path_attribute (get_outer_attrs ());
   if (!path_string.empty ())
     {
       module_file = current_directory_name + path_string;
@@ -4033,9 +3477,31 @@ Module::process_file_path ()
   bool file_mod_found = file_exists (file_mod_path);
 
   // Then, search for <directory>/<module_name>/mod.rs
-  std::string dir_mod_path
-    = current_directory_name + module_name + file_separator + expected_dir_path;
+  std::string dir_mod_path = current_directory_name + module_name.as_string ()
+			     + file_separator + expected_dir_path;
   bool dir_mod_found = file_exists (dir_mod_path);
+
+  if (!file_mod_found && !dir_mod_found && subdir_was_added)
+    {
+      size_t suffix_len
+	= including_subdir.length () + std::string (file_separator).length ();
+      std::string fallback_dir
+	= current_directory_name.substr (0, current_directory_name.length ()
+					      - suffix_len);
+      std::string fallback_file = fallback_dir + expected_file_path;
+      std::string fallback_dir_mod = fallback_dir + module_name.as_string ()
+				     + file_separator + expected_dir_path;
+      if (file_exists (fallback_file))
+	{
+	  file_mod_found = true;
+	  file_mod_path = fallback_file;
+	}
+      else if (file_exists (fallback_dir_mod))
+	{
+	  dir_mod_found = true;
+	  dir_mod_path = fallback_dir_mod;
+	}
+    }
 
   bool multiple_candidates_found = file_mod_found && dir_mod_found;
   bool no_candidates_found = !file_mod_found && !dir_mod_found;
@@ -4043,12 +3509,13 @@ Module::process_file_path ()
   if (multiple_candidates_found)
     rust_error_at (locus,
 		   "two candidates found for module %s: %s.rs and %s%smod.rs",
-		   module_name.c_str (), module_name.c_str (),
-		   module_name.c_str (), file_separator);
+		   module_name.as_string ().c_str (),
+		   module_name.as_string ().c_str (),
+		   module_name.as_string ().c_str (), file_separator);
 
   if (no_candidates_found)
     rust_error_at (locus, "no candidate found for module %s",
-		   module_name.c_str ());
+		   module_name.as_string ().c_str ());
 
   if (no_candidates_found || multiple_candidates_found)
     return;
@@ -4082,7 +3549,9 @@ Module::load_items ()
 
   // we need to parse any possible inner attributes for this module
   inner_attrs = parser.parse_inner_attributes ();
-  auto parsed_items = parser.parse_items ();
+  auto parsed_items = parser.parse_items ().value_or (
+    std::vector<std::unique_ptr<AST::Item>>{});
+
   for (const auto &error : parser.get_errors ())
     error.emit ();
 
@@ -4113,7 +3582,12 @@ DelimTokenTree::parse_to_meta_item () const
 
   /* assume top-level delim token tree in attribute - convert all nested ones
    * to token stream */
-  std::vector<std::unique_ptr<Token>> token_stream = to_token_stream ();
+  std::vector<std::unique_ptr<Token>> token_stream_wrapped = to_token_stream ();
+
+  std::vector<const_TokenPtr> token_stream;
+  token_stream.reserve (token_stream_wrapped.size ());
+  for (auto &tk : token_stream_wrapped)
+    token_stream.push_back (tk->get_tok_ptr ());
 
   AttributeParser parser (std::move (token_stream));
   std::vector<std::unique_ptr<MetaItemInner>> meta_items (
@@ -4122,18 +3596,30 @@ DelimTokenTree::parse_to_meta_item () const
   return new AttrInputMetaItemContainer (std::move (meta_items));
 }
 
+AttributeParser::AttributeParser (std::vector<const_TokenPtr> token_stream,
+				  int stream_start_pos)
+  : lexer (new MacroInvocLexer (std::move (token_stream))),
+    parser (new Parser<MacroInvocLexer> (*lexer))
+{
+  if (stream_start_pos)
+    lexer->skip_token (stream_start_pos - 1);
+}
+
+AttributeParser::~AttributeParser () {}
+
 std::unique_ptr<MetaItemInner>
 AttributeParser::parse_meta_item_inner ()
 {
   // if first tok not identifier, not a "special" case one
-  if (peek_token ()->get_id () != IDENTIFIER)
+  if (lexer->peek_token ()->get_id () != IDENTIFIER)
     {
-      switch (peek_token ()->get_id ())
+      switch (lexer->peek_token ()->get_id ())
 	{
 	case CHAR_LITERAL:
 	case STRING_LITERAL:
 	case BYTE_CHAR_LITERAL:
 	case BYTE_STRING_LITERAL:
+	case RAW_STRING_LITERAL:
 	case INT_LITERAL:
 	case FLOAT_LITERAL:
 	case TRUE_LITERAL:
@@ -4148,48 +3634,46 @@ AttributeParser::parse_meta_item_inner ()
 	  return parse_path_meta_item ();
 
 	default:
-	  rust_error_at (peek_token ()->get_locus (),
+	  rust_error_at (lexer->peek_token ()->get_locus (),
 			 "unrecognised token '%s' in meta item",
-			 get_token_description (peek_token ()->get_id ()));
+			 get_token_description (
+			   lexer->peek_token ()->get_id ()));
 	  return nullptr;
 	}
     }
 
   // else, check for path
-  if (peek_token (1)->get_id () == SCOPE_RESOLUTION)
+  if (lexer->peek_token (1)->get_id () == SCOPE_RESOLUTION)
     {
       // path
       return parse_path_meta_item ();
     }
 
-  auto ident = peek_token ()->as_string ();
-  auto ident_locus = peek_token ()->get_locus ();
+  auto ident = lexer->peek_token ()->get_str ();
+  auto ident_locus = lexer->peek_token ()->get_locus ();
 
-  if (is_end_meta_item_tok (peek_token (1)->get_id ()))
+  if (is_end_meta_item_tok (lexer->peek_token (1)->get_id ()))
     {
       // meta word syntax
-      skip_token ();
+      lexer->skip_token ();
       return std::unique_ptr<MetaWord> (new MetaWord (ident, ident_locus));
     }
 
-  if (peek_token (1)->get_id () == EQUAL)
+  if (lexer->peek_token (1)->get_id () == EQUAL)
     {
       // maybe meta name value str syntax - check next 2 tokens
-      if (peek_token (2)->get_id () == STRING_LITERAL
-	  && is_end_meta_item_tok (peek_token (3)->get_id ()))
+      if (lexer->peek_token (2)->get_id () == STRING_LITERAL
+	  && is_end_meta_item_tok (lexer->peek_token (3)->get_id ()))
 	{
 	  // meta name value str syntax
-	  auto &value_tok = peek_token (2);
-	  auto value = value_tok->as_string ();
+	  const_TokenPtr value_tok = lexer->peek_token (2);
+	  auto value = value_tok->get_str ();
 	  auto locus = value_tok->get_locus ();
 
-	  skip_token (2);
-
-	  // remove the quotes from the string value
-	  std::string raw_value = unquote_string (std::move (value));
+	  lexer->skip_token (2);
 
 	  return std::unique_ptr<MetaNameValueStr> (
-	    new MetaNameValueStr (ident, ident_locus, std::move (raw_value),
+	    new MetaNameValueStr (ident, ident_locus, std::move (value),
 				  locus));
 	}
       else
@@ -4199,16 +3683,16 @@ AttributeParser::parse_meta_item_inner ()
 	}
     }
 
-  if (peek_token (1)->get_id () != LEFT_PAREN)
+  if (lexer->peek_token (1)->get_id () != LEFT_PAREN)
     {
-      rust_error_at (peek_token (1)->get_locus (),
+      rust_error_at (lexer->peek_token (1)->get_locus (),
 		     "unexpected token '%s' after identifier in attribute",
-		     get_token_description (peek_token (1)->get_id ()));
+		     get_token_description (lexer->peek_token (1)->get_id ()));
       return nullptr;
     }
 
   // is it one of those special cases like not?
-  if (peek_token ()->get_id () == IDENTIFIER)
+  if (lexer->peek_token ()->get_id () == IDENTIFIER)
     {
       return parse_path_meta_item ();
     }
@@ -4274,8 +3758,7 @@ AttributeParser::parse_meta_item_inner ()
 	new MetaListPaths (ident, ident_locus, std::move (path_items)));
     }
 
-  rust_error_at (Linemap::unknown_location (),
-		 "failed to parse any meta item inner");
+  rust_error_at (UNKNOWN_LOCATION, "failed to parse any meta item inner");
   return nullptr;
 }
 
@@ -4288,49 +3771,47 @@ AttributeParser::is_end_meta_item_tok (TokenId id) const
 std::unique_ptr<MetaItem>
 AttributeParser::parse_path_meta_item ()
 {
-  SimplePath path = parse_simple_path ();
-  if (path.is_empty ())
+  auto path = parser->parse_simple_path ();
+  if (!path)
     {
-      rust_error_at (peek_token ()->get_locus (),
+      rust_error_at (lexer->peek_token ()->get_locus (),
 		     "failed to parse simple path in attribute");
       return nullptr;
     }
 
-  switch (peek_token ()->get_id ())
+  switch (lexer->peek_token ()->get_id ())
     {
-      case LEFT_PAREN: {
+    case LEFT_PAREN:
+      {
 	std::vector<std::unique_ptr<MetaItemInner>> meta_items
 	  = parse_meta_item_seq ();
 
 	return std::unique_ptr<MetaItemSeq> (
-	  new MetaItemSeq (std::move (path), std::move (meta_items)));
+	  new MetaItemSeq (std::move (path.value ()), std::move (meta_items)));
       }
-      case EQUAL: {
-	skip_token ();
+    case EQUAL:
+      {
+	lexer->skip_token ();
 
-	Location locus = peek_token ()->get_locus ();
-	Literal lit = parse_literal ();
-	if (lit.is_error ())
-	  {
-	    rust_error_at (peek_token ()->get_locus (),
-			   "failed to parse literal in attribute");
-	    return nullptr;
-	  }
-	LiteralExpr expr (std::move (lit), {}, locus);
-	// stream_pos++;
-	/* shouldn't be required anymore due to parsing literal actually
-	 * skipping the token */
-	return std::unique_ptr<MetaItemPathLit> (
-	  new MetaItemPathLit (std::move (path), std::move (expr)));
+	auto expr = parser->parse_expr ();
+
+	// handle error
+	// parse_expr should already emit an error and return nullptr
+	if (!expr)
+	  return nullptr;
+
+	return std::unique_ptr<MetaItemPathExpr> (
+	  new MetaItemPathExpr (std::move (path.value ()),
+				std::move (expr.value ())));
       }
     case COMMA:
       // just simple path
       return std::unique_ptr<MetaItemPath> (
-	new MetaItemPath (std::move (path)));
+	new MetaItemPath (std::move (path.value ())));
     default:
-      rust_error_at (peek_token ()->get_locus (),
+      rust_error_at (lexer->peek_token ()->get_locus (),
 		     "unrecognised token '%s' in meta item",
-		     get_token_description (peek_token ()->get_id ()));
+		     get_token_description (lexer->peek_token ()->get_id ()));
       return nullptr;
     }
 }
@@ -4340,41 +3821,41 @@ AttributeParser::parse_path_meta_item ()
 std::vector<std::unique_ptr<MetaItemInner>>
 AttributeParser::parse_meta_item_seq ()
 {
-  int vec_length = token_stream.size ();
   std::vector<std::unique_ptr<MetaItemInner>> meta_items;
 
-  if (peek_token ()->get_id () != LEFT_PAREN)
+  if (lexer->peek_token ()->get_id () != LEFT_PAREN)
     {
-      rust_error_at (peek_token ()->get_locus (),
+      rust_error_at (lexer->peek_token ()->get_locus (),
 		     "missing left paren in delim token tree");
       return {};
     }
-  skip_token ();
+  lexer->skip_token ();
 
-  while (stream_pos < vec_length && peek_token ()->get_id () != RIGHT_PAREN)
+  while (lexer->peek_token ()->get_id () != END_OF_FILE
+	 && lexer->peek_token ()->get_id () != RIGHT_PAREN)
     {
       std::unique_ptr<MetaItemInner> inner = parse_meta_item_inner ();
       if (inner == nullptr)
 	{
-	  rust_error_at (peek_token ()->get_locus (),
+	  rust_error_at (lexer->peek_token ()->get_locus (),
 			 "failed to parse inner meta item in attribute");
 	  return {};
 	}
       meta_items.push_back (std::move (inner));
 
-      if (peek_token ()->get_id () != COMMA)
+      if (lexer->peek_token ()->get_id () != COMMA)
 	break;
 
-      skip_token ();
+      lexer->skip_token ();
     }
 
-  if (peek_token ()->get_id () != RIGHT_PAREN)
+  if (lexer->peek_token ()->get_id () != RIGHT_PAREN)
     {
-      rust_error_at (peek_token ()->get_locus (),
+      rust_error_at (lexer->peek_token ()->get_locus (),
 		     "missing right paren in delim token tree");
       return {};
     }
-  skip_token ();
+  lexer->skip_token ();
 
   return meta_items;
 }
@@ -4397,126 +3878,19 @@ DelimTokenTree::to_token_stream () const
   return tokens;
 }
 
-Literal
-AttributeParser::parse_literal ()
-{
-  const std::unique_ptr<Token> &tok = peek_token ();
-  switch (tok->get_id ())
-    {
-    case CHAR_LITERAL:
-      skip_token ();
-      return Literal (tok->as_string (), Literal::CHAR, tok->get_type_hint ());
-    case STRING_LITERAL:
-      skip_token ();
-      return Literal (tok->as_string (), Literal::STRING,
-		      tok->get_type_hint ());
-    case BYTE_CHAR_LITERAL:
-      skip_token ();
-      return Literal (tok->as_string (), Literal::BYTE, tok->get_type_hint ());
-    case BYTE_STRING_LITERAL:
-      skip_token ();
-      return Literal (tok->as_string (), Literal::BYTE_STRING,
-		      tok->get_type_hint ());
-    case INT_LITERAL:
-      skip_token ();
-      return Literal (tok->as_string (), Literal::INT, tok->get_type_hint ());
-    case FLOAT_LITERAL:
-      skip_token ();
-      return Literal (tok->as_string (), Literal::FLOAT, tok->get_type_hint ());
-    case TRUE_LITERAL:
-      skip_token ();
-      return Literal ("true", Literal::BOOL, tok->get_type_hint ());
-    case FALSE_LITERAL:
-      skip_token ();
-      return Literal ("false", Literal::BOOL, tok->get_type_hint ());
-    default:
-      rust_error_at (tok->get_locus (), "expected literal - found '%s'",
-		     get_token_description (tok->get_id ()));
-      return Literal::create_error ();
-    }
-}
-
-SimplePath
-AttributeParser::parse_simple_path ()
-{
-  bool has_opening_scope_res = false;
-  if (peek_token ()->get_id () == SCOPE_RESOLUTION)
-    {
-      has_opening_scope_res = true;
-      skip_token ();
-    }
-
-  std::vector<SimplePathSegment> segments;
-
-  SimplePathSegment segment = parse_simple_path_segment ();
-  if (segment.is_error ())
-    {
-      rust_error_at (
-	peek_token ()->get_locus (),
-	"failed to parse simple path segment in attribute simple path");
-      return SimplePath::create_empty ();
-    }
-  segments.push_back (std::move (segment));
-
-  while (peek_token ()->get_id () == SCOPE_RESOLUTION)
-    {
-      skip_token ();
-
-      SimplePathSegment segment = parse_simple_path_segment ();
-      if (segment.is_error ())
-	{
-	  rust_error_at (
-	    peek_token ()->get_locus (),
-	    "failed to parse simple path segment in attribute simple path");
-	  return SimplePath::create_empty ();
-	}
-      segments.push_back (std::move (segment));
-    }
-  segments.shrink_to_fit ();
-
-  return SimplePath (std::move (segments), has_opening_scope_res);
-}
-
-SimplePathSegment
-AttributeParser::parse_simple_path_segment ()
-{
-  const std::unique_ptr<Token> &tok = peek_token ();
-  switch (tok->get_id ())
-    {
-    case IDENTIFIER:
-      skip_token ();
-      return SimplePathSegment (tok->as_string (), tok->get_locus ());
-    case SUPER:
-      skip_token ();
-      return SimplePathSegment ("super", tok->get_locus ());
-    case SELF:
-      skip_token ();
-      return SimplePathSegment ("self", tok->get_locus ());
-    case CRATE:
-      skip_token ();
-      return SimplePathSegment ("crate", tok->get_locus ());
-    case DOLLAR_SIGN:
-      if (peek_token (1)->get_id () == CRATE)
-	{
-	  skip_token (1);
-	  return SimplePathSegment ("$crate", tok->get_locus ());
-	}
-      gcc_fallthrough ();
-    default:
-      rust_error_at (tok->get_locus (),
-		     "unexpected token '%s' in simple path segment",
-		     get_token_description (tok->get_id ()));
-      return SimplePathSegment::create_error ();
-    }
-}
-
 std::unique_ptr<MetaItemLitExpr>
 AttributeParser::parse_meta_item_lit ()
 {
-  Location locus = peek_token ()->get_locus ();
-  LiteralExpr lit_expr (parse_literal (), {}, locus);
+  auto lit_expr = parser->parse_literal_expr ({});
+
+  // TODO: return nullptr instead?
+  if (!lit_expr)
+    lit_expr = std::unique_ptr<LiteralExpr> (
+      new LiteralExpr (Literal::create_error (), {},
+		       lexer->peek_token ()->get_locus ()));
+
   return std::unique_ptr<MetaItemLitExpr> (
-    new MetaItemLitExpr (std::move (lit_expr)));
+    new MetaItemLitExpr (std::move (*lit_expr.value ())));
 }
 
 bool
@@ -4539,13 +3913,16 @@ MetaItemLitExpr::check_cfg_predicate (const Session &) const
 {
   /* as far as I can tell, a literal expr can never be a valid cfg body, so
    * false */
+  rust_error_at (this->get_locus (), "'%s' predicate key cannot be a literal",
+		 this->as_string ().c_str ());
+
   return false;
 }
 
 bool
 MetaListNameValueStr::check_cfg_predicate (const Session &session) const
 {
-  if (ident == "all")
+  if (ident.as_string () == "all")
     {
       for (const auto &str : strs)
 	{
@@ -4554,7 +3931,7 @@ MetaListNameValueStr::check_cfg_predicate (const Session &session) const
 	}
       return true;
     }
-  else if (ident == "any")
+  else if (ident.as_string () == "any")
     {
       for (const auto &str : strs)
 	{
@@ -4563,13 +3940,13 @@ MetaListNameValueStr::check_cfg_predicate (const Session &session) const
 	}
       return false;
     }
-  else if (ident == "not")
+  else if (ident.as_string () == "not")
     {
       if (strs.size () != 1)
 	{
 	  /* HACK: convert vector platform-dependent size_type to string to
 	   * use in printf */
-	  rust_error_at (Linemap::unknown_location (),
+	  rust_error_at (UNKNOWN_LOCATION,
 			 "cfg predicate could not be checked for "
 			 "MetaListNameValueStr with ident of "
 			 "'not' because there are '%s' elements, not '1'",
@@ -4581,11 +3958,11 @@ MetaListNameValueStr::check_cfg_predicate (const Session &session) const
     }
   else
     {
-      rust_error_at (Linemap::unknown_location (),
+      rust_error_at (UNKNOWN_LOCATION,
 		     "cfg predicate could not be checked for "
 		     "MetaListNameValueStr with ident of "
 		     "'%s' - ident must be 'all' or 'any'",
-		     ident.c_str ());
+		     ident.as_string ().c_str ());
       return false;
     }
 }
@@ -4593,7 +3970,7 @@ MetaListNameValueStr::check_cfg_predicate (const Session &session) const
 bool
 MetaListPaths::check_cfg_predicate (const Session &session) const
 {
-  if (ident == "all")
+  if (ident.as_string () == "all")
     {
       for (const auto &path : paths)
 	{
@@ -4602,7 +3979,7 @@ MetaListPaths::check_cfg_predicate (const Session &session) const
 	}
       return true;
     }
-  else if (ident == "any")
+  else if (ident.as_string () == "any")
     {
       for (const auto &path : paths)
 	{
@@ -4611,13 +3988,13 @@ MetaListPaths::check_cfg_predicate (const Session &session) const
 	}
       return false;
     }
-  else if (ident == "not")
+  else if (ident.as_string () == "not")
     {
       if (paths.size () != 1)
 	{
 	  // HACK: convert vector platform-dependent size_type to string to
 	  // use in printf
-	  rust_error_at (Linemap::unknown_location (),
+	  rust_error_at (UNKNOWN_LOCATION,
 			 "cfg predicate could not be checked for MetaListPaths "
 			 "with ident of 'not' "
 			 "because there are '%s' elements, not '1'",
@@ -4629,11 +4006,11 @@ MetaListPaths::check_cfg_predicate (const Session &session) const
     }
   else
     {
-      rust_error_at (Linemap::unknown_location (),
+      rust_error_at (UNKNOWN_LOCATION,
 		     "cfg predicate could not be checked for "
 		     "MetaListNameValueStr with ident of "
 		     "'%s' - ident must be 'all' or 'any'",
-		     ident.c_str ());
+		     ident.as_string ().c_str ());
       return false;
     }
 }
@@ -4672,7 +4049,7 @@ MetaItemSeq::check_cfg_predicate (const Session &session) const
 	{
 	  /* HACK: convert vector platform-dependent size_type to string to
 	   * use in printf */
-	  rust_error_at (Linemap::unknown_location (),
+	  rust_error_at (UNKNOWN_LOCATION,
 			 "cfg predicate could not be checked for MetaItemSeq "
 			 "with ident of 'not' "
 			 "because there are '%s' elements, not '1'",
@@ -4685,7 +4062,7 @@ MetaItemSeq::check_cfg_predicate (const Session &session) const
   else
     {
       rust_error_at (
-	Linemap::unknown_location (),
+	UNKNOWN_LOCATION,
 	"cfg predicate could not be checked for MetaItemSeq with path of "
 	"'%s' - path must be 'all' or 'any'",
 	path.as_string ().c_str ());
@@ -4696,7 +4073,7 @@ MetaItemSeq::check_cfg_predicate (const Session &session) const
 bool
 MetaWord::check_cfg_predicate (const Session &session) const
 {
-  return session.options.target_data.has_key (ident);
+  return session.options.target_data.has_key (ident.as_string ());
 }
 
 bool
@@ -4715,17 +4092,22 @@ MetaNameValueStr::check_cfg_predicate (const Session &session) const
   // DEBUG
   rust_debug (
     "checked key-value pair for cfg: '%s', '%s' - is%s in target data",
-    ident.c_str (), str.c_str (),
-    session.options.target_data.has_key_value_pair (ident, str) ? "" : " not");
+    ident.as_string ().c_str (), str.c_str (),
+    session.options.target_data.has_key_value_pair (ident.as_string (), str)
+      ? ""
+      : " not");
 
-  return session.options.target_data.has_key_value_pair (ident, str);
+  return session.options.target_data.has_key_value_pair (ident.as_string (),
+							 str);
 }
 
 bool
-MetaItemPathLit::check_cfg_predicate (const Session &session) const
+MetaItemPathExpr::check_cfg_predicate (const Session &session) const
 {
+  // FIXME: Accept path expressions
+  rust_assert (expr->is_literal ());
   return session.options.target_data.has_key_value_pair (path.as_string (),
-							 lit.as_string ());
+							 expr->as_string ());
 }
 
 std::vector<std::unique_ptr<Token>>
@@ -4747,7 +4129,7 @@ MetaNameValueStr::to_attribute () const
   // FIXME: What location do we put here? Is the literal above supposed to have
   // an empty location as well?
   // Should MetaNameValueStr keep a location?
-  return Attribute (SimplePath::from_str (ident, ident_locus),
+  return Attribute (SimplePath::from_str (ident.as_string (), ident_locus),
 		    std::unique_ptr<AttrInputLiteral> (
 		      new AttrInputLiteral (std::move (lit_expr))));
 }
@@ -4774,7 +4156,8 @@ MetaItemSeq::to_attribute () const
 Attribute
 MetaWord::to_attribute () const
 {
-  return Attribute (SimplePath::from_str (ident, ident_locus), nullptr);
+  return Attribute (SimplePath::from_str (ident.as_string (), ident_locus),
+		    nullptr);
 }
 
 Attribute
@@ -4792,7 +4175,7 @@ MetaListPaths::to_attribute () const
 
   std::unique_ptr<AttrInputMetaItemContainer> new_seq_container (
     new AttrInputMetaItemContainer (std::move (new_seq)));
-  return Attribute (SimplePath::from_str (ident, ident_locus),
+  return Attribute (SimplePath::from_str (ident.as_string (), ident_locus),
 		    std::move (new_seq_container));
 }
 
@@ -4807,15 +4190,15 @@ MetaListNameValueStr::to_attribute () const
 
   std::unique_ptr<AttrInputMetaItemContainer> new_seq_container (
     new AttrInputMetaItemContainer (std::move (new_seq)));
-  return Attribute (SimplePath::from_str (ident, ident_locus),
+  return Attribute (SimplePath::from_str (ident.as_string (), ident_locus),
 		    std::move (new_seq_container));
 }
 
 Attribute
-MetaItemPathLit::to_attribute () const
+MetaItemPathExpr::to_attribute () const
 {
-  return Attribute (path, std::unique_ptr<AttrInputLiteral> (
-			    new AttrInputLiteral (lit)));
+  auto input = std::make_unique<AttrInputExpr> (expr->clone_expr ());
+  return Attribute (path, std::move (input));
 }
 
 std::vector<Attribute>
@@ -4831,7 +4214,9 @@ AttrInputMetaItemContainer::separate_cfg_attrs () const
 
   for (auto it = items.begin () + 1; it != items.end (); ++it)
     {
-      Attribute attr = (*it)->to_attribute ();
+      auto &item = **it;
+
+      Attribute attr = item.to_attribute ();
       if (attr.is_empty ())
 	{
 	  /* TODO should this be an error that causes us to chuck out
@@ -4848,17 +4233,13 @@ AttrInputMetaItemContainer::separate_cfg_attrs () const
 bool
 Attribute::check_cfg_predicate (const Session &session) const
 {
+  auto string_path = path.as_string ();
   /* assume that cfg predicate actually can exist, i.e. attribute has cfg or
    * cfg_attr path */
-  if (!has_attr_input ()
-      || (path.as_string () != "cfg" && path.as_string () != "cfg_attr"))
+  if (!has_attr_input ())
     {
-      // DEBUG message
-      rust_debug (
-	"tried to check cfg predicate on attr that either has no input "
-	"or invalid path. attr: '%s'",
-	as_string ().c_str ());
-
+      rust_error_at (path.get_locus (), "%qs is not followed by parentheses",
+		     string_path.c_str ());
       return false;
     }
 
@@ -4866,13 +4247,28 @@ Attribute::check_cfg_predicate (const Session &session) const
   if (!is_parsed_to_meta_item ())
     return false;
 
-  return attr_input->check_cfg_predicate (session);
+  auto &meta_item = static_cast<AttrInputMetaItemContainer &> (*attr_input);
+  if (meta_item.get_items ().empty ())
+    {
+      rust_error_at (path.get_locus (), "malformed %<%s%> attribute input",
+		     string_path.c_str ());
+      return false;
+    }
+
+  if (string_path == Values::Attributes::CFG
+      && meta_item.get_items ().size () != 1)
+    {
+      rust_error_at (path.get_locus (), "multiple %qs predicates are specified",
+		     path.as_string ().c_str ());
+      return false;
+    }
+  return meta_item.get_items ().front ()->check_cfg_predicate (session);
 }
 
 std::vector<Attribute>
 Attribute::separate_cfg_attrs () const
 {
-  if (!has_attr_input () || path.as_string () != "cfg_attr")
+  if (!has_attr_input () || path.as_string () != Values::Attributes::CFG_ATTR)
     return {};
 
   // assume that it has already been parsed
@@ -4886,6 +4282,27 @@ bool
 Attribute::is_parsed_to_meta_item () const
 {
   return has_attr_input () && attr_input->is_meta_item ();
+}
+
+void
+BlockExpr::normalize_tail_expr ()
+{
+  if (!expr)
+    {
+      // HACK: try to turn the last statement into a tail expression
+      if (!statements.empty () && statements.back ()->is_expr ())
+	{
+	  // Watch out: This reference become invalid when the vector is
+	  // modified.
+	  auto &stmt = static_cast<ExprStmt &> (*statements.back ());
+
+	  if (!stmt.is_semicolon_followed ())
+	    {
+	      expr = stmt.take_expr ();
+	      statements.pop_back ();
+	    }
+	}
+    }
 }
 
 /* Visitor implementations - these are short but inlining can't happen anyway
@@ -4923,54 +4340,6 @@ LifetimeParam::accept_vis (ASTVisitor &vis)
 }
 
 void
-ConstGenericParam::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-PathInExpression::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TypePathSegment::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TypePathSegmentGeneric::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TypePathSegmentFunction::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TypePath::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-QualifiedPathInExpression::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-QualifiedPathInType::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
 LiteralExpr::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
@@ -4989,7 +4358,7 @@ MetaItemLitExpr::accept_vis (ASTVisitor &vis)
 }
 
 void
-MetaItemPathLit::accept_vis (ASTVisitor &vis)
+MetaItemPathExpr::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
 }
@@ -5050,12 +4419,6 @@ AssignmentExpr::accept_vis (ASTVisitor &vis)
 
 void
 CompoundAssignmentExpr::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-GroupedExpr::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
 }
@@ -5163,6 +4526,18 @@ BlockExpr::accept_vis (ASTVisitor &vis)
 }
 
 void
+AnonConst::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+ConstBlock::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
 ClosureExprInnerTyped::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
@@ -5223,6 +4598,12 @@ ReturnExpr::accept_vis (ASTVisitor &vis)
 }
 
 void
+TryExpr::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
 UnsafeBlockExpr::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
@@ -5265,18 +4646,6 @@ IfExprConseqElse::accept_vis (ASTVisitor &vis)
 }
 
 void
-IfExprConseqIf::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-IfExprConseqIfLet::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
 IfLetExpr::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
@@ -5284,18 +4653,6 @@ IfLetExpr::accept_vis (ASTVisitor &vis)
 
 void
 IfLetExprConseqElse::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-IfLetExprConseqIf::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-IfLetExprConseqIfLet::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
 }
@@ -5319,6 +4676,18 @@ AsyncBlockExpr::accept_vis (ASTVisitor &vis)
 }
 
 void
+InlineAsm::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
+LlvmInlineAsm::accept_vis (ASTVisitor &vis)
+{
+  vis.visit (*this);
+}
+
+void
 TypeParam::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
@@ -5332,12 +4701,6 @@ LifetimeWhereClauseItem::accept_vis (ASTVisitor &vis)
 
 void
 TypeBoundWhereClauseItem::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-Method::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
 }
@@ -5451,24 +4814,6 @@ StaticItem::accept_vis (ASTVisitor &vis)
 }
 
 void
-TraitItemFunc::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TraitItemMethod::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TraitItemConst::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
 TraitItemType::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
@@ -5493,13 +4838,13 @@ TraitImpl::accept_vis (ASTVisitor &vis)
 }
 
 void
-ExternalStaticItem::accept_vis (ASTVisitor &vis)
+ExternalTypeItem::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
 }
 
 void
-ExternalFunctionItem::accept_vis (ASTVisitor &vis)
+ExternalStaticItem::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
 }
@@ -5541,132 +4886,6 @@ MacroInvocation::accept_vis (ASTVisitor &vis)
 }
 
 void
-LiteralPattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-IdentifierPattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-WildcardPattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-RangePatternBoundLiteral::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-RangePatternBoundPath::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-RangePatternBoundQualPath::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-RangePattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-ReferencePattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-StructPatternFieldTuplePat::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-StructPatternFieldIdentPat::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-StructPatternFieldIdent::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-StructPattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TupleStructItemsNoRange::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TupleStructItemsRange::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TupleStructPattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TuplePatternItemsMultiple::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TuplePatternItemsRanged::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-TuplePattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-GroupedPattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-SlicePattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-AltPattern::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
 EmptyStmt::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
@@ -5679,13 +4898,7 @@ LetStmt::accept_vis (ASTVisitor &vis)
 }
 
 void
-ExprStmtWithoutBlock::accept_vis (ASTVisitor &vis)
-{
-  vis.visit (*this);
-}
-
-void
-ExprStmtWithBlock::accept_vis (ASTVisitor &vis)
+ExprStmt::accept_vis (ASTVisitor &vis)
 {
   vis.visit (*this);
 }
@@ -5816,29 +5029,99 @@ MetaWord::accept_vis (ASTVisitor &vis)
   vis.visit (*this);
 }
 
-GenericArg
-GenericArg::disambiguate_to_const () const
+void
+FormatArgs::accept_vis (ASTVisitor &vis)
 {
-  rust_assert (get_kind () == Kind::Either);
-
-  // FIXME: is it fine to have no outer attributes?
-  return GenericArg::create_const (
-    std::unique_ptr<Expr> (new IdentifierExpr (path, {}, locus)));
+  vis.visit (*this);
 }
 
-GenericArg
-GenericArg::disambiguate_to_type () const
+void
+OffsetOf::accept_vis (ASTVisitor &vis)
 {
-  rust_assert (get_kind () == Kind::Either);
+  vis.visit (*this);
+}
 
-  auto segment = std::unique_ptr<TypePathSegment> (
-    new TypePathSegment (path, false, locus));
-  auto segments = std::vector<std::unique_ptr<TypePathSegment>> ();
-  segments.emplace_back (std::move (segment));
+std::string
+FormatArgs::as_string () const
+{
+  // FIXME(Arthur): Improve
+  return "FormatArgs";
+}
 
-  return GenericArg::create_type (
-    std::unique_ptr<Type> (new TypePath (std::move (segments), locus)));
+std::string
+OffsetOf::as_string () const
+{
+  return "OffsetOf(" + type->as_string () + ", " + field.as_string () + ")";
+}
+
+location_t
+FormatArgs::get_locus () const
+{
+  return loc;
+}
+
+bool
+FormatArgs::is_expr_without_block () const
+{
+  return false;
+}
+
+void
+FormatArgs::mark_for_strip ()
+{
+  marked_for_strip = true;
+}
+
+bool
+FormatArgs::is_marked_for_strip () const
+{
+  return marked_for_strip;
+}
+
+std::vector<Attribute> &
+FormatArgs::get_outer_attrs ()
+{
+  rust_unreachable ();
+}
+
+void
+FormatArgs::set_outer_attrs (std::vector<Attribute>)
+{
+  rust_unreachable ();
+}
+
+Expr *
+FormatArgs::clone_expr_impl () const
+{
+  std::cerr << "[ARTHUR] cloning FormatArgs! " << std::endl;
+
+  return new FormatArgs (*this);
+}
+
+std::vector<Attribute> &
+OffsetOf::get_outer_attrs ()
+{
+  rust_unreachable ();
+}
+
+void
+OffsetOf::set_outer_attrs (std::vector<Attribute>)
+{
+  rust_unreachable ();
+}
+
+Expr *
+OffsetOf::clone_expr_impl () const
+{
+  return new OffsetOf (*this);
 }
 
 } // namespace AST
+
+std::ostream &
+operator<< (std::ostream &os, Identifier const &i)
+{
+  return os << i.as_string ();
+}
+
 } // namespace Rust

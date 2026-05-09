@@ -310,6 +310,8 @@ Params:
 Returns: Untyped array of bytes _read.
 
 Throws: $(LREF FileException) on error.
+
+See_Also: $(REF readText, std,file) for reading and validating a text file.
  */
 
 void[] read(R)(R name, size_t upTo = size_t.max)
@@ -497,6 +499,8 @@ version (linux) @safe unittest
 
     Throws: $(LREF FileException) if there is an error reading the file,
             $(REF UTFException, std, utf) on UTF decoding error.
+
+    See_Also: $(REF read, std,file) for reading a binary file.
 +/
 S readText(S = string, R)(auto ref R name)
 if (isSomeString!S && (isSomeFiniteCharInputRange!R || is(StringTypeOf!R)))
@@ -965,6 +969,19 @@ if (isConvertibleToString!RF || isConvertibleToString!RT)
     assert(t2.readText == "2");
 }
 
+
+@safe unittest
+{
+    import std.file;
+    import std.exception : assertThrown;
+
+    string f = null;
+
+    // Check if FileException is thrown for invalid rename
+    assertThrown!FileException(rename("", f));
+    assertThrown!FileException(rename(f, ""));
+}
+
 private void renameImpl(scope const(char)[] f, scope const(char)[] t,
                         scope const(FSChar)* fromz, scope const(FSChar)* toz) @trusted
 {
@@ -979,10 +996,10 @@ private void renameImpl(scope const(char)[] f, scope const(char)[] t,
             import std.conv : to, text;
 
             if (!f)
-                f = to!(typeof(f))(fromz[0 .. wcslen(fromz)]);
+                f = fromz ? to!(typeof(f))(fromz[0 .. wcslen(fromz)]) : "(null)";
 
             if (!t)
-                t = to!(typeof(t))(toz[0 .. wcslen(toz)]);
+                t = toz ? to!(typeof(t))(toz[0 .. wcslen(toz)]) : "(null)";
 
             enforce(false,
                 new FileException(
@@ -1079,6 +1096,7 @@ private void removeImpl(scope const(char)[] name, scope const(FSChar)* namez) @t
 @safe unittest
 {
     import std.exception : collectExceptionMsg, assertThrown;
+    import std.algorithm.searching : startsWith;
 
     string filename = null; // e.g. as returned by File.tmpfile.name
 
@@ -1086,12 +1104,10 @@ private void removeImpl(scope const(char)[] name, scope const(FSChar)* namez) @t
     {
         // exact exception message is OS-dependent
         auto msg = filename.remove.collectExceptionMsg!FileException;
-        assert("Failed to remove file (null): Bad address" == msg, msg);
+        assert(msg.startsWith("Failed to remove file (null):"), msg);
     }
     else version (Windows)
     {
-        import std.algorithm.searching : startsWith;
-
         // don't test exact message on windows, it's language dependent
         auto msg = filename.remove.collectExceptionMsg!FileException;
         assert(msg.startsWith("(null):"), msg);
@@ -2366,7 +2382,6 @@ if (isConvertibleToString!R)
 }
 
 ///
-
 @safe unittest
 {
     import std.exception : assertThrown;
@@ -4050,12 +4065,10 @@ else version (Posix)
          +/
         void _ensureStatDone() @trusted scope
         {
-            import std.exception : enforce;
-
             if (_didStat)
                 return;
 
-            enforce(stat(_name.tempCString(), &_statBuf) == 0,
+            cenforce(stat(_name.tempCString(), &_statBuf) == 0,
                     "Failed to stat file `" ~ _name ~ "'");
 
             _didStat = true;
@@ -4092,13 +4105,11 @@ else version (Posix)
          +/
         void _ensureLStatDone() @trusted scope
         {
-            import std.exception : enforce;
-
             if (_didLStat)
                 return;
 
             stat_t statbuf = void;
-            enforce(lstat(_name.tempCString(), &statbuf) == 0,
+            cenforce(lstat(_name.tempCString(), &statbuf) == 0,
                 "Failed to stat file `" ~ _name ~ "'");
 
             _lstatMode = statbuf.st_mode;
@@ -4180,12 +4191,12 @@ else version (Posix)
                 assert(!de.isFile);
                 assert(!de.isDir);
                 assert(de.isSymlink);
-                assertThrown(de.size);
-                assertThrown(de.timeStatusChanged);
-                assertThrown(de.timeLastAccessed);
-                assertThrown(de.timeLastModified);
-                assertThrown(de.attributes);
-                assertThrown(de.statBuf);
+                assertThrown!FileException(de.size);
+                assertThrown!FileException(de.timeStatusChanged);
+                assertThrown!FileException(de.timeLastAccessed);
+                assertThrown!FileException(de.timeLastModified);
+                assertThrown!FileException(de.attributes);
+                assertThrown!FileException(de.statBuf);
                 assert(symfile.exists);
                 symfile.remove();
             }
@@ -4639,6 +4650,7 @@ private struct DirIteratorImpl
     DirEntry _cur;
     DirHandle[] _stack;
     DirEntry[] _stashed; //used in depth first mode
+    string _pathPrefix = null;
 
     //stack helpers
     void pushExtra(DirEntry de)
@@ -4794,20 +4806,12 @@ private struct DirIteratorImpl
         }
     }
 
-    this(R)(R pathname, SpanMode mode, bool followSymlink)
-        if (isSomeFiniteCharInputRange!R)
+    this(string pathname, SpanMode mode, bool followSymlink)
     {
         _mode = mode;
         _followSymlink = followSymlink;
 
-        static if (isNarrowString!R && is(immutable ElementEncodingType!R == immutable char))
-            alias pathnameStr = pathname;
-        else
-        {
-            import std.array : array;
-            string pathnameStr = pathname.array;
-        }
-        if (stepIn(pathnameStr))
+        if (stepIn(pathname))
         {
             if (_mode == SpanMode.depth)
                 while (mayStepIn())
@@ -5106,6 +5110,15 @@ auto dirEntries(bool useDIP1000 = dip1000Enabled)
 
     // https://issues.dlang.org/show_bug.cgi?id=15146
     dirEntries("", SpanMode.shallow).walkLength();
+
+    // https://github.com/dlang/phobos/issues/9584
+    string cwd = getcwd();
+    foreach (string entry; dirEntries(testdir, SpanMode.shallow))
+    {
+        if (entry.isDir)
+            chdir(entry);
+    }
+    chdir(cwd); // needed for the directories to be removed
 }
 
 /// Ditto

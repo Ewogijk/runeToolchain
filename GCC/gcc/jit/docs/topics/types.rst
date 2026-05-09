@@ -1,4 +1,4 @@
-.. Copyright (C) 2014-2023 Free Software Foundation, Inc.
+.. Copyright (C) 2014-2026 Free Software Foundation, Inc.
    Originally contributed by David Malcolm <dmalcolm@redhat.com>
 
    This is free software: you can redistribute it and/or modify it
@@ -113,9 +113,19 @@ Standard types
        - C99's ``__int128_t``
      * - :c:data:`GCC_JIT_TYPE_FLOAT`
        -
+     * - :c:data:`GCC_JIT_TYPE_BFLOAT16`
+       - C's ``__bfloat16``
      * - :c:data:`GCC_JIT_TYPE_DOUBLE`
        -
      * - :c:data:`GCC_JIT_TYPE_LONG_DOUBLE`
+       -
+     * - :c:data:`GCC_JIT_TYPE_FLOAT16`
+       -
+     * - :c:data:`GCC_JIT_TYPE_FLOAT32`
+       -
+     * - :c:data:`GCC_JIT_TYPE_FLOAT64`
+       -
+     * - :c:data:`GCC_JIT_TYPE_FLOAT128`
        -
      * - :c:data:`GCC_JIT_TYPE_CONST_CHAR_PTR`
        - C type: ``(const char *)``
@@ -159,6 +169,24 @@ Pointers, `const`, and `volatile`
                                                int num_elements)
 
    Given non-`void` type "T", get type "T[N]" (for a constant N).
+
+.. function::  gcc_jit_type *\
+               gcc_jit_context_new_array_type_u64 (gcc_jit_context *ctxt, \
+                                                   gcc_jit_location *loc, \
+                                                   gcc_jit_type *element_type, \
+                                                   uint64_t num_elements)
+
+   Given non-`void` type "T", get type "T[N]" (for a constant N).
+
+   This is the same as gcc_jit_context_new_array_type, but the type of
+   ``num_elements` different and thus allows creating bigger array types.
+
+   This API entrypoint was added in :ref:`LIBGCCJIT_ABI_37`; you can test
+   for its presence using
+
+   .. code-block:: c
+
+      #ifdef LIBGCCJIT_HAVE_gcc_jit_context_new_array_type_u64
 
 .. function::  gcc_jit_type *\
                gcc_jit_type_get_aligned (gcc_jit_type *type, \
@@ -541,3 +569,15 @@ Reflection API
    .. code-block:: c
 
       #ifdef LIBGCCJIT_HAVE_SIZED_INTEGERS
+
+.. function::  gcc_jit_type *\
+               gcc_jit_type_get_restrict (gcc_jit_type *type)
+
+     Given type "T", get type "restrict T".
+
+   This entrypoint was added in :ref:`LIBGCCJIT_ABI_25`; you can test for
+   its presence using
+
+   .. code-block:: c
+
+      #ifdef LIBGCCJIT_HAVE_gcc_jit_type_get_restrict

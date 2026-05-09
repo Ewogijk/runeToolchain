@@ -1,3 +1,10 @@
+#![feature(no_core)]
+#![no_core]
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
+
 trait Foo {
     const A: i32;
 
@@ -10,7 +17,6 @@ impl Foo for Bar {
     // { dg-warning "unused name" "" { target *-*-* } .-1 }
 
     fn test(self) {}
-    // { dg-warning "unused name" "" { target *-*-* } .-1 }
 }
 
 fn main() {

@@ -1,5 +1,5 @@
 /* Interface between analyzer and frontends.
-   Copyright (C) 2022-2023 Free Software Foundation, Inc.
+   Copyright (C) 2022-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -18,16 +18,15 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
-#include "config.h"
-#define INCLUDE_MEMORY
-#include "system.h"
-#include "coretypes.h"
-#include "tree.h"
+#include "analyzer/common.h"
+
+#include "diagnostic.h"
 #include "stringpool.h"
-#include "analyzer/analyzer.h"
+#include "context.h"
+#include "channels.h"
+
 #include "analyzer/analyzer-language.h"
 #include "analyzer/analyzer-logging.h"
-#include "diagnostic.h"
 
 /* Map from identifier to INTEGER_CST.  */
 static GTY (()) hash_map <tree, tree> *analyzer_stashed_constants;
@@ -97,11 +96,18 @@ on_finish_translation_unit (const translation_unit &tu)
     return;
 
   FILE *logfile = get_or_create_any_logfile ();
-  log_user the_logger (NULL);
+  log_user the_logger (nullptr);
   if (logfile)
     the_logger.set_logger (new logger (logfile, 0, 0,
-				       *global_dc->printer));
+				       *global_dc->get_reference_printer ()));
   stash_named_constants (the_logger.get_logger (), tu);
+
+  if (auto chan = g->get_channels ().analyzer_events_channel.get_if_active ())
+    {
+      gcc::topics::analyzer_events::on_tu_finished msg {the_logger.get_logger (),
+							tu};
+      chan->publish (msg);
+    }
 }
 
 /* Lookup NAME in the named constants stashed when the frontend TU finished.

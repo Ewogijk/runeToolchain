@@ -17,6 +17,7 @@ module core.stdc.wchar_;
 import core.stdc.config;
 import core.stdc.stdarg; // for va_list
 import core.stdc.stdio;  // for FILE, not exposed per spec
+import core.atomic : atomicLoad;
 public import core.stdc.stddef;  // for wchar_t
 public import core.stdc.time;    // for tm
 public import core.stdc.stdint;  // for WCHAR_MIN, WCHAR_MAX
@@ -105,6 +106,20 @@ else version (Solaris)
     ///
     alias mbstate_t = __mbstate_t;
 }
+else version (CRuntime_Newlib)
+{
+    ///
+    struct mbstate_t
+    {
+        int __count;
+        union ___value
+        {
+            wint_t __wch = 0;
+            char[4] __wchb;
+        }
+        ___value __value;
+    }
+}
 else version (CRuntime_UClibc)
 {
     ///
@@ -114,14 +129,31 @@ else version (CRuntime_UClibc)
         wchar_t __wc = 0;
     }
 }
+else version (Windows)
+{
+    ///
+    struct __mbstate_t
+    {
+        int __count;
+        union ___value
+        {
+            wint_t __wch = 0;
+            char[4] __wchb;
+        }
+        ___value __value;
+    }
+
+    ///
+    alias mbstate_t = __mbstate_t;
+}
 else
 {
     ///
-    alias int mbstate_t;
+    alias mbstate_t = int;
 }
 
 ///
-alias wchar_t wint_t;
+alias wint_t = wchar_t;
 
 ///
 enum wchar_t WEOF = 0xFFFF;
@@ -211,9 +243,9 @@ int      fputws(const scope wchar_t* s, FILE* stream);
 extern (D) @trusted
 {
     ///
-    wint_t getwchar()                     { return fgetwc(stdin);     }
+    wint_t getwchar()                     { return fgetwc(atomicLoad(stdin));     }
     ///
-    wint_t putwchar(wchar_t c)            { return fputwc(c,stdout);  }
+    wint_t putwchar(wchar_t c)            { return fputwc(c,atomicLoad(stdout));  }
 }
 
 ///

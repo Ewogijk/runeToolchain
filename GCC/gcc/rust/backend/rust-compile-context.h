@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Free Software Foundation, Inc.
+// Copyright (C) 2020-2026 Free Software Foundation, Inc.
 
 // This file is part of GCC.
 
@@ -27,20 +27,33 @@
 #include "rust-hir-full.h"
 #include "rust-mangle.h"
 #include "rust-tree.h"
+#include "rust-immutable-name-resolution-context.h"
 
 namespace Rust {
 namespace Compile {
 
 struct fncontext
 {
+  fncontext (tree fndecl, ::Bvariable *ret_addr, TyTy::BaseType *retty)
+    : fndecl (fndecl), ret_addr (ret_addr), retty (retty)
+  {}
+
   tree fndecl;
   ::Bvariable *ret_addr;
+  TyTy::BaseType *retty;
+};
+
+struct CustomDeriveInfo
+{
+  tree fndecl;
+  std::string trait_name;
+  std::vector<std::string> attributes;
 };
 
 class Context
 {
 public:
-  Context (::Backend *backend);
+  static Context *get ();
 
   void setup_builtins ();
 
@@ -63,7 +76,10 @@ public:
       return it->second;
 
     compiled_type_map.insert ({h, type});
-    push_type (type);
+
+    if (TYPE_NAME (type) != NULL)
+      push_type (type);
+
     return type;
   }
 
@@ -78,10 +94,8 @@ public:
     return type;
   }
 
-  ::Backend *get_backend () { return backend; }
-  Resolver::Resolver *get_resolver () { return resolver; }
   Resolver::TypeCheckContext *get_tyctx () { return tyctx; }
-  Analysis::Mappings *get_mappings () { return mappings; }
+  Analysis::Mappings &get_mappings () { return mappings; }
 
   void push_block (tree scope)
   {
@@ -97,7 +111,7 @@ public:
     auto stmts = statements.back ();
     statements.pop_back ();
 
-    backend->block_add_statements (block, stmts);
+    Backend::block_add_statements (block, stmts);
 
     return block;
   }
@@ -144,7 +158,7 @@ public:
     if (it == mono_fns.end ())
       mono_fns[dId] = {};
 
-    mono_fns[dId].push_back ({ref, fn});
+    mono_fns[dId].emplace_back (ref, fn);
   }
 
   void insert_closure_decl (const TyTy::ClosureType *ref, tree fn)
@@ -154,7 +168,7 @@ public:
     if (it == mono_closure_fns.end ())
       mono_closure_fns[dId] = {};
 
-    mono_closure_fns[dId].push_back ({ref, fn});
+    mono_closure_fns[dId].emplace_back (ref, fn);
   }
 
   tree lookup_closure_decl (const TyTy::ClosureType *ref)
@@ -267,9 +281,9 @@ public:
     return true;
   }
 
-  void push_fn (tree fn, ::Bvariable *ret_addr)
+  void push_fn (tree fn, ::Bvariable *ret_addr, TyTy::BaseType *retty)
   {
-    fn_stack.push_back (fncontext{fn, ret_addr});
+    fn_stack.emplace_back (fn, ret_addr, retty);
   }
   void pop_fn () { fn_stack.pop_back (); }
 
@@ -289,7 +303,7 @@ public:
 
   void write_to_backend ()
   {
-    backend->write_global_definitions (type_decls, const_decls, func_decls,
+    Backend::write_global_definitions (type_decls, const_decls, func_decls,
 				       var_decls);
   }
 
@@ -308,7 +322,13 @@ public:
 
   void push_loop_context (Bvariable *var) { loop_value_stack.push_back (var); }
 
-  Bvariable *peek_loop_context () { return loop_value_stack.back (); }
+  bool have_loop_context () const { return !loop_value_stack.empty (); }
+
+  Bvariable *peek_loop_context ()
+  {
+    rust_assert (!loop_value_stack.empty ());
+    return loop_value_stack.back ();
+  }
 
   Bvariable *pop_loop_context ()
   {
@@ -322,7 +342,11 @@ public:
     loop_begin_labels.push_back (label);
   }
 
-  tree peek_loop_begin_label () { return loop_begin_labels.back (); }
+  tree peek_loop_begin_label ()
+  {
+    rust_assert (!loop_begin_labels.empty ());
+    return loop_begin_labels.back ();
+  }
 
   tree pop_loop_begin_label ()
   {
@@ -340,9 +364,9 @@ public:
   bool const_context_p (void) { return (const_context > 0); }
 
   std::string mangle_item (const TyTy::BaseType *ty,
-			   const Resolver::CanonicalPath &path) const
+			   const Resolver::CanonicalPath &path)
   {
-    return mangler.mangle_item (ty, path);
+    return mangler.mangle_item (this, ty, path);
   }
 
   void push_closure_context (HirId id);
@@ -357,11 +381,33 @@ public:
 
   static hashval_t type_hasher (tree type);
 
+  void collect_attribute_proc_macro (tree fndecl)
+  {
+    attribute_macros.push_back (fndecl);
+  }
+
+  void collect_bang_proc_macro (tree fndecl) { bang_macros.push_back (fndecl); }
+
+  void collect_derive_proc_macro (CustomDeriveInfo macro)
+  {
+    custom_derive_macros.push_back (macro);
+  }
+
+  const std::vector<tree> &get_bang_proc_macros () const { return bang_macros; }
+  const std::vector<tree> &get_attribute_proc_macros () const
+  {
+    return attribute_macros;
+  }
+  const std::vector<CustomDeriveInfo> &get_derive_proc_macros () const
+  {
+    return custom_derive_macros;
+  }
+
 private:
-  ::Backend *backend;
-  Resolver::Resolver *resolver;
+  Context ();
+
   Resolver::TypeCheckContext *tyctx;
-  Analysis::Mappings *mappings;
+  Analysis::Mappings &mappings;
   Mangler mangler;
 
   // state
@@ -381,6 +427,10 @@ private:
     mono_closure_fns;
   std::map<HirId, tree> implicit_pattern_bindings;
   std::map<hashval_t, tree> main_variants;
+
+  std::vector<CustomDeriveInfo> custom_derive_macros;
+  std::vector<tree> attribute_macros;
+  std::vector<tree> bang_macros;
 
   // closure bindings
   std::vector<HirId> closure_scope_bindings;

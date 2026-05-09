@@ -1,5 +1,5 @@
-// { dg-options "-g -O0 -std=gnu++2a" }
-// { dg-do run { target c++2a } }
+// { dg-options "-g -O0 -std=gnu++20" }
+// { dg-do run { target c++20 } }
 // { dg-additional-options "-DTEST_ZONED_TIME" { target tzdb } }
 
 // Copyright The GNU Toolchain Authors.
@@ -75,6 +75,13 @@ main()
   [[maybe_unused]] year_month_weekday_last donnerstag = 2017y/July/Thursday[last];
   // { dg-final { note-test donnerstag {2017y/July/Thursday[last]} } }
 
+  [[maybe_unused]] month nam(13);
+  // { dg-final { note-test nam {13 is not a valid month} } }
+  [[maybe_unused]] month nam0(0);
+  // { dg-final { note-test nam0 {0 is not a valid month} } }
+  [[maybe_unused]] weekday nawd(8);
+  // { dg-final { note-test nawd {8 is not a valid weekday} } }
+  //
   hh_mm_ss<seconds> hms(4h + 3min + 2s);
   // { dg-final { note-test hms {04:03:02} } }
 

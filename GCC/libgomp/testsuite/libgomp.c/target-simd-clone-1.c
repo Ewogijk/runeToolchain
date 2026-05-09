@@ -1,5 +1,6 @@
 /* { dg-do link { target { offload_target_amdgcn } } } */
 /* { dg-additional-options "-O2 -foffload-options=-fdump-ipa-simdclone-details" } */
+/* { dg-additional-options -Wno-deprecated-openmp } */
 
 /* Test that simd clones for the offload processor are generated for
    functions with "declare target" when enabled by default at -O2.  */
@@ -39,5 +40,5 @@ int main (void)
 /* Although addit has external linkage, we expect clones to be generated as
    for a function with internal linkage.  */
 
-/* { dg-final { scan-offload-ipa-dump "Generated local clone _ZGV.*N.*_addit" "simdclone" } } */
-/* { dg-final { scan-offload-ipa-dump "Generated local clone _ZGV.*M.*_addit" "simdclone" } } */
+/* { dg-final { only_for_offload_target amdgcn-amdhsa scan-offload-ipa-dump "Generated local clone _ZGV.*N.*_addit" "simdclone" } } */
+/* { dg-final { only_for_offload_target amdgcn-amdhsa scan-offload-ipa-dump "Generated local clone _ZGV.*M.*_addit" "simdclone" } } */

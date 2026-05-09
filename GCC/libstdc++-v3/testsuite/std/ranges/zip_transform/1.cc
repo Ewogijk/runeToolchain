@@ -1,4 +1,3 @@
-// { dg-options "-std=gnu++23" }
 // { dg-do run { target c++23 } }
 
 #include <ranges>
@@ -9,6 +8,23 @@
 
 namespace ranges = std::ranges;
 namespace views = std::views;
+
+template<typename T>
+concept can_zip_transform = requires (T t) {
+  views::zip_transform(std::forward<T>(t));
+};
+
+static_assert(!can_zip_transform<int>);
+
+struct NonMovable {
+  NonMovable(NonMovable&&) = delete;
+};
+
+static_assert(!can_zip_transform<NonMovable>);
+static_assert(!can_zip_transform<NonMovable&>);
+
+static_assert(!can_zip_transform<void(*)()>);
+static_assert(can_zip_transform<int(&(*)())[3]>);
 
 constexpr bool
 test01()
@@ -46,6 +62,10 @@ test01()
 				 std::array{3, 4, 8, 0});
   VERIFY( ranges::size(z3) == 3 );
   VERIFY( ranges::equal(z3, (int[]){3, 6, 9}) );
+
+  auto z4 = views::zip_transform([] () { return 1; });
+  VERIFY( ranges::size(z4) == 0 );
+  static_assert( std::same_as<ranges::range_value_t<decltype(z4)>, int> );
 
   return true;
 }
@@ -99,10 +119,121 @@ test03()
   return true;
 }
 
+void
+test04()
+{
+  extern int x[5];
+  struct move_only {
+    move_only() { }
+    move_only(move_only&&) { }
+    int operator()(int i, int j) const { return i + j; }
+  };
+  // P2494R2 Relaxing range adaptors to allow for move only types
+  static_assert( requires { views::zip_transform(move_only{}, x, x); } );
+}
+
+struct X
+{
+  int i;
+  constexpr int add(int b) const
+  { return i+b; }
+};
+
+template<size_t ExtraSize, typename Fn>
+constexpr bool
+test05(Fn f)
+{
+  using namespace __gnu_test;
+  X x[] = {{1},{2},{3},{4},{5}};
+  int y[] = {500,400,300,200,100};
+  test_range<X, random_access_iterator_wrapper> rx(x);
+  test_range<int, random_access_iterator_wrapper> ry(y);
+
+  auto v = views::zip_transform(f, rx, ry);
+  VERIFY( ranges::size(v) == 5 );
+  VERIFY( ranges::distance(v.begin(), v.end()) == 5 );
+  VERIFY( ranges::equal(v, (int[]){501,402,303,204,105}) );
+  VERIFY( ranges::equal(v | views::reverse, (int[]){105,204,303,402,501}) );
+  using R = decltype(v);
+  using It = ranges::iterator_t<R>;
+  static_assert(std::same_as<int, decltype(*ranges::begin(v))>);
+  static_assert(std::same_as<int, std::iter_value_t<It>>);
+  static_assert(sizeof(It) == sizeof(rx.begin()) + sizeof(ry.begin()) + ExtraSize);
+  static_assert(ranges::view<R>);
+  static_assert(ranges::sized_range<R>);
+  static_assert(ranges::common_range<R>);
+  static_assert(ranges::random_access_range<R>);
+  return true;
+}
+
+constexpr bool
+test05a()
+{ 
+  auto add = [](const X& x, int v) { return x.i + v; };
+  return test05<sizeof(void*)>(add);
+}
+
+constexpr bool
+test05b()
+{ 
+  auto add = [](const X& x, int v) static { return x.i + v; };
+  return test05<0>(add);
+}
+
+constexpr bool
+test05c()
+{ 
+  int(*ptr)(const X&, int) = [](const X& x, int v) { return x.i + v; };
+  return test05<sizeof(void(*)())>(ptr);
+}
+
+constexpr bool
+test05d()
+{ return test05<sizeof(int(X::*)())>(&X::add); }
+
+constexpr bool
+test05e()
+{
+  struct PickStatic
+  {
+    static constexpr int
+    operator()(const X& x1, int v)
+    { return x1.i + v; }
+
+    constexpr int
+    operator()(int x, int y) const
+    { return x + y; };
+  };
+  return test05<0>(PickStatic{});
+}
+
+constexpr bool
+test05f()
+{
+  struct PickObject
+  {
+    constexpr int
+    operator()(const X& x1, int v) const
+    { return x1.i + v; }
+
+    static constexpr int
+    operator()(int x, int y)
+    { return x + y; };
+  };
+  return test05<sizeof(void*)>(PickObject{});
+}
+
 int
 main()
 {
   static_assert(test01());
   static_assert(test02());
   static_assert(test03());
+  test04();
+  static_assert(test05a());
+  static_assert(test05b());
+  static_assert(test05c());
+  static_assert(test05d());
+  static_assert(test05e());
+  static_assert(test05f());
 }

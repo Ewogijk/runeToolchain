@@ -106,8 +106,8 @@ void va_arg()(ref va_list ap, TypeInfo ti, void* parmn)
     }
     else version (AAPCS64)
     {
-        static import core.internal.vararg.aarch64;
-        core.internal.vararg.aarch64.va_arg(ap, ti, parmn);
+        static import core.internal.vararg.aapcs64;
+        core.internal.vararg.aapcs64.va_arg(ap, ti, parmn);
     }
     else version (ARM_Any)
     {
@@ -126,6 +126,13 @@ void va_arg()(ref va_list ap, TypeInfo ti, void* parmn)
         auto p = cast(void*) ap;
         version (BigEndian)
             p = adjustForBigEndian(p, tsize);
+        ap += tsize.alignUp;
+        parmn[0..tsize] = p[0..tsize];
+    }
+    else version (LoongArch64)
+    {
+        const tsize = ti.tsize;
+        auto p = cast(void*) ap;
         ap += tsize.alignUp;
         parmn[0..tsize] = p[0..tsize];
     }

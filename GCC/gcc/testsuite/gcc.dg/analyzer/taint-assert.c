@@ -1,6 +1,3 @@
-// TODO: remove need for this option
-/* { dg-additional-options "-fanalyzer-checker=taint" } */
-
 /* We need this, otherwise the warnings are emitted inside the macros, which
    makes it hard to write the DejaGnu directives.  */
 /* { dg-additional-options " -ftrack-macro-expansion=0" } */
@@ -339,7 +336,7 @@ struct s
   int y;
 };
 
-int __attribute__((tainted_args))
+void __attribute__((tainted_args))
 test_assert_struct (struct s *p)
 {
   MY_ASSERT_1 (p->x < p->y); /* { dg-warning "-Wanalyzer-tainted-assertion" } */

@@ -1,5 +1,5 @@
 /* Callgraph based analysis of static variables.
-   Copyright (C) 2004-2023 Free Software Foundation, Inc.
+   Copyright (C) 2004-2026 Free Software Foundation, Inc.
    Contributed by Kenneth Zadeck <zadeck@naturalbridge.com>
 
 This file is part of GCC.
@@ -732,7 +732,7 @@ get_read_write_all_from_node (struct cgraph_node *node,
 /* Skip edges from and to nodes without ipa_reference enabled.
    Ignore not available symbols.  This leave
    them out of strongly connected components and makes them easy to skip in the
-   propagation loop bellow.  */
+   propagation loop below.  */
 
 static bool
 ignore_edge_p (cgraph_edge *e)
@@ -913,10 +913,10 @@ propagate (void)
       if (!node->alias && opt_for_fn (node->decl, flag_ipa_reference))
 	{
 	  node_g = &node_info->global;
-	  bool read_all = 
+	  bool read_all =
 		(node_g->statics_read == all_module_statics
 		 || bitmap_equal_p (node_g->statics_read, all_module_statics));
-	  bool written_all = 
+	  bool written_all =
 		(node_g->statics_written == all_module_statics
 		 || bitmap_equal_p (node_g->statics_written,
 				    all_module_statics));
@@ -1070,8 +1070,8 @@ ipa_reference_write_optimization_summary (void)
   /* See what variables we are interested in.  */
   for (i = 0; i < lto_symtab_encoder_size (encoder); i++)
     {
-      symtab_node *snode = lto_symtab_encoder_deref (encoder, i);
-      varpool_node *vnode = dyn_cast <varpool_node *> (snode);
+      toplevel_node *tnode = lto_symtab_encoder_deref (encoder, i);
+      varpool_node *vnode = dyn_cast <varpool_node *> (tnode);
       int id;
 
       if (vnode
@@ -1089,8 +1089,8 @@ ipa_reference_write_optimization_summary (void)
   if (ltrans_statics_bitcount)
     for (i = 0; i < lto_symtab_encoder_size (encoder); i++)
       {
-	symtab_node *snode = lto_symtab_encoder_deref (encoder, i);
-	cgraph_node *cnode = dyn_cast <cgraph_node *> (snode);
+	toplevel_node *tnode = lto_symtab_encoder_deref (encoder, i);
+	cgraph_node *cnode = dyn_cast <cgraph_node *> (tnode);
 	if (cnode && write_node_summary_p (cnode, encoder, ltrans_statics))
 	  count++;
       }
@@ -1104,15 +1104,15 @@ ipa_reference_write_optimization_summary (void)
   if (ltrans_statics_bitcount)
     for (i = 0; i < lto_symtab_encoder_size (encoder); i++)
       {
-	symtab_node *snode = lto_symtab_encoder_deref (encoder, i);
-	cgraph_node *cnode = dyn_cast <cgraph_node *> (snode);
+	toplevel_node *tnode = lto_symtab_encoder_deref (encoder, i);
+	cgraph_node *cnode = dyn_cast <cgraph_node *> (tnode);
 	if (cnode && write_node_summary_p (cnode, encoder, ltrans_statics))
 	  {
 	    ipa_reference_optimization_summary_t info;
 	    int node_ref;
 
 	    info = get_reference_optimization_summary (cnode);
-	    node_ref = lto_symtab_encoder_encode (encoder, snode);
+	    node_ref = lto_symtab_encoder_encode (encoder, tnode);
 	    streamer_write_uhwi_stream (ob->main_stream, node_ref);
 
 	    stream_out_bitmap (ob, info->statics_read, ltrans_statics,

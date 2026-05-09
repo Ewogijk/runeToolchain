@@ -5,11 +5,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/cdrom.h>
+#include <linux/fiemap.h>
 #include <linux/fs.h>
 #include <linux/input.h>
 #include <linux/kd.h>
 #include <linux/nvme_ioctl.h>
-#include <linux/sockios.h>
 #include <linux/usb/cdc-wdm.h>
 #include <linux/vt.h>
 #include <net/if.h>
@@ -29,6 +29,10 @@
 
 #include <fs.frigg_bragi.hpp>
 #include <posix.frigg_bragi.hpp>
+
+#define SIOCETHTOOL 0x8946
+#define SIOCGSKNS 0x894C
+#define TFD_IOC_SET_TICKS _IOW('T', 0, __u64)
 
 namespace mlibc {
 
@@ -408,10 +412,8 @@ int sys_ioctl(int fd, unsigned long request, void *arg, int *result) {
 
 			managarm::fs::GenericIoctlReply<MemoryAllocator> resp(getSysdepsAllocator());
 			resp.ParseFromArray(recv_resp.data(), recv_resp.length());
-			if (resp.error() == managarm::fs::Errors::NOT_A_TERMINAL) {
-				return ENOTTY;
-			}
-			__ensure(resp.error() == managarm::fs::Errors::SUCCESS);
+			if (resp.error() != managarm::fs::Errors::SUCCESS)
+				return resp.error() | toErrno;
 			*result = resp.result();
 			*static_cast<int *>(arg) = resp.pid();
 			return 0;
@@ -1171,6 +1173,32 @@ int sys_ioctl(int fd, unsigned long request, void *arg, int *result) {
 		*result = resp.result();
 		param->result = resp.status();
 		return 0;
+	} else if (request == TFD_IOC_SET_TICKS) {
+		if (!arg)
+			return EFAULT;
+		auto param = reinterpret_cast<uint64_t *>(arg);
+
+		managarm::fs::GenericIoctlRequest<MemoryAllocator> req(getSysdepsAllocator());
+		req.set_command(request);
+		req.set_ticks(*param);
+
+		auto [offer, send_ioctl_req, send_req, recv_resp] = exchangeMsgsSync(
+		    handle,
+		    helix_ng::offer(
+		        helix_ng::sendBragiHeadOnly(ioctl_req, getSysdepsAllocator()),
+		        helix_ng::sendBragiHeadOnly(req, getSysdepsAllocator()),
+		        helix_ng::recvInline()
+		    )
+		);
+
+		HEL_CHECK(offer.error());
+		HEL_CHECK(send_ioctl_req.error());
+		HEL_CHECK(send_req.error());
+		HEL_CHECK(recv_resp.error());
+
+		managarm::fs::GenericIoctlReply<MemoryAllocator> resp(getSysdepsAllocator());
+		resp.ParseFromArray(recv_resp.data(), recv_resp.length());
+		return 0;
 	} else if (request == FICLONE || request == FICLONERANGE) {
 		mlibc::infoLogger() << "\e[35mmlibc: FICLONE/FICLONERANGE are no-ops" << frg::endlog;
 		*result = -1;
@@ -1179,14 +1207,18 @@ int sys_ioctl(int fd, unsigned long request, void *arg, int *result) {
 		mlibc::infoLogger() << "\e[35mmlibc: FS_IOC_GETFLAGS is a no-op" << frg::endlog;
 		*result = 0;
 		return ENOSYS;
+	} else if (request == FS_IOC_FIEMAP) {
+		mlibc::infoLogger() << "\e[35mmlibc: FS_IOC_FIEMAP is a no-op" << frg::endlog;
+		*result = 0;
+		return ENOSYS;
 	}
 
 	mlibc::infoLogger() << "mlibc: Unexpected ioctl with"
 	                    << " type: 0x" << frg::hex_fmt(_IOC_TYPE(request)) << ", number: 0x"
 	                    << frg::hex_fmt(_IOC_NR(request))
 	                    << " (raw request: " << frg::hex_fmt(request) << ")" << frg::endlog;
-	__ensure(!"Illegal ioctl request");
-	__builtin_unreachable();
+
+	return ENOSYS;
 }
 
 } // namespace mlibc

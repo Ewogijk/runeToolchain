@@ -1,6 +1,6 @@
 // shared_ptr atomic access -*- C++ -*-
 
-// Copyright (C) 2014-2023 Free Software Foundation, Inc.
+// Copyright (C) 2014-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -31,6 +31,7 @@
 #define _SHARED_PTR_ATOMIC_H 1
 
 #include <bits/atomic_base.h>
+#include <bits/shared_ptr.h>
 
 // Annotations for the custom locking in atomic<shared_ptr<T>>.
 #if defined _GLIBCXX_TSAN && __has_include(<sanitizer/tsan_interface.h>)
@@ -98,8 +99,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *  @{
   */
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline bool
-    atomic_is_lock_free(const __shared_ptr<_Tp, _Lp>* __p)
+    atomic_is_lock_free(const __shared_ptr<_Tp, _Lp>*)
     {
 #ifdef __GTHREADS
       return __gthread_active_p() == 0;
@@ -109,6 +111,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline bool
     atomic_is_lock_free(const shared_ptr<_Tp>* __p)
     { return std::atomic_is_lock_free<_Tp, __default_lock_policy>(__p); }
@@ -125,6 +128,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *  @{
   */
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline shared_ptr<_Tp>
     atomic_load_explicit(const shared_ptr<_Tp>* __p, memory_order)
     {
@@ -133,11 +137,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline shared_ptr<_Tp>
     atomic_load(const shared_ptr<_Tp>* __p)
     { return std::atomic_load_explicit(__p, memory_order_seq_cst); }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline __shared_ptr<_Tp, _Lp>
     atomic_load_explicit(const __shared_ptr<_Tp, _Lp>* __p, memory_order)
     {
@@ -146,6 +152,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline __shared_ptr<_Tp, _Lp>
     atomic_load(const __shared_ptr<_Tp, _Lp>* __p)
     { return std::atomic_load_explicit(__p, memory_order_seq_cst); }
@@ -161,6 +168,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *  @{
   */
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline void
     atomic_store_explicit(shared_ptr<_Tp>* __p, shared_ptr<_Tp> __r,
 			  memory_order)
@@ -170,11 +178,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline void
     atomic_store(shared_ptr<_Tp>* __p, shared_ptr<_Tp> __r)
     { std::atomic_store_explicit(__p, std::move(__r), memory_order_seq_cst); }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline void
     atomic_store_explicit(__shared_ptr<_Tp, _Lp>* __p,
 			  __shared_ptr<_Tp, _Lp> __r,
@@ -185,6 +195,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline void
     atomic_store(__shared_ptr<_Tp, _Lp>* __p, __shared_ptr<_Tp, _Lp> __r)
     { std::atomic_store_explicit(__p, std::move(__r), memory_order_seq_cst); }
@@ -198,6 +209,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *  @{
   */
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline shared_ptr<_Tp>
     atomic_exchange_explicit(shared_ptr<_Tp>* __p, shared_ptr<_Tp> __r,
 			     memory_order)
@@ -208,6 +220,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline shared_ptr<_Tp>
     atomic_exchange(shared_ptr<_Tp>* __p, shared_ptr<_Tp> __r)
     {
@@ -216,6 +229,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline __shared_ptr<_Tp, _Lp>
     atomic_exchange_explicit(__shared_ptr<_Tp, _Lp>* __p,
 			     __shared_ptr<_Tp, _Lp> __r,
@@ -227,6 +241,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline __shared_ptr<_Tp, _Lp>
     atomic_exchange(__shared_ptr<_Tp, _Lp>* __p, __shared_ptr<_Tp, _Lp> __r)
     {
@@ -247,6 +262,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    *  @{
   */
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     bool
     atomic_compare_exchange_strong_explicit(shared_ptr<_Tp>* __p,
 					    shared_ptr<_Tp>* __v,
@@ -269,6 +285,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline bool
     atomic_compare_exchange_strong(shared_ptr<_Tp>* __p, shared_ptr<_Tp>* __v,
 				 shared_ptr<_Tp> __w)
@@ -278,6 +295,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline bool
     atomic_compare_exchange_weak_explicit(shared_ptr<_Tp>* __p,
 					  shared_ptr<_Tp>* __v,
@@ -290,6 +308,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline bool
     atomic_compare_exchange_weak(shared_ptr<_Tp>* __p, shared_ptr<_Tp>* __v,
 				 shared_ptr<_Tp> __w)
@@ -299,6 +318,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     bool
     atomic_compare_exchange_strong_explicit(__shared_ptr<_Tp, _Lp>* __p,
 					    __shared_ptr<_Tp, _Lp>* __v,
@@ -321,6 +341,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline bool
     atomic_compare_exchange_strong(__shared_ptr<_Tp, _Lp>* __p,
 				   __shared_ptr<_Tp, _Lp>* __v,
@@ -331,6 +352,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline bool
     atomic_compare_exchange_weak_explicit(__shared_ptr<_Tp, _Lp>* __p,
 					  __shared_ptr<_Tp, _Lp>* __v,
@@ -343,6 +365,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     }
 
   template<typename _Tp, _Lock_policy _Lp>
+    _GLIBCXX20_DEPRECATED_SUGGEST("std::atomic<std::shared_ptr<T>>")
     inline bool
     atomic_compare_exchange_weak(__shared_ptr<_Tp, _Lp>* __p,
 				 __shared_ptr<_Tp, _Lp>* __v,
@@ -355,10 +378,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
   /// @} group pointer_abstractions
 
-#if __cplusplus >= 202002L
-# define __cpp_lib_atomic_shared_ptr 201711L
+#ifdef  __glibcxx_atomic_shared_ptr // C++ >= 20 && HOSTED
   template<typename _Tp>
-    class atomic;
+    struct atomic;
 
   /**
    * @addtogroup pointer_abstractions
@@ -366,17 +388,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
    * @{
    */
 
-  template<typename _Up>
-    static constexpr bool __is_shared_ptr = false;
-  template<typename _Up>
-    static constexpr bool __is_shared_ptr<shared_ptr<_Up>> = true;
-
   template<typename _Tp>
     class _Sp_atomic
     {
       using value_type = _Tp;
+      using element_type = typename _Tp::element_type;
 
-      friend class atomic<_Tp>;
+      friend struct atomic<_Tp>;
 
       // An atomic version of __shared_count<> and __weak_count<>.
       // Stores a _Sp_counted_base<>* but uses the LSB as a lock.
@@ -384,6 +402,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	// Either __shared_count<> or __weak_count<>
 	using __count_type = decltype(_Tp::_M_refcount);
+	using uintptr_t = __UINTPTR_TYPE__;
 
 	// _Sp_counted_base<>*
 	using pointer = decltype(__count_type::_M_pi);
@@ -402,7 +421,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 	~_Atomic_count()
 	{
-	  auto __val = _M_val.load(memory_order_relaxed);
+	  auto __val = _AtomicRef(&_M_val).load(memory_order_relaxed);
 	  _GLIBCXX_TSAN_MUTEX_DESTROY(&_M_val);
 	  __glibcxx_assert(!(__val & _S_lock_bit));
 	  if (auto __pi = reinterpret_cast<pointer>(__val))
@@ -424,24 +443,25 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{
 	  // To acquire the lock we flip the LSB from 0 to 1.
 
-	  auto __current = _M_val.load(memory_order_relaxed);
+	  _AtomicRef __aref(&_M_val);
+	  auto __current = __aref.load(memory_order_relaxed);
 	  while (__current & _S_lock_bit)
 	    {
-#if __cpp_lib_atomic_wait
+#if __glibcxx_atomic_wait
 	      __detail::__thread_relax();
 #endif
-	      __current = _M_val.load(memory_order_relaxed);
+	      __current = __aref.load(memory_order_relaxed);
 	    }
 
 	  _GLIBCXX_TSAN_MUTEX_TRY_LOCK(&_M_val);
 
-	  while (!_M_val.compare_exchange_strong(__current,
+	  while (!__aref.compare_exchange_strong(__current,
 						 __current | _S_lock_bit,
 						 __o,
 						 memory_order_relaxed))
 	    {
 	      _GLIBCXX_TSAN_MUTEX_TRY_LOCK_FAILED(&_M_val);
-#if __cpp_lib_atomic_wait
+#if __glibcxx_atomic_wait
 	      __detail::__thread_relax();
 #endif
 	      __current = __current & ~_S_lock_bit;
@@ -456,7 +476,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	unlock(memory_order __o) const noexcept
 	{
 	  _GLIBCXX_TSAN_MUTEX_PRE_UNLOCK(&_M_val);
-	  _M_val.fetch_sub(1, __o);
+	  _AtomicRef(&_M_val).fetch_sub(1, __o);
 	  _GLIBCXX_TSAN_MUTEX_POST_UNLOCK(&_M_val);
 	}
 
@@ -469,27 +489,53 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	    __o = memory_order_release;
 	  auto __x = reinterpret_cast<uintptr_t>(__c._M_pi);
 	  _GLIBCXX_TSAN_MUTEX_PRE_UNLOCK(&_M_val);
-	  __x = _M_val.exchange(__x, __o);
+	  __x = _AtomicRef(&_M_val).exchange(__x, __o);
 	  _GLIBCXX_TSAN_MUTEX_POST_UNLOCK(&_M_val);
 	  __c._M_pi = reinterpret_cast<pointer>(__x & ~_S_lock_bit);
 	}
 
-#if __cpp_lib_atomic_wait
+#if __glibcxx_atomic_wait
 	// Precondition: caller holds lock!
 	void
-	_M_wait_unlock(memory_order __o) const noexcept
+	_M_wait_unlock(const element_type* const& __ptr, memory_order __o) const noexcept
 	{
+	  auto __old_ptr = __ptr;
 	  _GLIBCXX_TSAN_MUTEX_PRE_UNLOCK(&_M_val);
-	  auto __v = _M_val.fetch_sub(1, memory_order_relaxed);
+	  uintptr_t __old_pi 
+	    = _AtomicRef(&_M_val).fetch_sub(1, memory_order_relaxed) - 1u;
 	  _GLIBCXX_TSAN_MUTEX_POST_UNLOCK(&_M_val);
-	  _M_val.wait(__v & ~_S_lock_bit, __o);
+
+  	  // Ensure that the correct value of _M_ptr is visible after locking,
+ 	  // by upgrading relaxed or consume to acquire.
+	  auto __lo = __o;
+	  if (__o != memory_order_seq_cst)
+	    __lo = memory_order_acquire;
+
+	  std::__atomic_wait_address(
+	    &_M_val,
+	    [=, &__ptr, this](uintptr_t __new_pi)
+	      {
+		if (__old_pi != (__new_pi & ~_S_lock_bit))
+		  // control block changed, we can wake up
+		  return true;
+
+		// control block is same, we need to check if ptr changed,
+		// the lock needs to be taken first, the value of pi may have
+		// also been updated in meantime, so reload it
+		__new_pi = reinterpret_cast<uintptr_t>(this->lock(__lo));
+		auto __new_ptr = __ptr;
+		this->unlock(memory_order_relaxed);
+		// wake up if either of the values changed
+		return __new_pi != __old_pi || __new_ptr != __old_ptr;
+	      },
+	    [__o, this] { return _AtomicRef(&_M_val).load(__o); });
 	}
 
 	void
 	notify_one() noexcept
 	{
 	  _GLIBCXX_TSAN_MUTEX_PRE_SIGNAL(&_M_val);
-	  _M_val.notify_one();
+	  _AtomicRef(&_M_val).notify_one();
 	  _GLIBCXX_TSAN_MUTEX_POST_SIGNAL(&_M_val);
 	}
 
@@ -497,17 +543,18 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	notify_all() noexcept
 	{
 	  _GLIBCXX_TSAN_MUTEX_PRE_SIGNAL(&_M_val);
-	  _M_val.notify_all();
+	  _AtomicRef(&_M_val).notify_all();
 	  _GLIBCXX_TSAN_MUTEX_POST_SIGNAL(&_M_val);
 	}
 #endif
 
       private:
-	mutable __atomic_base<uintptr_t> _M_val{0};
+	using _AtomicRef = __atomic_ref<uintptr_t>;
+	alignas(_AtomicRef::required_alignment) mutable uintptr_t _M_val{0};
 	static constexpr uintptr_t _S_lock_bit{1};
       };
 
-      typename _Tp::element_type* _M_ptr = nullptr;
+      element_type* _M_ptr = nullptr;
       _Atomic_count _M_refcount;
 
       static typename _Atomic_count::pointer
@@ -540,7 +587,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	__glibcxx_assert(__o != memory_order_release
 			   && __o != memory_order_acq_rel);
-	// Ensure that the correct value of _M_ptr is visible after locking.,
+	// Ensure that the correct value of _M_ptr is visible after locking,
 	// by upgrading relaxed or consume to acquire.
 	if (__o != memory_order_seq_cst)
 	  __o = memory_order_acquire;
@@ -584,13 +631,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	return __result;
       }
 
-#if __cpp_lib_atomic_wait
+#if __glibcxx_atomic_wait
       void
       wait(value_type __old, memory_order __o) const noexcept
       {
 	auto __pi = _M_refcount.lock(memory_order_acquire);
 	if (_M_ptr == __old._M_ptr && __pi == __old._M_refcount._M_pi)
-	  _M_refcount._M_wait_unlock(__o);
+	  _M_refcount._M_wait_unlock(_M_ptr, __o);
 	else
 	  _M_refcount.unlock(memory_order_relaxed);
       }
@@ -610,7 +657,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     };
 
   template<typename _Tp>
-    class atomic<shared_ptr<_Tp>>
+    struct atomic<shared_ptr<_Tp>>
     {
     public:
       using value_type = shared_ptr<_Tp>;
@@ -707,7 +754,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	return compare_exchange_strong(__expected, std::move(__desired), __o);
       }
 
-#if __cpp_lib_atomic_wait
+#if __glibcxx_atomic_wait
       void
       wait(value_type __old,
 	   memory_order __o = memory_order_seq_cst) const noexcept
@@ -733,7 +780,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     };
 
   template<typename _Tp>
-    class atomic<weak_ptr<_Tp>>
+    struct atomic<weak_ptr<_Tp>>
     {
     public:
       using value_type = weak_ptr<_Tp>;
@@ -820,7 +867,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	return compare_exchange_strong(__expected, std::move(__desired), __o);
       }
 
-#if __cpp_lib_atomic_wait
+#if __glibcxx_atomic_wait
       void
       wait(value_type __old,
 	   memory_order __o = memory_order_seq_cst) const noexcept

@@ -20,7 +20,7 @@
 #include <sys/syscall.h>
 #include "cxx-syscall.hpp"
 
-#if __MLIBC_LINUX_OPTION && !defined(MLIBC_BUILDING_RTLD)
+#if (__MLIBC_POSIX_OPTION || __MLIBC_LINUX_OPTION) && !defined(MLIBC_BUILDING_RTLD)
 
 #include "generic-helpers/netlink.hpp"
 
@@ -74,6 +74,13 @@ struct user_desc {
 extern "C" void *__m68k_read_tp() {
 	auto ret = do_syscall(__NR_get_thread_area, 0);
 	return (void *)ret;
+}
+#elif defined(__riscv)
+int sys_riscv_hwprobe(struct riscv_hwprobe *pairs, size_t pair_count, size_t cpusetsize, cpu_set_t *cpus, unsigned int flags) {
+	auto ret = do_syscall(SYS_riscv_hwprobe, pairs, pair_count, cpusetsize, cpus, flags);
+	if(int e = sc_error(ret); e)
+		return -e;
+	return sc_int_result<int>(ret);
 }
 #endif
 
@@ -179,6 +186,15 @@ int sys_readv(int fd, const struct iovec *iovs, int iovc, ssize_t *bytes_read) {
 
 int sys_write(int fd, const void *buffer, size_t size, ssize_t *bytes_written) {
 	auto ret = do_cp_syscall(SYS_write, fd, buffer, size);
+	if(int e = sc_error(ret); e)
+		return e;
+	if(bytes_written)
+		*bytes_written = sc_int_result<ssize_t>(ret);
+	return 0;
+}
+
+int sys_writev(int fd, const struct iovec *iovs, int iovc, ssize_t *bytes_written) {
+	auto ret = do_cp_syscall(SYS_writev, fd, iovs, iovc);
 	if(int e = sc_error(ret); e)
 		return e;
 	if(bytes_written)
@@ -361,8 +377,8 @@ int sys_sigaction(int signum, const struct sigaction *act,
 	static_assert(sizeof(kernel_act.mask) == 8);
 
 	auto ret = do_syscall(SYS_rt_sigaction, signum, act ?
-		&kernel_act : NULL, oldact ?
-		&kernel_oldact : NULL, sizeof(kernel_act.mask));
+		&kernel_act : nullptr, oldact ?
+		&kernel_oldact : nullptr, sizeof(kernel_act.mask));
 	if (int e = sc_error(ret); e)
 		return e;
 
@@ -660,7 +676,7 @@ int sys_clone(void *tcb, pid_t *pid_out, void *stack) {
 	tcb = reinterpret_cast<void *>(user_desc);
 #endif
 
-	auto ret = __mlibc_spawn_thread(flags, stack, pid_out, NULL, tcb);
+	auto ret = __mlibc_spawn_thread(flags, stack, pid_out, nullptr, tcb);
 	if (ret < 0)
 		return ret;
 
@@ -832,6 +848,32 @@ int sys_setpriority(int which, id_t who, int prio) {
 	return 0;
 }
 
+// the first argument of the get/set priority calls is a PRIO_PROCESS constant.
+// the actual macro is not used at the moment because of a wrong #define
+// FIXME once the abi fix PR is merged
+int sys_nice(int increment, int *new_nice) {
+	int current;
+	if (int e = sys_getpriority(0, 0, &current); e)
+		return e;
+
+	if (increment == 0) {
+		*new_nice = current;
+		return 0;
+	}
+
+	// the system call silently clamps the value to the nice range
+	if (int e = sys_setpriority(0, 0, current + increment); e)
+		return e;
+
+	if (int e = sys_getpriority(0, 0, &current); e)
+		return e;
+
+	// NOTE: according to man 2 getpriority, the internal priority values in linux are
+	// in the range 40..1. So we have to convert it.
+	*new_nice = 20 - current;
+	return 0;
+}
+
 int sys_setitimer(int which, const struct itimerval *new_value, struct itimerval *old_value) {
 	auto ret = do_syscall(SYS_setitimer, which, new_value, old_value);
 	if (int e = sc_error(ret); e)
@@ -847,19 +889,66 @@ struct linux_uapi_sigevent {
 	int sigev_tid;
 };
 
+namespace {
+
+bool timerThreadInit = false;
+
+struct PosixTimerContext {
+	int setupSem = 0;
+	int workerSem = 0;
+	sigevent *sigev;
+};
+
+void timer_handle(int, siginfo_t *, void *) {
+}
+
+void *timer_setup(void *arg) {
+	auto ctx = reinterpret_cast<PosixTimerContext *>(arg);
+
+	sigset_t set;
+	sigaddset(&set, SIGTIMER);
+
+	// wait for parent setup to be complete
+	while(__atomic_load_n(&ctx->setupSem, __ATOMIC_RELAXED) == 0);
+	pthread_testcancel();
+
+	// copy out the function and argument, as the lifetime of the context ends with
+	// incrementing workerSem
+	auto notify = ctx->sigev->sigev_notify_function;
+	union sigval val = ctx->sigev->sigev_value;
+
+	// notify the parent that the context can be dropped
+	__atomic_store_n(&ctx->workerSem, 1, __ATOMIC_RELEASE);
+
+	siginfo_t si;
+	int signo;
+
+	while(true) {
+		while(sys_sigtimedwait(&set, &si, nullptr, &signo));
+		if(si.si_code == SI_TIMER && signo == SIGTIMER)
+			notify(val);
+		pthread_testcancel();
+	}
+
+	return nullptr;
+}
+
+} // namespace
+
 int sys_timer_create(clockid_t clk, struct sigevent *__restrict evp, timer_t *__restrict res) {
 	struct linux_uapi_sigevent ksev;
-	struct linux_uapi_sigevent *ksevp = 0;
+	struct linux_uapi_sigevent *ksevp = nullptr;
 	int timer_id;
 
 	switch(evp ? evp->sigev_notify : SIGEV_SIGNAL) {
 		case SIGEV_NONE:
-		case SIGEV_SIGNAL: {
+		case SIGEV_SIGNAL:
+		case SIGEV_THREAD_ID: {
 			if(evp) {
 				ksev.sigev_value = evp->sigev_value;
 				ksev.sigev_signo = evp->sigev_signo;
 				ksev.sigev_notify = evp->sigev_notify;
-				ksev.sigev_tid = 0;
+				ksev.sigev_tid = (evp && evp->sigev_notify == SIGEV_THREAD_ID) ? evp->sigev_notify_thread_id : 0;
 				ksevp = &ksev;
 			}
 
@@ -870,9 +959,75 @@ int sys_timer_create(clockid_t clk, struct sigevent *__restrict evp, timer_t *__
 			*res = (void *) (intptr_t) timer_id;
 			break;
 		}
-		case SIGEV_THREAD:
-			__ensure(!"sys_timer_create with evp->sigev_notify == SIGEV_THREAD is unimplemented");
-			[[fallthrough]];
+		case SIGEV_THREAD: {
+			if(!timerThreadInit) {
+				struct sigaction sa{};
+				sa.sa_flags = SA_SIGINFO | SA_RESTART;
+				sa.sa_sigaction = timer_handle;
+				sys_sigaction(SIGTIMER, &sa, nullptr);
+				timerThreadInit = true;
+			}
+
+			pthread_attr_t attr;
+			if(evp->sigev_notify_attributes)
+				attr = *evp->sigev_notify_attributes;
+			else
+				pthread_attr_init(&attr);
+
+			int ret = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+			if(ret)
+				return ret;
+
+			PosixTimerContext context{};
+			context.sigev = evp;
+
+			// mask for all signals except the libc-reserved RT signal range
+			sigset_t mask = {
+				#if ULONG_MAX == 0xFFFF'FFFF
+					0x7FFF'FFFF, 0xFFFF'FFFC
+				#else
+					0xFFFF'FFFC'7FFF'FFFF
+				#endif
+			};
+			// but also mask SIGTIMER
+			sigaddset(&mask, SIGTIMER);
+			sigset_t original_set;
+			do_syscall(SYS_rt_sigprocmask, SIG_BLOCK, &mask, &original_set, _NSIG / 8);
+
+			pthread_t pthread;
+			ret = pthread_create(&pthread, &attr, timer_setup, &context);
+
+			// restore previous signal mask
+			do_syscall(SYS_rt_sigprocmask, SIG_SETMASK, &original_set, 0, _NSIG / 8);
+
+			if(ret)
+				return ret;
+
+			auto tid = reinterpret_cast<Tcb*>(pthread)->tid;
+
+			linux_uapi_sigevent sigev{
+				.sigev_value = { .sival_ptr = nullptr },
+				.sigev_signo = SIGTIMER,
+				.sigev_notify = SIGEV_THREAD_ID,
+				.sigev_tid = tid,
+			};
+			ksevp = &sigev;
+
+			auto syscallret = do_syscall(SYS_timer_create, clk, ksevp, &timer_id);
+			if (int e = sc_error(syscallret); e) {
+				pthread_cancel(pthread);
+				__atomic_store_n(&context.setupSem, 1, __ATOMIC_RELEASE);
+				return e;
+			}
+
+			// notify worker that setup is complete
+			__atomic_store_n(&context.setupSem, 1, __ATOMIC_RELEASE);
+			// await worker setup to let the context go out of scope
+			while(__atomic_load_n(&context.workerSem, __ATOMIC_RELAXED) == 0);
+
+			*res = (void *) (intptr_t) timer_id;
+			break;
+		}
 		default:
 			return EINVAL;
 	}
@@ -885,6 +1040,14 @@ int sys_timer_settime(timer_t t, int flags, const struct itimerspec *__restrict 
 	if (int e = sc_error(ret); e) {
 		return e;
 	}
+	return 0;
+}
+
+int sys_timer_gettime(timer_t t, struct itimerspec *val) {
+	auto ret = do_syscall(SYS_timer_gettime, t, val);
+	if (int e = sc_error(ret); e)
+		return e;
+
 	return 0;
 }
 
@@ -989,6 +1152,30 @@ int sys_madvise(void *addr, size_t length, int advice) {
 	if (int e = sc_error(ret); e)
 		return e;
 	return 0;
+}
+
+int sys_posix_madvise(void *addr, size_t length, int advice) {
+	if(advice == POSIX_MADV_DONTNEED) {
+		// POSIX_MADV_DONTNEED is a no-op in both glibc and musl.
+		return 0;
+	}
+	switch(advice) {
+	case POSIX_MADV_NORMAL:
+		advice = MADV_NORMAL;
+		break;
+	case POSIX_MADV_RANDOM:
+		advice = MADV_RANDOM;
+		break;
+	case POSIX_MADV_SEQUENTIAL:
+		advice = MADV_SEQUENTIAL;
+		break;
+	case POSIX_MADV_WILLNEED:
+		advice = MADV_WILLNEED;
+		break;
+	default:
+		return EINVAL;
+	}
+	return sys_madvise(addr, length, advice);
 }
 
 int sys_msync(void *addr, size_t length, int flags) {
@@ -1280,7 +1467,7 @@ int sys_if_indextoname(unsigned int index, char *name) {
 	struct ifreq ifr;
 	ifr.ifr_ifindex = index;
 
-	int ret = sys_ioctl(fd, SIOCGIFNAME, &ifr, NULL);
+	int ret = sys_ioctl(fd, SIOCGIFNAME, &ifr, nullptr);
 	close(fd);
 
 	if(ret) {
@@ -1304,7 +1491,7 @@ int sys_if_nametoindex(const char *name, unsigned int *ret) {
 	struct ifreq ifr;
 	strncpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
 
-	r = sys_ioctl(fd, SIOCGIFINDEX, &ifr, NULL);
+	r = sys_ioctl(fd, SIOCGIFINDEX, &ifr, nullptr);
 	close(fd);
 
 	if(r) {
@@ -1318,7 +1505,7 @@ int sys_if_nametoindex(const char *name, unsigned int *ret) {
 
 int sys_ptsname(int fd, char *buffer, size_t length) {
 	int index;
-	if(int e = sys_ioctl(fd, TIOCGPTN, &index, NULL); e)
+	if(int e = sys_ioctl(fd, TIOCGPTN, &index, nullptr); e)
 		return e;
 	if((size_t)snprintf(buffer, length, "/dev/pts/%d", index) >= length) {
 		return ERANGE;
@@ -1329,7 +1516,7 @@ int sys_ptsname(int fd, char *buffer, size_t length) {
 int sys_unlockpt(int fd) {
 	int unlock = 0;
 
-	if(int e = sys_ioctl(fd, TIOCSPTLCK, &unlock, NULL); e)
+	if(int e = sys_ioctl(fd, TIOCSPTLCK, &unlock, nullptr); e)
 		return e;
 
 	return 0;
@@ -1355,13 +1542,13 @@ int sys_thread_setname(void *tcb, const char *name) {
 		return e;
 	}
 
-	if(int e = sys_write(fd, name, strlen(name) + 1, NULL)) {
+	if(int e = sys_write(fd, name, strlen(name) + 1, nullptr)) {
 		return e;
 	}
 
 	sys_close(fd);
 
-	pthread_setcancelstate(cs, 0);
+	pthread_setcancelstate(cs, nullptr);
 
 	return 0;
 }
@@ -1390,7 +1577,7 @@ int sys_thread_getname(void *tcb, char *name, size_t size) {
 	name[real_size - 1] = 0;
 	sys_close(fd);
 
-	pthread_setcancelstate(cs, 0);
+	pthread_setcancelstate(cs, nullptr);
 
 	if(static_cast<ssize_t>(size) <= real_size) {
 		return ERANGE;
@@ -1668,6 +1855,38 @@ int sys_pidfd_send_signal(int pidfd, int sig, siginfo_t *info, unsigned int flag
 	auto ret = do_syscall(SYS_pidfd_send_signal, pidfd, sig, info, flags);
 	if (int e = sc_error(ret); e)
 		return e;
+	return 0;
+}
+
+int sys_process_vm_readv(pid_t pid,
+		const struct iovec *local_iov, unsigned long liovcnt,
+		const struct iovec *remote_iov, unsigned long riovcnt,
+		unsigned long flags, ssize_t *out) {
+	auto ret = do_syscall(SYS_process_vm_readv, pid, local_iov, liovcnt,
+			remote_iov, riovcnt, flags);
+	if(int e = sc_error(ret); e)
+		return e;
+	*out = sc_int_result<ssize_t>(ret);
+	return 0;
+}
+
+int sys_process_vm_writev(pid_t pid,
+		const struct iovec *local_iov, unsigned long liovcnt,
+		const struct iovec *remote_iov, unsigned long riovcnt,
+		unsigned long flags, ssize_t *out) {
+	auto ret = do_syscall(SYS_process_vm_writev, pid, local_iov, liovcnt,
+			remote_iov, riovcnt, flags);
+	if(int e = sc_error(ret); e)
+		return e;
+	*out = sc_int_result<ssize_t>(ret);
+	return 0;
+}
+
+int sys_ppoll(struct pollfd *fds, nfds_t count, const struct timespec *ts, const sigset_t *mask, int *num_events) {
+	auto ret = do_syscall(SYS_ppoll, fds, count, ts, mask, NSIG / 8);
+	if (int e = sc_error(ret); e)
+		return e;
+	*num_events = sc_int_result<int>(ret);
 	return 0;
 }
 
@@ -2252,6 +2471,51 @@ int sys_shmget(int *shm_id, key_t key, size_t size, int shmflg) {
 	*shm_id = sc_int_result<int>(ret);
 	return 0;
 }
+
+#if !defined(MLIBC_BUILDING_RTLD)
+int sys_inet_configured(bool *ipv4, bool *ipv6) {
+	struct context {
+		bool *ipv4;
+		bool *ipv6;
+	} context = {
+		.ipv4 = ipv4,
+		.ipv6 = ipv6
+	};
+
+	NetlinkHelper nl;
+	if (!nl.send_request(RTM_GETADDR)) {
+		*ipv4 = false;
+		*ipv6 = false;
+		return 0;
+	}
+
+	auto ret = nl.recv([](void *data, const nlmsghdr *hdr) {
+		if (hdr->nlmsg_type == RTM_NEWADDR || hdr->nlmsg_len >= sizeof(struct ifaddrmsg)) {
+			const struct ifaddrmsg *ifaddr = reinterpret_cast<const struct ifaddrmsg *>(NLMSG_DATA(hdr));
+			struct context *ctx = reinterpret_cast<struct context *>(data);
+
+			char name[IF_NAMESIZE];
+			auto interfaceNameResult = sys_if_indextoname(ifaddr->ifa_index, name);
+
+			if (interfaceNameResult || !strncmp(name, "lo", IF_NAMESIZE))
+				return;
+
+			if (ifaddr->ifa_family == AF_INET)
+				*ctx->ipv4 = true;
+			else if (ifaddr->ifa_family == AF_INET6)
+				*ctx->ipv6 = true;
+		}
+	}, &context);
+
+	if (!ret) {
+		*ipv4 = false;
+		*ipv6 = false;
+		return 0;
+	}
+
+	return 0;
+}
+#endif // !defined(MLIBC_BUILDING_RTLD)
 
 #endif // __MLIBC_POSIX_OPTION
 

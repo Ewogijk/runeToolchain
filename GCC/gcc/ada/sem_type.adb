@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---          Copyright (C) 1992-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 1992-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -27,7 +27,6 @@ with Aspects;        use Aspects;
 with Atree;          use Atree;
 with Alloc;
 with Debug;          use Debug;
-with Einfo;          use Einfo;
 with Einfo.Entities; use Einfo.Entities;
 with Einfo.Utils;    use Einfo.Utils;
 with Elists;         use Elists;
@@ -46,7 +45,6 @@ with Sem_Disp;       use Sem_Disp;
 with Sem_Dist;       use Sem_Dist;
 with Sem_Util;       use Sem_Util;
 with Stand;          use Stand;
-with Sinfo;          use Sinfo;
 with Sinfo.Nodes;    use Sinfo.Nodes;
 with Sinfo.Utils;    use Sinfo.Utils;
 with Snames;         use Snames;
@@ -109,7 +107,7 @@ package body Sem_Type is
       Equal      => "=");
 
    Last_Overloaded : Node_Id := Empty;
-   --  Overloaded node after initializing a new collection of intepretation
+   --  Overloaded node after initializing a new collection of interpretations
 
    -------------------------------------
    -- Handling of Overload Resolution --
@@ -197,10 +195,10 @@ package body Sem_Type is
    --------------------
 
    procedure Add_One_Interp
-     (N         : Node_Id;
-      E         : Entity_Id;
-      T         : Entity_Id;
-      Opnd_Type : Entity_Id := Empty)
+     (N        : Node_Id;
+      E        : Entity_Id;
+      T        : Entity_Id;
+      Opnd_Typ : Entity_Id := Empty)
    is
       Vis_Type : Entity_Id;
 
@@ -308,7 +306,7 @@ package body Sem_Type is
             end if;
          end loop;
 
-         All_Interp.Table (All_Interp.Last) := (Name, Typ, Abstr_Op);
+         All_Interp.Table (All_Interp.Last) := (Name, Typ, Opnd_Typ, Abstr_Op);
          All_Interp.Append (No_Interp);
       end Add_Entry;
 
@@ -369,8 +367,8 @@ package body Sem_Type is
       --  it is the type of the operand that is relevant here.
 
       if Ekind (E) = E_Operator then
-         if Present (Opnd_Type) then
-            Vis_Type := Opnd_Type;
+         if Present (Opnd_Typ) then
+            Vis_Type := Opnd_Typ;
          else
             Vis_Type := Base_Type (T);
          end if;
@@ -478,13 +476,19 @@ package body Sem_Type is
          then
             Add_Entry (Entity (Name (N)), Etype (N));
 
+         elsif Nkind (N) = N_Function_Call
+           and then Nkind (Name (N)) = N_Selected_Component
+           and then Is_Entity_Name (Selector_Name (Name (N)))
+         then
+            Add_Entry (Entity (Selector_Name (Name (N))), Etype (N));
+
          --  If this is an indirect call there will be no name associated
          --  with the previous entry. To make diagnostics clearer, save
          --  Subprogram_Type of first interpretation, so that the error will
          --  point to the anonymous access to subprogram, not to the result
          --  type of the call itself.
 
-         elsif (Nkind (N)) = N_Function_Call
+         elsif Nkind (N) = N_Function_Call
            and then Nkind (Name (N)) = N_Explicit_Dereference
            and then Is_Overloaded (Name (N))
          then
@@ -499,10 +503,17 @@ package body Sem_Type is
                Add_Entry (It.Nam, Etype (N));
             end;
 
-         else
-            --  Overloaded prefix in indexed or selected component, or call
-            --  whose name is an expression or another call.
+         --  If this is a generalized indexing, treat it as a function call
 
+         elsif Nkind (N) = N_Indexed_Component
+           and then Present (Generalized_Indexing (N))
+         then
+            Add_Entry (Entity (Name (Generalized_Indexing (N))), Etype (N));
+
+         --  An overloaded prefix in indexed or selected component, or a call
+         --  whose name is an expression or another call.
+
+         else
             Add_Entry (Etype (N), Etype (N));
          end if;
 
@@ -610,14 +621,17 @@ package body Sem_Type is
       First_Interp := All_Interp.Last;
       Add_One_Interp (N, Ent, Etype (N));
 
-      --  For expanded name, pick up all additional entities from the
-      --  same scope, since these are obviously also visible. Note that
-      --  these are not necessarily contiguous on the homonym chain.
+      --  For an expanded name, pick up additional visible entities from
+      --  the same scope. Note that these are not necessarily contiguous
+      --  on the homonym chain.
 
       if Nkind (N) = N_Expanded_Name then
          H := Homonym (Ent);
          while Present (H) loop
-            if Scope (H) = Scope (Entity (N)) then
+            if Scope (H) = Scope (Entity (N))
+              and then (not Is_Hidden (H)
+                         or else Is_Immediately_Visible (H))
+            then
                Add_One_Interp (N, H, Etype (H));
             end if;
 
@@ -663,7 +677,7 @@ package body Sem_Type is
                        and then not Is_Inherited_Operation (H)
                      then
                         All_Interp.Table (All_Interp.Last) :=
-                          (H, Etype (H), Empty);
+                          (H, Etype (H), Empty, Empty);
                         All_Interp.Append (No_Interp);
                         goto Next_Homograph;
 
@@ -884,6 +898,16 @@ package body Sem_Type is
             end;
          end if;
 
+      --  This test may seem to be redundant with the above one, but it catches
+      --  peculiar cases where a private type declared in a package is used in
+      --  a generic construct declared in another package, and the body of the
+      --  former package contains an instantiation of the generic construct on
+      --  an object whose type is a subtype of the private type; in this case,
+      --  the subtype is not private but the type is private in the instance.
+
+      elsif Is_Subtype_Of (T1 => T2, T2 => T1) then
+         return True;
+
       --  Literals are compatible with types in a given "class"
 
       elsif     (T2 = Universal_Integer and then Is_Integer_Type (T1))
@@ -1002,8 +1026,8 @@ package body Sem_Type is
       elsif T2 = Any_Composite and then Is_Aggregate_Type (T1) then
          return True;
 
-      --  In Ada_2022, an aggregate is compatible with the type that
-      --  as the corresponding aspect.
+      --  In Ada 2022, an aggregate is compatible with the type that
+      --  has the corresponding aspect.
 
       elsif Ada_Version >= Ada_2022
         and then T2 = Any_Composite
@@ -1033,8 +1057,8 @@ package body Sem_Type is
         and then Ekind (BT1) = E_General_Access_Type
         and then Ekind (BT2) = E_Anonymous_Access_Type
         and then Covers (Designated_Type (T1), Designated_Type (T2))
-        and then (Is_Class_Wide_Type (Designated_Type (T1)) >=
-                  Is_Class_Wide_Type (Designated_Type (T2)))
+        and then Is_Class_Wide_Type (Designated_Type (T1)) >=
+                 Is_Class_Wide_Type (Designated_Type (T2))
       then
          return True;
 
@@ -1131,7 +1155,7 @@ package body Sem_Type is
       --  A boolean operation on integer literals is compatible with modular
       --  context.
 
-      elsif T2 = Any_Modular and then Is_Modular_Integer_Type (T1) then
+      elsif T2 = Any_Modular and then Has_Modular_Operations (T1) then
          return True;
 
       --  The actual type may be the result of a previous error
@@ -1161,20 +1185,20 @@ package body Sem_Type is
       then
          return True;
 
-      --  In instances, or with types exported from instantiations, check
-      --  whether a partial and a full view match. Verify that types are
-      --  legal, to prevent cascaded errors.
+      --  With types exported from instantiations, check whether a partial and
+      --  a full view match. Verify that types are legal, to prevent cascaded
+      --  errors.
 
       elsif Is_Private_Type (T1)
-        and then (In_Instance
-                   or else (Is_Type (T2) and then Is_Generic_Actual_Type (T2)))
+        and then Is_Type (T2)
+        and then Is_Generic_Actual_Type (T2)
         and then Full_View_Covers (T1, T2)
       then
          return True;
 
       elsif Is_Private_Type (T2)
-        and then (In_Instance
-                   or else (Is_Type (T1) and then Is_Generic_Actual_Type (T1)))
+        and then Is_Type (T1)
+        and then Is_Generic_Actual_Type (T1)
         and then Full_View_Covers (T2, T1)
       then
          return True;
@@ -1217,6 +1241,18 @@ package body Sem_Type is
 
          return Has_Non_Limited_View (T2)
            and then Covers (T1, Get_Full_View (Non_Limited_View (T2)));
+
+      --  Coverage for incomplete types
+
+      elsif Ekind (T1) = E_Incomplete_Type
+        and then Present (Full_View (T1))
+      then
+         return Covers (Full_View (T1), T2);
+
+      elsif Ekind (T2) = E_Incomplete_Type
+        and then Present (Full_View (T2))
+      then
+         return Covers (T1, Full_View (T2));
 
       --  Ada 2005 (AI-412): Coverage for regular incomplete subtypes
 
@@ -1294,6 +1330,12 @@ package body Sem_Type is
       --  instance is resolved in favor of the first, because it resolved in
       --  the generic. Within the instance the actual is represented by a
       --  constructed subprogram renaming.
+
+      function Is_Ambiguous_Boolean_Operator (I : Interp) return Boolean;
+      --  Determine whether I corresponds to an "ambiguous" boolean operator.
+      --  Such an interpretation is used to record the ambiguity of operands
+      --  diagnosed during the analysis of comparison and equality operations.
+      --  See Find_Comparison_Equality_Types in Sem_Ch4 for the rationale.
 
       function Matches (Op : Node_Id; Func_Id : Entity_Id) return Boolean;
       --  Determine whether function Func_Id is an exact match for binary or
@@ -1395,6 +1437,17 @@ package body Sem_Type is
              (Is_Generic_Instance (Scope (S))
                or else Is_Wrapper_Package (Scope (S)));
       end Is_Actual_Subprogram;
+
+      -----------------------------------
+      -- Is_Ambiguous_Boolean_Operator --
+      -----------------------------------
+
+      function Is_Ambiguous_Boolean_Operator (I : Interp) return Boolean is
+      begin
+         return Ekind (I.Nam) = E_Operator
+           and then I.Typ = Standard_Boolean
+           and then I.Opnd_Typ = Any_Type;
+      end Is_Ambiguous_Boolean_Operator;
 
       -------------
       -- Matches --
@@ -1802,12 +1855,24 @@ package body Sem_Type is
       It1  := It;
       Nam1 := It.Nam;
 
+      --  Return immediately if either corresponds to a recorded ambiguity
+
+      if Is_Ambiguous_Boolean_Operator (It1) then
+         return It1;
+      end if;
+
       while I /= I2 loop
          Get_Next_Interp (I, It);
       end loop;
 
       It2  := It;
       Nam2 := It.Nam;
+
+      --  See above
+
+      if Is_Ambiguous_Boolean_Operator (It2) then
+         return It2;
+      end if;
 
       --  Check whether one of the entities is an Ada 2005/2012/2022 and we
       --  are operating in an earlier mode, in which case we discard the Ada
@@ -2229,7 +2294,7 @@ package body Sem_Type is
                 Is_Immediately_Visible (Base_Type (Etype (Right_Opnd (N))))
               and then Is_Potentially_Use_Visible (User_Subp)
             then
-               if It2.Nam = Predef_Subp then
+               if It1.Nam = Predef_Subp then
                   return It1;
                else
                   return It2;
@@ -2568,8 +2633,8 @@ package body Sem_Type is
          end if;
 
          loop
-            if Present (Interfaces (E))
-              and then not Is_Empty_Elmt_List (Interfaces (E))
+            if Is_Record_Type (E)
+              and then Present (Interfaces (E))
             then
                Elmt := First_Elmt (Interfaces (E));
                while Present (Elmt) loop
@@ -2631,7 +2696,12 @@ package body Sem_Type is
       end if;
 
       if Is_Concurrent_Record_Type (Target_Typ) then
-         Target_Typ := Corresponding_Concurrent_Type (Target_Typ);
+         if Is_Class_Wide_Type (Target_Typ) then
+            Target_Typ :=
+              Corresponding_Concurrent_Type (Root_Type (Target_Typ));
+         else
+            Target_Typ := Corresponding_Concurrent_Type (Target_Typ);
+         end if;
       end if;
 
       Target_Typ := Base_Type (Target_Typ);
@@ -2639,34 +2709,32 @@ package body Sem_Type is
       --  In case of concurrent types we can't use the Corresponding Record_Typ
       --  to look for the interface because it is built by the expander (and
       --  hence it is not always available). For this reason we traverse the
-      --  list of interfaces (available in the parent of the concurrent type)
+      --  list of interfaces (available in the parent of the concurrent type).
 
       if Is_Concurrent_Type (Target_Typ) then
-         if Present (Interface_List (Parent (Target_Typ))) then
-            declare
-               AI : Node_Id;
+         declare
+            AI : Node_Id;
 
-            begin
-               AI := First (Interface_List (Parent (Target_Typ)));
+         begin
+            AI := First (Interface_List (Parent (Target_Typ)));
 
-               --  The progenitor itself may be a subtype of an interface type.
+            --  The progenitor itself may be a subtype of an interface type
 
-               while Present (AI) loop
-                  if Etype (AI) = Iface_Typ
-                    or else Base_Type (Etype (AI)) = Iface_Typ
-                  then
-                     return True;
+            while Present (AI) loop
+               if Etype (AI) = Iface_Typ
+                 or else Base_Type (Etype (AI)) = Iface_Typ
+               then
+                  return True;
 
-                  elsif Present (Interfaces (Etype (AI)))
-                    and then Iface_Present_In_Ancestor (Etype (AI))
-                  then
-                     return True;
-                  end if;
+               elsif Present (Interfaces (Etype (AI)))
+                 and then Iface_Present_In_Ancestor (Etype (AI))
+               then
+                  return True;
+               end if;
 
-                  Next (AI);
-               end loop;
-            end;
-         end if;
+               Next (AI);
+            end loop;
+         end;
 
          return False;
       end if;
@@ -3210,7 +3278,7 @@ package body Sem_Type is
 
          elsif Op_Name = Name_Op_Concat then
             return Is_Array_Type (T)
-              and then (Base_Type (T) = Base_Type (Etype (Op)))
+              and then Base_Type (T) = Base_Type (Etype (Op))
               and then (Base_Type (T1) = Base_Type (T)
                           or else
                         Base_Type (T1) = Base_Type (Component_Type (T)))
@@ -3318,10 +3386,13 @@ package body Sem_Type is
         or else (T1 = Universal_Real    and then Is_Real_Type (T2))
         or else (T1 = Universal_Fixed   and then Is_Fixed_Point_Type (T2))
         or else (T1 = Any_Fixed         and then Is_Fixed_Point_Type (T2))
-        or else (T1 = Any_Modular       and then Is_Modular_Integer_Type (T2))
+        or else (T1 = Any_Modular       and then Has_Modular_Operations (T2))
         or else (T1 = Any_Character     and then Is_Character_Type (T2))
         or else (T1 = Any_String        and then Is_String_Type (T2))
         or else (T1 = Any_Composite     and then Is_Aggregate_Type (T2))
+        or else (Ada_Version >= Ada_2022
+                  and then T1 = Any_Composite
+                  and then Has_Aspect (T2, Aspect_Aggregate))
       then
          return B2;
 
@@ -3338,10 +3409,13 @@ package body Sem_Type is
         or else (T2 = Universal_Real    and then Is_Real_Type (T1))
         or else (T2 = Universal_Fixed   and then Is_Fixed_Point_Type (T1))
         or else (T2 = Any_Fixed         and then Is_Fixed_Point_Type (T1))
-        or else (T2 = Any_Modular       and then Is_Modular_Integer_Type (T1))
+        or else (T2 = Any_Modular       and then Has_Modular_Operations (T1))
         or else (T2 = Any_Character     and then Is_Character_Type (T1))
         or else (T2 = Any_String        and then Is_String_Type (T1))
         or else (T2 = Any_Composite     and then Is_Aggregate_Type (T1))
+        or else (Ada_Version >= Ada_2022
+                  and then T2 = Any_Composite
+                  and then Has_Aspect (T1, Aspect_Aggregate))
       then
          return B1;
 
@@ -3457,9 +3531,10 @@ package body Sem_Type is
       then
          return T2;
 
-      --  In instances, also check private views the same way as Covers
+      --  With types exported from instantiation, also check private views the
+      --  same way as Covers
 
-      elsif Is_Private_Type (T1) and then In_Instance then
+      elsif Is_Private_Type (T1) and then Is_Generic_Actual_Type (T2) then
          if Present (Full_View (T1)) then
             return Specific_Type (Full_View (T1), T2);
 
@@ -3467,7 +3542,7 @@ package body Sem_Type is
             return Specific_Type (Underlying_Full_View (T1), T2);
          end if;
 
-      elsif Is_Private_Type (T2) and then In_Instance then
+      elsif Is_Private_Type (T2) and then Is_Generic_Actual_Type (T1) then
          if Present (Full_View (T2)) then
             return Specific_Type (T1, Full_View (T2));
 
@@ -3504,7 +3579,7 @@ package body Sem_Type is
    function Valid_Boolean_Arg (T : Entity_Id) return Boolean is
    begin
       if Is_Boolean_Type (T)
-        or else Is_Modular_Integer_Type (T)
+        or else Has_Modular_Operations (T)
         or else T = Universal_Integer
         or else T = Any_Composite
         or else T = Raise_Type
@@ -3576,6 +3651,9 @@ package body Sem_Type is
 
       if Is_Anonymous_Access_Type (T) then
          return Ada_Version >= Ada_2005;
+
+      elsif Is_Incomplete_Type (T) then
+         return False;
 
       elsif not Is_Limited_Type (T) then
          return True;

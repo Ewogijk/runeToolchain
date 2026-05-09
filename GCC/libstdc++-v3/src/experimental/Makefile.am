@@ -1,6 +1,6 @@
 ## Makefile for experimental additions to the GNU C++ Standard library.
 ##
-## Copyright (C) 2014-2023 Free Software Foundation, Inc.
+## Copyright (C) 2014-2026 Free Software Foundation, Inc.
 ##
 ## Process this file with automake to produce Makefile.in.
 ##
@@ -24,14 +24,42 @@ include $(top_srcdir)/fragment.am
 
 toolexeclib_LTLIBRARIES = libstdc++exp.la
 
+if ENABLE_FILESYSTEM_TS
+filesystem_lib = $(top_builddir)/src/filesystem/libstdc++fsconvenience.la
+else
+filesystem_lib =
+endif
+
+if ENABLE_BACKTRACE
+backtrace_lib = $(top_builddir)/src/libbacktrace/libstdc++_libbacktrace.la
+else
+backtrace_lib =
+endif
+
 headers =
 
 sources = \
-	contract.cc
+	contract26.cc
 
 # vpath % $(top_srcdir)/src/experimental
 
+
+contract26.lo: contract26.cc
+	$(LTCXXCOMPILE) -std=gnu++26 -fcontracts -c $<
+contract26.o: contract26.cc
+	$(CXXCOMPILE) -std=gnu++26 -fcontracts -c $<
+
 libstdc__exp_la_SOURCES = $(sources)
+
+libstdc__exp_la_LIBADD = \
+	$(top_builddir)/src/c++23/libc++23convenience.la \
+	$(top_builddir)/src/c++26/libc++26convenience.la \
+	$(filesystem_lib) $(backtrace_lib)
+
+libstdc__exp_la_DEPENDENCIES = \
+	$(top_builddir)/src/c++23/libc++23convenience.la \
+	$(top_builddir)/src/c++26/libc++26convenience.la \
+	$(filesystem_lib) $(backtrace_lib)
 
 # AM_CXXFLAGS needs to be in each subdirectory so that it can be
 # modified in a per-library or per-sub-library way.  Need to manually
@@ -39,7 +67,7 @@ libstdc__exp_la_SOURCES = $(sources)
 # OPTIMIZE_CXXFLAGS on the compile line so that -O2 can be overridden
 # as the occasion calls for it.
 AM_CXXFLAGS = \
-	-std=gnu++17 -nostdinc++ \
+	-std=gnu++20 -nostdinc++ \
 	$(glibcxx_lt_pic_flag) $(glibcxx_compiler_shared_flag) \
 	$(XTEMPLATE_FLAGS) $(VTV_CXXFLAGS) \
 	$(WARN_CXXFLAGS) $(OPTIMIZE_CXXFLAGS) $(CONFIG_CXXFLAGS) \

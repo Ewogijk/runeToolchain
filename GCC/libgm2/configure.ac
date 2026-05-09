@@ -1,5 +1,5 @@
 # Configure script for libgm2.
-# Copyright (C) 2013-2023 Free Software Foundation, Inc.
+# Copyright (C) 2013-2024 Free Software Foundation, Inc.
 
 # This file is part of GCC.
 
@@ -27,7 +27,7 @@ AC_CONFIG_SRCDIR(Makefile.am)
 # AC_CONFIG_MACRO_DIR([config])
 AC_CONFIG_HEADER(config.h)
 
-libtool_VERSION=18:0:0
+libtool_VERSION=21:0:0
 AC_SUBST(libtool_VERSION)
 
 AM_ENABLE_MULTILIB(, ..)
@@ -42,6 +42,41 @@ AC_CANONICAL_SYSTEM
 target_alias=${target_alias-$host_alias}
 AC_SUBST(target_alias)
 
+if test "$build" != "$host"; then
+  # We are being configured with some form of cross compiler.
+  GLIBCXX_IS_NATIVE=false
+  case "$host","$target" in
+    # Darwin crosses can use the host system's libraries and headers,
+    # because of the fat library support.  Of course, it must be the
+    # same version of Darwin on both sides.  Allow the user to
+    # just say --target=foo-darwin without a version number to mean
+    # "the version on this system".
+      *-*-darwin*,*-*-darwin*)
+	hostos=`echo $host | sed 's/.*-darwin/darwin/'`
+	targetos=`echo $target | sed 's/.*-darwin/darwin/'`
+	if test $hostos = $targetos || test $targetos = darwin ; then
+	  GLIBCXX_IS_NATIVE=true
+	fi
+	;;
+
+      *)
+	GCC_NO_EXECUTABLES
+	;;
+  esac
+else
+  GLIBCXX_IS_NATIVE=true
+fi
+
+# Runs configure.host, and assorted other critical bits.  Sets
+# up critical shell variables.
+GLIBCXX_CONFIGURE
+
+# For gettimeofday support.
+GLIBCXX_CHECK_GETTIMEOFDAY
+
+# For clock_gettime, nanosleep and sched_yield support.
+GLIBCXX_ENABLE_LIBSTDCXX_TIME
+
 AM_INIT_AUTOMAKE([1.15.1 no-define foreign no-dist -Wall -Wno-portability])
 
 AH_TEMPLATE(PACKAGE, [Name of package])
@@ -53,11 +88,13 @@ AC_ARG_WITH(cross-host,
 # Checks for header files.
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
+AC_HEADER_TIME
+
 AC_CHECK_HEADER([math.h],
 	       [AC_DEFINE([HAVE_MATH_H], [1], [have math.h])])
 
-AC_CHECK_HEADERS(limits.h stddef.h string.h strings.h stdlib.h \
-                 time.h \
+AC_CHECK_HEADERS(getopt.h limits.h stddef.h string.h strings.h \
+                 stdlib.h time.h \
 		 fcntl.h unistd.h sys/file.h sys/time.h sys/mman.h \
 		 sys/resource.h sys/param.h sys/times.h sys/stat.h \
                  sys/socket.h \
@@ -66,6 +103,48 @@ AC_CHECK_HEADERS(limits.h stddef.h string.h strings.h stdlib.h \
                  pthread.h stdarg.h stdio.h sys/types.h termios.h \
                  netinet/in.h netdb.h sys/uio.h sys/stat.h wchar.h)
 
+AC_STRUCT_TIMEZONE
+
+AC_CHECK_MEMBER([struct tm.tm_year],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM, [1], [struct tm was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_year],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_YEAR, [1], [struct tm.tm_year was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_mon],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_MON, [1], [struct tm.tm_mon was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_mday],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_MDAY, [1], [struct tm.tm_mday was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_hour],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_HOUR, [1], [struct tm.tm_hour was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_min],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_MIN, [1], [struct tm.tm_min was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_sec],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_SEC, [1], [struct tm.tm_sec was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_year],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_YEAR, [1], [struct tm.tm_year was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_yday],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_YDAY, [1], [struct tm.tm_yday was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_wday],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_WDAY, [1], [struct tm.tm_wday was found])],
+		[], [[#include <time.h>]])
+AC_CHECK_MEMBER([struct tm.tm_isdst],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TM_ISDST, [1], [struct tm.tm_isdst was found])],
+		[], [[#include <time.h>]])
+
+AC_CHECK_MEMBER([struct timeval.tv_sec],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TIMEVAL, [1], [struct timeval was found])])
+AC_CHECK_MEMBER([struct timeval.tv_sec],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TIMEVAL_TV_SEC, [1], [struct timeval.tv_sec was found])])
+AC_CHECK_MEMBER([struct timeval.tv_usec],
+	        [AC_DEFINE(WE_HAVE_STRUCT_TIMEVAL_TV_USEC, [1], [struct timeval.tv_usec was found])])
 
 AC_CANONICAL_HOST
 ACX_NONCANONICAL_HOST
@@ -173,12 +252,15 @@ save_CFLAGS="$CFLAGS"
 AC_CHECK_TOOL(AR, ar)
 AC_CHECK_TOOL(NM, nm)
 AC_CHECK_TOOL(RANLIB, ranlib, ranlib-not-found-in-path-error)
-AC_PATH_PROG(PERL, perl, perl-not-found-in-path-error)
 AC_PROG_MAKE_SET
 AC_PROG_INSTALL
 
-AC_LIBTOOL_DLOPEN
 AM_PROG_LIBTOOL
+LT_INIT
+AC_LIBTOOL_DLOPEN
+
+AM_CONDITIONAL([ENABLE_DARWIN_AT_RPATH], [test x$enable_darwin_at_rpath = xyes])
+
 AC_SUBST(enable_shared)
 AC_SUBST(enable_static)
 
@@ -188,7 +270,25 @@ else
   multilib_arg=
 fi
 
-AC_CHECK_TYPES([struct timezone, struct stat, struct timeval])
+AC_CHECK_TYPES([struct timezone, struct stat, struct timespec, struct timeval, struct tm])
+
+# Check if struct tm contains the tm_gmtoff field.
+AC_CACHE_CHECK(for tm_gmtoff in struct tm, ac_cv_struct_tm_gmtoff,
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([
+      #include <time.h>
+    ], [
+      struct tm tm;
+      tm.tm_gmtoff = 1;
+    ])],
+    [ac_cv_struct_tm_gmtoff=yes],
+    [ac_cv_struct_tm_gmtoff=no]
+  )
+)
+
+if (test "$ac_cv_struct_tm_gmtoff" = "yes"); then
+  AC_MSG_CHECKING([m2 front end detects struct tm with the tm_gmtoff field.])
+  AC_DEFINE(HAVE_TM_TM_GMTOFF, 1, [Define if struct tm has a tm_gmtoff field.])
+fi
 
 AC_LANG_C
 # Check the compiler.
@@ -226,9 +326,12 @@ AC_DEFUN([GM2_CHECK_LIB],[
 GM2_CHECK_LIB([c],[access],[ACCESS])
 GM2_CHECK_LIB([c],[brk],[BRK])
 GM2_CHECK_LIB([c],[cfmakeraw],[CFMAKERAW])
+GM2_CHECK_LIB([c],[clock_gettime],[CLOCK_GETTIME])
+GM2_CHECK_LIB([c],[clock_settime],[CLOCK_SETTIME])
 GM2_CHECK_LIB([c],[close],[CLOSE])
 GM2_CHECK_LIB([c],[ctime],[CTIME])
 GM2_CHECK_LIB([c],[creat],[CREAT])
+GM2_CHECK_LIB([c],[daylight],[DAYLIGHT])
 GM2_CHECK_LIB([c],[dup],[DUP])
 GM2_CHECK_LIB([c],[execve],[EXECVE])
 GM2_CHECK_LIB([c],[exit],[EXIT])
@@ -236,8 +339,10 @@ GM2_CHECK_LIB([c],[fcntl],[FCNTL])
 GM2_CHECK_LIB([c],[fstat],[FSTAT])
 GM2_CHECK_LIB([c],[getdents],[GETDENTS])
 GM2_CHECK_LIB([c],[getgid],[GETGID])
+GM2_CHECK_LIB([c],[getopt_long],[GETOPT_LONG])
+GM2_CHECK_LIB([c],[getopt_long_only],[GETOPT_LONG_ONLY])
 GM2_CHECK_LIB([c],[getpid],[GETPID])
-GM2_CHECK_LIB([c],[gettimeofday],[GETTIMEOFD])
+GM2_CHECK_LIB([c],[gettimeofday],[GETTIMEOFDAY])
 GM2_CHECK_LIB([c],[getuid],[GETUID])
 GM2_CHECK_LIB([c],[ioctl],[IOCTL])
 GM2_CHECK_LIB([c],[kill],[KILL])
@@ -251,19 +356,27 @@ GM2_CHECK_LIB([c],[read],[READ])
 GM2_CHECK_LIB([c],[select],[SELECT])
 GM2_CHECK_LIB([c],[setitimer],[SETITIMER])
 GM2_CHECK_LIB([c],[setgid],[SETGID])
+GM2_CHECK_LIB([c],[settimeofday],[SETTIMEOFDAY])
 GM2_CHECK_LIB([c],[setuid],[SETUID])
 GM2_CHECK_LIB([c],[stat],[STAT])
 GM2_CHECK_LIB([c],[strsignal],[STRSIGNAL])
 GM2_CHECK_LIB([c],[strtod],[STRTOD])
 GM2_CHECK_LIB([c],[strtold],[STRTOLD])
 GM2_CHECK_LIB([c],[times],[TIMES])
+GM2_CHECK_LIB([c],[timezone],[TIMEZONE])
+GM2_CHECK_LIB([c],[tzname],[TZNAME])
 GM2_CHECK_LIB([c],[unlink],[UNLINK])
 GM2_CHECK_LIB([c],[wait],[WAIT])
 GM2_CHECK_LIB([c],[write],[WRITE])
 
+GM2_CHECK_LIB([m],[exp10],[EXP10])
+GM2_CHECK_LIB([m],[exp10f],[EXP10F])
+GM2_CHECK_LIB([m],[exp10l],[EXP10L])
 GM2_CHECK_LIB([m],[signbit],[SIGNBIT])
 GM2_CHECK_LIB([m],[signbitf],[SIGNBITF])
 GM2_CHECK_LIB([m],[signbitl],[SIGNBITL])
+
+AC_CHECK_DECLS([getenv])
 
 AC_MSG_NOTICE([libgm2 has finished checking target libc and libm contents.])
 

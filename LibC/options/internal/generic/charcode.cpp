@@ -54,18 +54,42 @@ struct utf8_charcode {
 		codepoint _cpoint;
 	};
 
+#define NSEQ_STORE(VAL) do { \
+	if (!static_cast<bool>(nseq)) { \
+		return charcode_error::output_overflow; \
+	} \
+	*nseq.it = (VAL); \
+	++nseq.it; \
+} while (0)
+
 	struct encode_state {
 		// Encodes a single character from wseq + the current state and stores it in nseq.
 		// TODO: Convert decode_state to the same strategy.
 		charcode_error operator() (code_seq<char> &nseq, code_seq<const codepoint> &wseq) {
 			auto wc = *wseq.it;
-			__ensure(wc <= 0x7F && "utf8_charcode cannot encode multibyte chars yet");
-			*nseq.it = wc;
+			if (wc <= 0x7F) {
+				NSEQ_STORE(wc);
+			} else if (wc <= 0x7FF) {
+				NSEQ_STORE(0xC0 | (wc >> 6));
+				NSEQ_STORE(0x80 | (wc & 0x3f));
+			} else if (wc <= 0xFFFF) {
+				NSEQ_STORE(0xE0 | (wc >> 12));
+				NSEQ_STORE(0x80 | ((wc >> 6) & 0x3f));
+				NSEQ_STORE(0x80 | (wc & 0x3f));
+			} else if (wc <= 0x10FFFF) {
+				NSEQ_STORE(0xF0 | (wc >> 18));
+				NSEQ_STORE(0x80 | ((wc >> 12) & 0x3f));
+				NSEQ_STORE(0x80 | ((wc >> 6) & 0x3f));
+				NSEQ_STORE(0x80 | (wc & 0x3f));
+			} else {
+				return charcode_error::illegal_input;
+			}
 			++wseq.it;
-			++nseq.it;
 			return charcode_error::null;
 		}
 	};
+
+#undef NSEQ_STORE
 };
 
 polymorphic_charcode::~polymorphic_charcode() = default;

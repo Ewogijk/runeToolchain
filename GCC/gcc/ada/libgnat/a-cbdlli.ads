@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 2004-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 2004-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- This specification is derived from the Ada Reference Manual for use with --
 -- GNAT. The copyright notice above, and the license provisions that follow --
@@ -99,12 +99,12 @@ is
       Process   : not null access procedure (Element : in out Element_Type));
 
    type Constant_Reference_Type
-      (Element : not null access constant Element_Type) is private
+      (Element : not null access constant Element_Type) is limited private
    with
       Implicit_Dereference => Element;
 
    type Reference_Type
-     (Element : not null access Element_Type) is private
+     (Element : not null access Element_Type) is limited private
    with
       Implicit_Dereference => Element;
 
@@ -276,12 +276,12 @@ private
    type Node_Array is array (Count_Type range <>) of Node_Type;
 
    type List (Capacity : Count_Type) is tagged record
-      Nodes  : Node_Array (1 .. Capacity);
       Free   : Count_Type'Base := -1;
       First  : Count_Type := 0;
       Last   : Count_Type := 0;
       Length : Count_Type := 0;
       TC     : aliased Tamper_Counts;
+      Nodes  : Node_Array (1 .. Capacity);
    end record with Put_Image => Put_Image;
 
    procedure Put_Image

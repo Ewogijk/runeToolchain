@@ -1,3 +1,6 @@
+#![feature(no_core)]
+#![no_core]
+
 enum Foo {
     A,
     B,
@@ -10,6 +13,6 @@ fn inspect(f: Foo) {
         Foo::A => {}
         Foo::B => {}
         Foo::C(a) => {}
-        Foo::D(x, y) => {} // { dg-error "expected tuple struct or tuple variant, found struct variant 'Foo::D'" }
+        Foo::D(x, y) => {} // { dg-error "expected tuple struct or tuple variant, found struct variant .Foo::D." }
     }
 }

@@ -1,6 +1,6 @@
 ## Makefile for the toplevel directory of the GNU C++ Standard library.
 ##
-## Copyright (C) 1997-2023 Free Software Foundation, Inc.
+## Copyright (C) 1997-2026 Free Software Foundation, Inc.
 ##
 ## This file is part of the libstdc++ version 3 distribution.
 ## Process this file with automake to produce Makefile.in.
@@ -34,11 +34,11 @@ ACLOCAL_AMFLAGS = -I . -I .. -I ../config
 
 # Testsuite/check forwarding targets.
 check-%:
-	cd testsuite && $(MAKE) $@
+	$(MAKE) -C testsuite $@
 
 # Documentation forwarding targets.
 doc-%:
-	cd doc && $(MAKE) $@
+	$(MAKE) -C doc $@
 
 # Documentation conditionals for output.
 if BUILD_XML
@@ -124,6 +124,9 @@ install-ps:
 dvi:
 install-dvi:
 
+new-abi-baseline:
+	$(MAKE) -C testsuite $@
+
 # Multilib support.
 MAKEOVERRIDES=
 
@@ -142,6 +145,7 @@ AM_MAKEFLAGS = \
 	"CXXFLAGS=$(CXXFLAGS)" \
 	"CFLAGS_FOR_BUILD=$(CFLAGS_FOR_BUILD)" \
 	"CFLAGS_FOR_TARGET=$(CFLAGS_FOR_TARGET)" \
+	"EXPECT=$(EXPECT)" \
 	"INSTALL=$(INSTALL)" \
 	"INSTALL_DATA=$(INSTALL_DATA)" \
 	"INSTALL_PROGRAM=$(INSTALL_PROGRAM)" \

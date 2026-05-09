@@ -1,7 +1,7 @@
 --
 -- m2-3.bnf grammar and associated actions for pass 3.
 --
--- Copyright (C) 2001-2023 Free Software Foundation, Inc.
+-- Copyright (C) 2001-2026 Free Software Foundation, Inc.
 -- Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 --
 -- This file is part of GNU Modula-2.
@@ -23,7 +23,7 @@
 (* output from m2-3.bnf, automatically generated do not edit if these
    are the top two lines in the file.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -54,7 +54,9 @@ FROM DynamicStrings IMPORT String, InitString, KillString, Mark, ConCat, ConCatC
 FROM M2Printf IMPORT printf0, printf1 ;
 FROM M2Debug IMPORT Assert ;
 FROM P2SymBuild IMPORT BuildString, BuildNumber ;
-FROM M2MetaError IMPORT MetaErrorT0 ;
+FROM M2MetaError IMPORT MetaErrorT0, MetaErrorT2 ;
+FROM M2CaseList IMPORT ElseCase ;
+FROM M2StackSpell IMPORT GetRecordField ;
 
 FROM M2Reserved IMPORT tokToTok, toktype,
                        NulTok, ImportTok, ExportTok, QualifiedTok, UnQualifiedTok,
@@ -65,6 +67,7 @@ FROM M2Reserved IMPORT tokToTok, toktype,
 
 FROM M2Quads IMPORT PushT, PopT, PushTF, PopTF, PopNothing, Annotate,
                     PushTtok, PushTFtok, PopTtok, PopTFtok, OperandTok,
+                    DupFrame, Top,
                     BuildModuleStart,
                     StartBuildDefFile, StartBuildModFile,
                     EndBuildFile,
@@ -98,7 +101,7 @@ FROM M2Quads IMPORT PushT, PopT, PushTF, PopTF, PopNothing, Annotate,
                     BuildProcedureCall, BuildReturn, BuildNulExpression,
                     CheckBuildFunction,
                     StartBuildWith, EndBuildWith,
-                    BuildInline,
+                    BuildAsm,
                     BuildCaseStart,
                     BuildCaseOr,
                     BuildCaseElse,
@@ -126,9 +129,12 @@ FROM M2Quads IMPORT PushT, PopT, PushTF, PopTF, PopNothing, Annotate,
                     BuildRetry,
                     DisplayStack,
                     AddVarientRange, AddVarientEquality,
+                    BuildAsmElement, BuildAsmTrash,
                     BeginVarient, EndVarient, BeginVarientList, EndVarientList,
-                    PushInConstExpression, PopInConstExpression, IsInConstExpression,
+                    PushInConstExpression, PopInConstExpression,
+                    PushInConstParameters, PopInConstParameters, IsInConstParameters,
                     BuildDefaultFieldAlignment, BuildPragmaField,
+                    OperandT, OperandTok,
                     IsAutoPushOn, PushAutoOff, PushAutoOn, PopAuto ;
 
 FROM P3SymBuild IMPORT P3StartBuildProgModule,
@@ -148,6 +154,7 @@ FROM P3SymBuild IMPORT P3StartBuildProgModule,
                        StartBuildProcedure,
                        BuildProcedureHeading,
                        EndBuildProcedure,
+                       EndBuildForward,
                        BuildVarAtAddress,
                        BuildConst,
                        BuildSubrange,
@@ -160,43 +167,49 @@ FROM SymbolTable IMPORT MakeGnuAsm, PutGnuAsmVolatile, PutGnuAsm, PutGnuAsmInput
                         MakeRegInterface,
                         PutRegInterface,
                         IsRegInterface, IsGnuAsmVolatile, IsGnuAsm,
-                        GetCurrentModule,
+                        GetCurrentModule, IsInnerModule,
                         GetSymName, GetType, SkipType,
                         NulSym,
                         StartScope, EndScope,
                         PutIncluded,
                         IsVarParam, IsProcedure, IsDefImp, IsModule, IsProcType,
                         IsRecord,
-                        RequestSym, IsExported,
+                        RequestSym, IsExported, IsImported,
                         GetSym, GetLocalSym ;
 
 FROM M2Batch IMPORT IsModuleKnown ;
 
 FROM M2CaseList IMPORT BeginCaseList, EndCaseList ;
 
+FROM M2StateCheck IMPORT StateCheck,
+                         InitState, PushState, PopState,
+                         InclConst, ExclConst,
+                         InclType, ExclType,
+                         InclVar, ExclVar,
+                         InclConstructor, ExclConstructor,
+                         InclConstFunc, CheckQualident ;
+
 IMPORT M2Error ;
 
 CONST
    Debugging = FALSE ;
-   Pass1     = FALSE ;          (* permanently disabled for the time being *)
-   Pass2     = FALSE ;
-   Pass3     =  TRUE ;          (* permanently disabled for the time being *)
    DebugAsm  = FALSE ;
 
 VAR
-   WasNoError: BOOLEAN ;
+   seenError : BOOLEAN ;
+   BlockState: StateCheck ;
 
 
 PROCEDURE ErrorString (s: String) ;
 BEGIN
-   ErrorStringAt(s, GetTokenNo ()) ;
-   WasNoError := FALSE
+   ErrorStringAt (s, GetTokenNo ()) ;
+   seenError := TRUE
 END ErrorString ;
 
 
 PROCEDURE ErrorArray (a: ARRAY OF CHAR) ;
 BEGIN
-   ErrorString(InitString(a))
+   ErrorString (InitString (a))
 END ErrorArray ;
 
 
@@ -367,6 +380,8 @@ END PeepToken ;
 *)
 
 PROCEDURE Expect (t: toktype; stopset0: SetOfStop0; stopset1: SetOfStop1; stopset2: SetOfStop2) ;
+CONST
+   Pass1 = FALSE ;
 BEGIN
    IF currenttoken=t
    THEN
@@ -389,9 +404,9 @@ END Expect ;
 
 PROCEDURE CompilationUnit () : BOOLEAN ;
 BEGIN
-   WasNoError := TRUE ;
+   seenError := FALSE ;
    FileUnit(SetOfStop0{eoftok}, SetOfStop1{}, SetOfStop2{}) ;
-   RETURN( WasNoError )
+   RETURN NOT seenError
 END CompilationUnit ;
 
 
@@ -454,7 +469,72 @@ BEGIN
    Expect(realtok, stopset0, stopset1, stopset2)
 END Real ;
 
+
+(*
+   PushTFQualident - push the result of the Qualident
+                     to the stack.  It checks to see if init
+		     is a procedure or proc type and if so
+		     it does not push the return type.
+*)
+
+PROCEDURE PushTFQualident (tok, tokstart: CARDINAL;
+                           init: CARDINAL) ;
+BEGIN
+   IF tok#tokstart
+   THEN
+      tok := MakeVirtualTok (tokstart, tokstart, tok)
+   END ;
+   IF IsProcedure (init) OR IsProcType (init) OR IsModule (init) OR IsDefImp (init)
+   THEN
+      PushTtok (init, tok) ;
+      Annotate ("%1s(%1d)||qualident procedure/proctype") ;
+   ELSE
+      Annotate ("%1s(%1d)|%1s(%1d)||qualident|type") ;
+      PushTFtok (init, GetType (init), tok) ;
+   END
+END PushTFQualident ;
+
+
+(*
+   CheckModuleQualident - check to see if the beginning ident of the qualident is an
+                          imported module.
+*)
+
+PROCEDURE CheckModuleQualident (stopset0: SetOfStop0;
+                                stopset1: SetOfStop1;
+				stopset2: SetOfStop2) ;
+VAR
+   name         : Name ;
+   init,
+   nextLevel,
+   tok, tokstart: CARDINAL ;
+BEGIN
+   PopTtok (name, tokstart) ;
+   tok := tokstart ;
+   init := RequestSym (tok, name) ;
+   IF (IsImported (GetCurrentModule (), init) AND IsDefImp (init)) OR
+      IsModule (init)
+   THEN
+      WHILE IsDefImp (init) OR IsModule (init) DO
+         Expect (periodtok, stopset0, stopset1, stopset2 + SetOfStop2{identtok}) ;
+         StartScope (init) ;
+         Ident (stopset0, stopset1, stopset2) ;
+	 PopTtok (name, tok) ;
+         nextLevel := RequestSym (tok, name) ;
+         EndScope ;
+	 CheckCanBeImported (init, nextLevel) ;
+	 init := nextLevel
+      END ;
+      PushTFQualident (tok, tokstart, init) ;
+      PutIncluded (init)
+   ELSE
+      PushTFQualident (tok, tokstart, init)
+   END
+END CheckModuleQualident ;
+
 % module P3Build end
+BEGIN
+   BlockState := InitState ()
 END P3Build.
 % rules
 error       'ErrorArray' 'ErrorString'
@@ -508,6 +588,7 @@ token   'EXIT'            exittok
 token   'EXPORT'          exporttok
 token   'FINALLY'         finallytok
 token   'FOR'             fortok
+token   'FORWARD'         forwardtok
 token   'FROM'            fromtok
 token   'IF'              iftok
 token   'IMPLEMENTATION'  implementationtok
@@ -574,7 +655,7 @@ FileUnit :=                                                                % Pus
               ImplementationOrProgramModule )                              % PopAuto %
          =:
 
-ProgramModule :=                                                           % VAR modulet, endt: CARDINAL ; %
+ProgramModule :=                                                           % VAR modulet, endt, namet: CARDINAL ; %
                                                                            % modulet := GetTokenNo () %
                  "MODULE"                                                  % M2Error.DefaultProgramModule %
                                                                            % PushAutoOn %
@@ -589,12 +670,13 @@ ProgramModule :=                                                           % VAR
                   { Import }
                   Block                                                    % PushAutoOn %
                                                                            % endt := GetTokenNo () -1 %
+                                                                           % namet := GetTokenNo () %
                   Ident                                                    % EndBuildFile (endt) %
-                                                                           % P3EndBuildProgModule %
+                                                                           % P3EndBuildProgModule (namet) %
                   "."                                                      % PopAuto ; PopAuto %
                   =:
 
-ImplementationModule :=                                                    % VAR modulet, endt: CARDINAL ; %
+ImplementationModule :=                                                    % VAR modulet, endt, namet: CARDINAL ; %
                                                                            % modulet := GetTokenNo () %
                         "IMPLEMENTATION"                                   % M2Error.DefaultImplementationModule %
                                          "MODULE"                          % PushAutoOn %
@@ -608,8 +690,9 @@ ImplementationModule :=                                                    % VAR
                          { Import }
                          Block                                             % PushAutoOn %
                                                                            % endt := GetTokenNo () -1 %
+                                                                           % namet := GetTokenNo () %
                          Ident                                             % EndBuildFile (endt) %
-                                                                           % P3EndBuildImpModule %
+                                                                           % P3EndBuildImpModule (namet) %
                          "."                                               % PopAuto ; PopAuto ; PopAuto %
                       =:
 
@@ -626,58 +709,50 @@ Number := Integer | Real =:
 --  IsAutoPushOff then we just consume tokens.
 --
 
-Qualident :=                                                               % VAR name          : Name ;
-                                                                                 init, ip1,
-                                                                                 tokstart, tok : CARDINAL ; %
-             Ident
+Qualident := Ident
                                                                            % IF IsAutoPushOn()
                                                                              THEN
-                                                                                PopTtok(name, tokstart) ;
-										tok := tokstart ;
-                                                                                init := RequestSym (tok, name) ;
-                                                                                WHILE IsDefImp (init) OR IsModule (init) DO
-                                                                                   Expect (periodtok, stopset0, stopset1, stopset2 + SetOfStop2{identtok}) ;
-                                                                                   StartScope (init) ;
-                                                                                   Ident (stopset0, stopset1, stopset2) ;
-                                                                                   PopTtok (name, tok) ;
-                                                                                   ip1 := RequestSym (tok, name) ;
-                                                                                   PutIncluded(ip1) ;
-                                                                                   EndScope ;
-                                                                                   CheckCanBeImported(init, ip1) ;
-                                                                                   init := ip1
-                                                                                END ;
-										IF tok#tokstart
-										THEN
-										   tok := MakeVirtualTok (tokstart, tokstart, tok)
-										END ;
-                                                                                IF IsProcedure(init) OR IsProcType(init)
-                                                                                THEN
-                                                                                   PushTtok(init, tok)
-                                                                                ELSE
-                                                                                   PushTFtok(init, GetType(init), tok) ;
-                                                                                END
-                                                                             ELSE %
+     										CheckModuleQualident (stopset0, stopset1, stopset2)
+                                                                             ELSE (* just parse qualident *) %
              { "." Ident }                                                 % END %
            =:
 
+
+QualidentCheck :=                                                          % PushAutoOn %
+                  Qualident
+                                                                           % PopAuto %
+                                                                           % CheckQualident (OperandTok (1), BlockState, OperandT (1)) %
+                                                                           % IF NOT IsAutoPushOn ()
+                                                                             THEN
+                                                                                PopNothing
+                                                                             END %
+                =:
+
 ConstantDeclaration :=                                                     % VAR tokno: CARDINAL ; %
+                                                                           % InclConst (BlockState) %
                                                                            % PushAutoOn %
                        ( Ident "="                                         % tokno := GetTokenNo () -1 %
                                                                            % BuildConst %
                          ConstExpression )                                 % BuildAssignConstant (tokno) %
                                                                            % PopAuto %
+                                                                           % ExclConst (BlockState) %
                      =:
 
 ConstExpression :=                                                         % VAR tokpos: CARDINAL ; %
+                                                                           % PushInConstExpression %
                                                                            % PushAutoOn %
                    SimpleConstExpr [ Relation                              % tokpos := GetTokenNo ()-1 %
                                               SimpleConstExpr              % BuildRelOp (tokpos) %
                                    ]                                       % PopAuto %
+                                                                           % PopInConstExpression %
                 =:
 
-Relation := "="                                                            % PushTtok(EqualTok, GetTokenNo() -1) %
-            | "#"                                                          % PushTtok(HashTok, GetTokenNo() -1) %
-            | "<>"                                                         % PushTtok(LessGreaterTok, GetTokenNo() -1) %
+Relation := "="                                                            % PushTtok(EqualTok, GetTokenNo() -1) ;
+                                                                             RecordOp %
+            | "#"                                                          % PushTtok(HashTok, GetTokenNo() -1) ;
+                                                                             RecordOp %
+            | "<>"                                                         % PushTtok(LessGreaterTok, GetTokenNo() -1) ;
+                                                                             RecordOp %
             | "<"                                                          % PushTtok(LessTok, GetTokenNo() -1) %
             | "<="                                                         % PushTtok(LessEqualTok, GetTokenNo() -1) %
             | ">"                                                          % PushTtok(GreaterTok, GetTokenNo() -1) %
@@ -738,10 +813,15 @@ ComponentElement := ConstExpression ( ".." ConstExpression                 % Pus
                                     )
                   =:
 
-ComponentValue := ComponentElement ( 'BY' ConstExpression                  % PushTtok(ByTok, GetTokenNo() -1) %
+ComponentValue :=                                                          % VAR tokpos: CARDINAL ; %
+                  (
+                                                                           % tokpos := GetTokenNo () %
+                    ComponentElement (                                     % tokpos := GetTokenNo () %
+                                       'BY' ConstExpression                % PushTtok (ByTok, tokpos) %
 
-                                     |                                     % PushT(NulTok) %
-                                   )
+                                       |                                   % PushTtok (NulTok, tokpos) %
+                                     )
+                  )
                 =:
 
 ArraySetRecordValue := ComponentValue                                      % BuildComponentValue %
@@ -750,19 +830,33 @@ ArraySetRecordValue := ComponentValue                                      % Bui
                                                            }
                      =:
 
-Constructor :=                                                             % DisplayStack %
-               '{'                                                         % BuildConstructorStart (GetTokenNo() -1) %
-                  [ ArraySetRecordValue ]                                  % BuildConstructorEnd (GetTokenNo())  %
-               '}' =:
+Constructor :=                                                             % VAR tokpos: CARDINAL ; %
+                                                                           % DisplayStack %
+                                                                           % InclConstructor (BlockState) %
+                                                                           % CheckQualident (OperandTok (1), BlockState, OperandT (1)) %
+               '{'                                                         % tokpos := GetTokenNo () -1 %
+                                                                           % BuildConstructorStart (tokpos) %
+                  [ ArraySetRecordValue ]                                  % BuildConstructorEnd (tokpos, GetTokenNo())  %
+               '}'
+                                                                           % ExclConstructor (BlockState) %
+             =:
 
-ConstSetOrQualidentOrFunction := Qualident
-                                 [ Constructor | ConstActualParameters     % BuildConstFunctionCall %
-                                                                       ]
-                                   |                                       % BuildTypeForConstructor %
-                                     Constructor =:
+ConstSetOrQualidentOrFunction :=                                           % VAR tokpos: CARDINAL ; %
+                                                                           % tokpos := GetTokenNo () %
+                                 (
+                                   Qualident
+                                     [ Constructor | ConstActualParameters % BuildConstFunctionCall %
+                                                                         ]
+                                   |                                       % BuildTypeForConstructor (tokpos) %
+                                     Constructor
+                                 ) =:
 
-ConstActualParameters :=                                                   % PushInConstExpression %
-                         ActualParameters                                  % PopInConstExpression %
+ConstActualParameters :=                                                   % PushState (BlockState) %
+                                                                           % InclConstFunc (BlockState) %
+                                                                           % CheckQualident (OperandTok (1), BlockState, OperandT (1)) %
+                                                                           % PushInConstParameters %
+                         ActualParameters                                  % PopInConstParameters %
+                                                                           % PopState (BlockState) %
                        =:
 
 ConstAttribute := "__ATTRIBUTE__" "__BUILTIN__" "(" "("                    % PushAutoOn %
@@ -775,14 +869,18 @@ ConstAttributeExpression :=
                                                               ">"
                           =:
 
-ByteAlignment := '<*'                                                      % PushAutoOn %
-                      AttributeExpression                                  % BuildAlignment %
+ByteAlignment :=                                                           % VAR tokpos: CARDINAL ; %
+                 '<*'                                                      % PushAutoOn %
+                                                                           % tokpos := GetTokenNo () %
+                      AttributeExpression                                  % BuildAlignment (tokpos) %
                                           '*>'                             % PopAuto %
                =:
 
 Alignment := [ ByteAlignment ] =:
 
-TypeDeclaration := Ident "=" Type Alignment
+TypeDeclaration :=                                                         % InclType (BlockState) %
+                   Ident "=" Type Alignment
+                                                                           % ExclType (BlockState) %
                 =:
 
 Type :=
@@ -794,7 +892,7 @@ Type :=
           | ProcedureType )                                                % PopAuto %
       =:
 
-SimpleType := Qualident [ SubrangeType ] | Enumeration | SubrangeType =:
+SimpleType := QualidentCheck [ SubrangeType ] | Enumeration | SubrangeType =:
 
 Enumeration := "("
                    ( IdentList
@@ -880,7 +978,7 @@ FieldList := IdentList ":"
 
 TagIdent := [ Ident ] =:
 
-CaseTag :=  TagIdent [":" Qualident ] =:
+CaseTag :=  TagIdent [":" QualidentCheck ] =:
 
 Varient := [                                                               % BeginVarientList %
              VarientCaseLabelList ":" FieldListSequence                    % EndVarientList %
@@ -946,7 +1044,8 @@ SilentExpList := SilentConstExpression { "," SilentConstExpression } =:
 
 -- end of the Silent constant rules
 
-SetType := ( "SET" | "PACKEDSET" ) "OF" SimpleType =:
+SetType := ( "SET" | "PACKEDSET" ) "OF" SimpleType
+         =:
 
 PointerType := "POINTER" "TO"
                               Type
@@ -960,7 +1059,7 @@ FormalTypeList := "(" ( ")" FormalReturn |
 
 FormalReturn := [ ":" OptReturnType ] =:
 
-OptReturnType := "[" Qualident "]" | Qualident =:
+OptReturnType := "[" QualidentCheck "]" | QualidentCheck =:
 
 ProcedureParameters := ProcedureParameter
                        { "," ProcedureParameter } =:
@@ -1007,10 +1106,12 @@ VarIdentList := VarIdent                                                   % VAR
              =:
 
 VariableDeclaration := VarIdentList ":"
+                                                                           % InclVar (BlockState) %
                        Type Alignment
+                                                                           % ExclVar (BlockState) %
                     =:
 
-Designator := Qualident                                                    % CheckWithReference %
+Designator := QualidentCheck                                               % CheckWithReference %
               { SubDesignator } =:
 
 SubDesignator := "."                                                       % VAR Sym, Type, tok,
@@ -1025,29 +1126,23 @@ SubDesignator := "."                                                       % VAR
                                                                                 n1 := GetSymName(Sym) ;
                                                                                 IF IsModuleKnown(GetSymName(Sym))
                                                                                 THEN
-                                                                                   WriteFormat2('%a looks like a module which has not been globally imported (eg. suggest that you IMPORT %a ;)',
+                                                                                   WriteFormat2('%a looks like a module which has not been globally imported (eg. suggest that you IMPORT %a)',
                                                                                    n1, n1)
                                                                                 ELSE
                                                                                    WriteFormat1('%a is not a record variable', n1)
                                                                                 END
                                                                              ELSIF NOT IsRecord(Type)
                                                                              THEN
-                                                                                n1 := GetSymName(Type) ;
-                                                                                WriteFormat1('%a is not a record type', n1)
+                                                                                MetaErrorT2 (tok, "the type of {%1ad} is not a record (but {%2ad}) and therefore it has no field", Sym, Type) ;
                                                                              END ;
                                                                              StartScope(Type) %
                  Ident
                                                                            % PopTtok (name, tok) ;
-                                                                             Sym := GetLocalSym(Type, name) ;
-                                                                             IF Sym=NulSym
-                                                                             THEN
-                                                                                n1 := GetSymName(Type) ;
-                                                                                WriteFormat2('field %a does not exist within record %a', name, n1)
-                                                                             END ;
-                                                                             Type := GetType(Sym) ;
+									     Sym := GetRecordField (GetTokenNo () -1, Type, name) ;
+                                                                             Type := GetType (Sym) ;
                                                                              PushTFtok (Sym, Type, tok) ;
                                                                              EndScope ;
-                                                                             PushT(1) ;
+                                                                             PushT (1) ;
                                                                              BuildDesignatorRecord (dotpostok) %
                  | "[" ArrayExpList
                    "]"
@@ -1100,22 +1195,25 @@ Factor :=                                                                  % VAR
           | ConstAttribute
                                 ) =:
 
-SetOrDesignatorOrFunction := Qualident
-                                                                           % Assert (OperandTok(1) # UnknownTokenNo) %
+SetOrDesignatorOrFunction :=                                               % VAR tokpos: CARDINAL ; %
+                                                                           % tokpos := GetTokenNo () %
+                             (
+                               Qualident
+                                                                           % Assert (OperandTok (1) # UnknownTokenNo) %
                                                                            % CheckWithReference %
-                                                                           % Assert (OperandTok(1) # UnknownTokenNo) %
+                                                                           % Assert (OperandTok (1) # UnknownTokenNo) %
                               [ Constructor |
                                 SimpleDes                                  % (* Assert (OperandTok(1) # UnknownTokenNo) *) %
-                                          [ ActualParameters               % IF IsInConstExpression()
+                                          [ ActualParameters               % IF IsInConstParameters ()
                                                                              THEN
                                                                                 BuildConstFunctionCall
                                                                              ELSE
-                                                                                BuildFunctionCall
+                                                                                BuildFunctionCall (FALSE)
                                                                              END %
                                                              ]
                               ]                                |
-                                                                           % BuildTypeForConstructor %
-                              Constructor =:
+                                                                           % BuildTypeForConstructor (tokpos) %
+                              Constructor ) =:
 
 -- SimpleDes := { "." Ident | "[" ExpList "]" | "^" } =:
 SimpleDes := { SubDesignator } =:
@@ -1129,7 +1227,7 @@ ExitStatement := "EXIT"                                                    % Bui
 
 ReturnStatement := "RETURN"                                                % VAR tokno: CARDINAL ; %
                                                                            % tokno := GetTokenNo () -1 %
-                            ( Expression |                                 % BuildNulExpression (* in epsilon *) %
+                            ( Expression |                                 % BuildNulExpression (tokno) %
                                            )                               % BuildReturn (tokno) %
                 =:
 
@@ -1157,7 +1255,7 @@ AssignmentOrProcedureCall :=                                               % VAR
                                   ( ActualParameters |                     % BuildNulParam (* in epsilon *) %
                                   )                                        % IF isFunc
                                                                              THEN
-                                                                                BuildFunctionCall ;
+                                                                                BuildFunctionCall (FALSE) ;
                                                                                 BuildAssignment (tokno)
                                                                              ELSE
                                                                                 BuildProcedureCall (tokno - 1)
@@ -1207,6 +1305,7 @@ CaseEndStatement := "END"                                                  % Bui
                                                                            % BuildCaseEnd %
                     | "ELSE"                                               % BuildStmtNote (-1) %
                                                                            % BuildCaseElse %
+                                                                           % ElseCase (NulSym) %
                            StatementSequence                               % BuildStmtNote (0) %
 			                     "END"
                                                                            % BuildCaseEnd %
@@ -1236,7 +1335,7 @@ WhileStatement := "WHILE"                                                  % Bui
 		                                                           % BuildStmtNote (0) %
                              "DO"                                          % BuildDoWhile %
                                   StatementSequence                        % BuildStmtNote (0) %
-				                    "END"                  % DisplayStack ; BuildEndWhile %
+				                    "END"                  % DisplayStack ; BuildEndWhile (-1) %
                 =:
 
 RepeatStatement := "REPEAT"
@@ -1275,12 +1374,21 @@ WithStatement :=                                                           % VAR
                  "END"                                                     % EndBuildWith %
                =:
 
-ProcedureDeclaration := ProcedureHeading ";" ProcedureBlock                % BuildProcedureEnd ;
-                                                                             PushAutoOn %
+ProcedureDeclaration :=                                                    % VAR top: CARDINAL ; %
+                                                                           % top := Top () %
+                        ProcedureHeading ";" PostProcedureHeading          % Assert (top = Top ()) %
+                                                                  =:
 
-                        Ident                                              % EndBuildProcedure ;
+PostProcedureHeading := ProperProcedure | ForwardDeclaration =:
+
+ForwardDeclaration := "FORWARD"                                            % EndBuildForward %
+                    =:
+
+ProperProcedure := ProcedureBlock                                          % BuildProcedureEnd ;
+                                                                             PushAutoOn %
+                                   Ident                                   % EndBuildProcedure ;
                                                                              PopAuto %
-                      =:
+                                         =:
 
 DefineBuiltinProcedure := [ "__ATTRIBUTE__" "__BUILTIN__"
                             "(" "("                                        % PushAutoOff %
@@ -1395,9 +1503,9 @@ OptArg := "[" Ident ":" FormalType [ "=" ConstExpression                   % Bui
 DefOptArg := "[" Ident ":" FormalType "=" ConstExpression                  % BuildOptArgInitializer %
                                                           "]" =:
 
-FormalType := { "ARRAY" "OF" } Qualident =:
+FormalType := { "ARRAY" "OF" } QualidentCheck =:
 
-ModuleDeclaration :=                                                       % VAR modulet: CARDINAL ; %
+ModuleDeclaration :=                                                       % VAR modulet, namet: CARDINAL ; %
                                                                            % modulet := GetTokenNo () %
                      "MODULE"                                              % M2Error.DefaultInnerModule %
                                                                            % PushAutoOn %
@@ -1407,7 +1515,8 @@ ModuleDeclaration :=                                                       % VAR
                      [ Priority ] ";"
                      { Import } [ Export ]
                        Block                                               % PushAutoOn %
-                       Ident                                               % EndBuildInnerModule %
+		                                                           % namet := GetTokenNo () %
+                       Ident                                               % EndBuildInnerModule (namet) %
                                                                            % PopAuto ; PopAuto ; PopAuto %
                      =:
 
@@ -1434,7 +1543,7 @@ WithoutFromImport :=                                                       % Pus
 
 Import :=  FromImport | WithoutFromImport =:
 
-DefinitionModule :=                                                        % VAR deft, endt: CARDINAL ; %
+DefinitionModule :=                                                        % VAR deft, endt, namet: CARDINAL ; %
                                                                            % deft := GetTokenNo () %
                     "DEFINITION"                                           % M2Error.DefaultDefinitionModule %
                                  "MODULE"                                  % PushAutoOn %
@@ -1447,8 +1556,9 @@ DefinitionModule :=                                                        % VAR
                                         ]
                     { Definition }                                         % endt := GetTokenNo () %
                                    "END"                                   % PushAutoOn %
+                                                                           % namet := GetTokenNo () %
                                          Ident                             % EndBuildFile (endt) ;
-                                                                             P3EndBuildDefModule %
+                                                                             P3EndBuildDefModule (namet) %
                                                "."                         % PopAuto ; PopAuto ; PopAuto %
                   =:
 
@@ -1461,221 +1571,122 @@ Definition := "CONST" { ConstantDeclaration ";" } |
               "VAR" { VariableDeclaration ";" } |
               DefProcedureHeading ";" =:
 
-AsmStatement :=                                                            % VAR CurrentAsm: CARDINAL ; %
-                'ASM'                                                      % IF Pass3
-                                                                             THEN
-                                                                                PushAutoOn ;
-                                                                                PushT(0) ;  (* operand count *)
-                                                                                PushT(MakeGnuAsm())
-                                                                             END
+AsmStatement :=                                                            % VAR CurrentAsm: CARDINAL ;
+                                                                             tok: CARDINAL ; %
+                                                                           % tok := GetTokenNo () %
+                'ASM'                                                      % PushAutoOn ;
+                                                                             PushT (0) ;  (* operand count *)
+                                                                             PushT (MakeGnuAsm ())
                                                                            %
-                [ 'VOLATILE'                                               % IF Pass3
-                                                                             THEN
-                                                                                PopT(CurrentAsm) ;
-                                                                                PutGnuAsmVolatile(CurrentAsm) ;
-                                                                                PushT(CurrentAsm)
-                                                                             END
+                [ 'VOLATILE'                                               % PopT (CurrentAsm) ;
+                                                                             PutGnuAsmVolatile (CurrentAsm) ;
+                                                                             PushT (CurrentAsm)
                                                                            %
-                ] '(' AsmOperands                                          % IF Pass3
-                                                                             THEN
-                                                                                PopNothing ;  (* throw away interface sym *)
-                                                                                BuildInline ;
-                                                                                PopNothing ;  (* throw away count *)
-                                                                                PopAuto
-                                                                             END
+                ] '(' AsmOperands                                          % PopNothing ;  (* throw away interface sym *)
+                                                                             BuildAsm (tok) ;
+                                                                             PopNothing ;  (* throw away count *)
+                                                                             PopAuto
                                                                            %
                   ')' =:
 
 AsmOperands :=                                                             % VAR CurrentAsm, count: CARDINAL ;
                                                                                  str: CARDINAL ;
                                                                            %
-               string                                                      % IF Pass3
+               ConstExpression                                             % PopT (str) ;
+                                                                             PopT (CurrentAsm) ;
+                                                                             Assert (IsGnuAsm (CurrentAsm) OR IsGnuAsmVolatile (CurrentAsm)) ;
+                                                                             PopT (count) ;
+                                                                             IF DebugAsm
                                                                              THEN
-                                                                                PopT(str) ;
-                                                                                PopT(CurrentAsm) ;
-                                                                                Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
-                                                                                PopT(count) ;
-                                                                                IF DebugAsm
-                                                                                THEN
-                                                                                   printf1('1: count of asm operands: %d\n', count)
-                                                                                END ;
-                                                                                PushT(count) ;
-                                                                                (* adds the name/instruction for this asm *)
-                                                                                PutGnuAsm(CurrentAsm, str) ;
-                                                                                PushT(CurrentAsm) ;
-                                                                                PushT(NulSym)    (* the InterfaceSym *)
-                                                                             END
+                                                                                printf1 ('1: count of asm operands: %d\n', count)
+                                                                             END ;
+                                                                             PushT (count) ;
+                                                                             (* adds the name/instruction for this asm *)
+                                                                             PutGnuAsm (CurrentAsm, str) ;
+                                                                             PushT (CurrentAsm) ;
+                                                                             PushT (NulSym)    (* the InterfaceSym *)
                                                                            %
                        ( AsmOperandSpec |                                  % (* epsilon *)
-                                                                             IF Pass3
-                                                                             THEN
-                                                                                PutGnuAsmSimple(CurrentAsm)
-                                                                             END
+                                                                             PutGnuAsmSimple (CurrentAsm)
                                                                            %
                                                         )
                =:
 
 AsmOperandSpec :=                                                          % VAR CurrentAsm, outputs, inputs, trash, count: CARDINAL ;
                                                                            %
-                  [ ':' AsmList                                            % IF Pass3
+                    ':' AsmOutputList                                      % PopT(outputs) ;
+                                                                             PopT(CurrentAsm) ;
+                                                                             Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
+                                                                             PopT(count) ;
+                                                                             IF DebugAsm
                                                                              THEN
-                                                                                PopT(outputs) ;
-                                                                                PopT(CurrentAsm) ;
-                                                                                Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
-                                                                                PopT(count) ;
-                                                                                IF DebugAsm
-                                                                                THEN
-                                                                                   printf1('2: output count of asm operands: %d\n', count)
-                                                                                END ;
-                                                                                PutGnuAsmOutput(CurrentAsm, outputs) ;
-                                                                                PushT(0) ;  (* reset count *)
-                                                                                PushT(CurrentAsm) ;
-                                                                                PushT(NulSym)    (* the InterfaceSym *)
-                                                                             END
+                                                                                printf1('2: output count of asm operands: %d\n', count)
+                                                                             END ;
+                                                                             PutGnuAsmOutput(CurrentAsm, outputs) ;
+                                                                             PushT(0) ;  (* reset count *)
+                                                                             PushT(CurrentAsm) ;
+                                                                             PushT(NulSym)    (* the InterfaceSym *)
                                                                            %
-                     [ ':' AsmList                                         % IF Pass3
+                     [ ':' AsmInputList                                    % PopT(inputs) ;
+                                                                             PopT(CurrentAsm) ;
+                                                                             Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
+                                                                             PopT(count) ;
+                                                                             IF DebugAsm
                                                                              THEN
-                                                                                PopT(inputs) ;
-                                                                                PopT(CurrentAsm) ;
-                                                                                Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
-                                                                                PopT(count) ;
-                                                                                IF DebugAsm
-                                                                                THEN
-                                                                                   printf1('3: input count of asm operands: %d\n', count)
-                                                                                END ;
-                                                                                PutGnuAsmInput(CurrentAsm, inputs) ;
-                                                                                PushT(0) ;  (* reset count *)
-                                                                                PushT(CurrentAsm) ;
-                                                                                PushT(NulSym)    (* the InterfaceSym *)
-                                                                             END
+                                                                                printf1('3: input count of asm operands: %d\n', count)
+                                                                             END ;
+                                                                             PutGnuAsmInput(CurrentAsm, inputs) ;
+                                                                             PushT(0) ;  (* reset count *)
+                                                                             PushT(CurrentAsm) ;
+                                                                             PushT(NulSym)    (* the InterfaceSym *)
                                                                            %
-                        [ ':' TrashList                                    % IF Pass3
+                        [ ':' AsmTrashList                                 % PopT(trash) ;
+                                                                             PopT(CurrentAsm) ;
+                                                                             Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
+                                                                             PopT(count) ;
+                                                                             IF DebugAsm
                                                                              THEN
-                                                                                PopT(trash) ;
-                                                                                PopT(CurrentAsm) ;
-                                                                                Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
-                                                                                PopT(count) ;
-                                                                                IF DebugAsm
-                                                                                THEN
-                                                                                   printf1('4: trash count of asm operands: %d\n', count)
-                                                                                END ;
-                                                                                PutGnuAsmTrash(CurrentAsm, trash) ;
-                                                                                PushT(0) ;  (* reset count *)
-                                                                                PushT(CurrentAsm) ;
-                                                                                PushT(NulSym)    (* the InterfaceSym *)
-                                                                             END
+                                                                                printf1('4: trash count of asm operands: %d\n', count)
+                                                                             END ;
+                                                                             PutGnuAsmTrash(CurrentAsm, trash) ;
+                                                                             PushT(0) ;  (* reset count *)
+                                                                             PushT(CurrentAsm) ;
+                                                                             PushT(NulSym)    (* the InterfaceSym *)
                                                                            %
-                           ] ] ]
+                           ] ]
             =:
 
-AsmList     :=                                                             % VAR count, CurrentAsm, CurrentInterface: CARDINAL ; %
-                                                                           % IF Pass3
-                                                                             THEN
-                                                                                PopT(CurrentInterface) ;
-                                                                                PopT(CurrentAsm) ;
-                                                                                PopT(count) ;
-                                                                                Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
-                                                                                PushT(count) ;
-                                                                                PushT(CurrentAsm) ;
-                                                                                PushT(CurrentInterface) ;
-                                                                                IF DebugAsm
-                                                                                THEN
-                                                                                   printf1('8: AsmList has a count of asm operands: %d\n', count)
-                                                                                END
-                                                                             END
-                                                                           %
-               [ AsmElement ] { ',' AsmElement } =:
+AsmOutputList := [ AsmOutputElement ] { ',' AsmOutputElement } =:
+
+AsmInputList := [ AsmInputElement ] { ',' AsmInputElement } =:
 
 NamedOperand := '[' Ident ']' =:
 
 AsmOperandName :=  ( NamedOperand
                                   |                                        % IF IsAutoPushOn()
                                                                              THEN
-                                                                                PushTF(NulName, identtok)
+                                                                                PushTF (NulName, identtok)
                                                                              END
                                                                            %
                                     )
                 =:
 
-AsmElement :=                                                              % VAR n, str, expr,
-                                                                                 CurrentInterface,
-                                                                                 CurrentAsm, name: CARDINAL ; %
-              AsmOperandName
+AsmInputElement := AsmOperandName
+                   ConstExpression '(' Expression                          % BuildAsmElement (TRUE, FALSE)
+                                                                           %
+                                   ')'
+                 =:
 
-              string '(' Expression                                        % IF Pass3
-                                                                             THEN
-                                                                                PopT(expr) ;
-                                                                                PopT(str) ;
-                                                                                PopT(name) ;
-                                                                                PopT(CurrentInterface) ;
-                                                                                PopT(CurrentAsm) ;
-                                                                                Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
-                                                                                PopT(n) ;
-                                                                                INC(n) ;
-                                                                                IF CurrentInterface=NulSym
-                                                                                THEN
-                                                                                   CurrentInterface := MakeRegInterface()
-                                                                                END ;
-                                                                                IF DebugAsm
-                                                                                THEN
-                                                                                   printf1('5: count of asm operands: %d\n', n)
-                                                                                END ;
-                                                                                PutRegInterface(CurrentInterface, n, name, str, expr) ;
-                                                                                PushT(n) ;
-                                                                                PushT(CurrentAsm) ;
-                                                                                PushT(CurrentInterface)
-                                                                             END
+AsmOutputElement := AsmOperandName
+                    ConstExpression '(' Expression                         % BuildAsmElement (FALSE, TRUE)
                                                                            %
-                      ')'
-           =:
+                                    ')'
+                  =:
 
-TrashList :=                                                               % VAR CurrentInterface,
-                                                                                 CurrentAsm,
-                                                                                 n, str          : CARDINAL ; %
-             [ string                                                      % IF Pass3
-                                                                             THEN
-                                                                                PopT(str) ;
-                                                                                PopT(CurrentInterface) ;
-                                                                                PopT(CurrentAsm) ;
-                                                                                PopT(n) ;
-                                                                                INC(n) ;
-                                                                                Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
-                                                                                IF DebugAsm
-                                                                                THEN
-                                                                                   printf1('6: count of asm trash operands: %d\n', n)
-                                                                                END ;
-                                                                                IF CurrentInterface=NulSym
-                                                                                THEN
-                                                                                   CurrentInterface := MakeRegInterface()
-                                                                                END ;
-                                                                                PutRegInterface(CurrentInterface, n, NulName, str, NulSym) ;
-                                                                                PushT(n) ;
-                                                                                PushT(CurrentAsm) ;
-                                                                                PushT(CurrentInterface)
-                                                                             END
+AsmTrashList :=  [ ConstExpression                                         % BuildAsmTrash
                                                                            %
-             ] { ',' string                                                % IF Pass3
-                                                                             THEN
-                                                                                PopT(str) ;
-                                                                                PopT(CurrentInterface) ;
-                                                                                PopT(CurrentAsm) ;
-                                                                                PopT(n) ;
-                                                                                INC(n) ;
-                                                                                Assert(IsGnuAsm(CurrentAsm) OR IsGnuAsmVolatile(CurrentAsm)) ;
-                                                                                IF DebugAsm
-                                                                                THEN
-                                                                                   printf1('7: count of asm trash operands: %d\n', n)
-                                                                                END ;
-                                                                                IF CurrentInterface=NulSym
-                                                                                THEN
-                                                                                   CurrentInterface := MakeRegInterface()
-                                                                                END ;
-                                                                                PutRegInterface(CurrentInterface, n, NulName, str, NulSym) ;
-                                                                                PushT(n) ;
-                                                                                PushT(CurrentAsm) ;
-                                                                                PushT(CurrentInterface)
-                                                                             END
+                 ] { ',' ConstExpression                                   % BuildAsmTrash
                                                                            %
-                } =:
+                   } =:
 
 FNB

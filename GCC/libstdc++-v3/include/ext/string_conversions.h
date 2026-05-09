@@ -1,6 +1,6 @@
 // String Conversions -*- C++ -*-
 
-// Copyright (C) 2008-2023 Free Software Foundation, Inc.
+// Copyright (C) 2008-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -29,7 +29,9 @@
 #ifndef _STRING_CONVERSIONS_H
 #define _STRING_CONVERSIONS_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #include <bits/requires_hosted.h> // GNU extensions are currently omitted
 
@@ -39,7 +41,7 @@
 
 #include <bits/c++config.h>
 #include <ext/numeric_traits.h>
-#include <bits/functexcept.h>
+#include <bits/stdexcept_throw.h>
 #include <cstdlib>
 #include <cwchar>
 #include <cstdio>

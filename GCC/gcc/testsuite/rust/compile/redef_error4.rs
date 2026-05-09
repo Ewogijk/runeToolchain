@@ -1,3 +1,6 @@
+#![feature(no_core)]
+#![no_core]
+
 struct Foo(i32, bool);
 
 impl Foo {
@@ -9,7 +12,7 @@ impl Foo {
         test()
     }
 
-    fn test() -> bool { // { dg-error "redefined multiple times" }
+    fn test() -> bool { // { dg-error "defined multiple times" }
         true
     }
 }

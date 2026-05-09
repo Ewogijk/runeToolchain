@@ -1,5 +1,5 @@
 /* Top-level LTO routines.
-   Copyright (C) 2009-2023 Free Software Foundation, Inc.
+   Copyright (C) 2009-2026 Free Software Foundation, Inc.
    Contributed by CodeSourcery, Inc.
 
 This file is part of GCC.
@@ -38,6 +38,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "stor-layout.h"
 #include "symbol-summary.h"
 #include "tree-vrp.h"
+#include "sreal.h"
+#include "ipa-cp.h"
 #include "ipa-prop.h"
 #include "debug.h"
 #include "lto.h"
@@ -60,8 +62,10 @@ along with GCC; see the file COPYING3.  If not see
 /* Number of parallel tasks to run.  */
 static int lto_parallelism;
 
+#ifdef HAVE_WORKING_FORK
 /* Number of active WPA streaming processes.  */
 static int nruns = 0;
+#endif
 
 /* GNU make's jobserver info.  */
 static jobserver_info *jinfo = NULL;
@@ -174,9 +178,9 @@ stream_out (char *temp_filename, lto_symtab_encoder_t encoder, int part)
 
   gcc_assert (!dump_file);
   streamer_dump_file = dump_begin (TDI_lto_stream_out, NULL, part);
-  ipa_write_optimization_summaries (encoder);
+  ipa_write_optimization_summaries (encoder, part == 0);
 
-  free (CONST_CAST (char *, file->filename));
+  free (const_cast<char *> (file->filename));
 
   lto_set_current_out_file (NULL);
   lto_obj_file_close (file);
@@ -263,7 +267,6 @@ stream_out_partitions (char *temp_filename, int blen, int min, int max,
 	      {
 		/* There are no free tokens, lets do the job outselves.  */
 		stream_out_partitions_1 (temp_filename, blen, min, max);
-		asm_nodes_output = true;
 		return;
 	      }
 	  }
@@ -292,7 +295,6 @@ stream_out_partitions (char *temp_filename, int blen, int min, int max,
       if (jinfo != NULL && jinfo->is_connected)
 	jinfo->disconnect ();
     }
-  asm_nodes_output = true;
 #else
   stream_out_partitions_1 (temp_filename, blen, min, max);
 #endif
@@ -377,14 +379,17 @@ lto_wpa_write_files (void)
 	       !lsei_end_p (lsei);
 	       lsei_next_in_partition (&lsei))
 	    {
-	      symtab_node *node = lsei_node (lsei);
-	      fprintf (symtab->dump_file, "%s ", node->dump_asm_name ());
+	      symtab_node *node = dyn_cast<symtab_node*> (lsei_node (lsei));
+	      if (node)
+		fprintf (symtab->dump_file, "%s ", node->dump_asm_name ());
 	    }
 	  fprintf (symtab->dump_file, "\n  Symbols in boundary: ");
 	  for (lsei = lsei_start (part->encoder); !lsei_end_p (lsei);
 	       lsei_next (&lsei))
 	    {
-	      symtab_node *node = lsei_node (lsei);
+	      symtab_node *node = dyn_cast<symtab_node*> (lsei_node (lsei));
+	      if (!node)
+		continue;
 	      if (!lto_symtab_encoder_in_partition_p (part->encoder, node))
 		{
 		  fprintf (symtab->dump_file, "%s ", node->dump_asm_name ());
@@ -543,7 +548,9 @@ do_whole_program_analysis (void)
 
   symtab_node::checking_verify_symtab_nodes ();
   bitmap_obstack_release (NULL);
-  if (flag_lto_partition == LTO_PARTITION_1TO1)
+  if (flag_ipa_reorder_for_locality)
+    lto_locality_map (param_max_locality_partition_size);
+  else if (flag_lto_partition == LTO_PARTITION_1TO1)
     lto_1_to_1_map ();
   else if (flag_lto_partition == LTO_PARTITION_MAX)
     lto_max_map ();
@@ -552,6 +559,8 @@ do_whole_program_analysis (void)
   else if (flag_lto_partition == LTO_PARTITION_BALANCED)
     lto_balanced_map (param_lto_partitions,
 		      param_max_partition_size);
+  else if (flag_lto_partition == LTO_PARTITION_CACHE)
+    lto_cache_map (param_lto_partitions, param_max_partition_size);
   else
     gcc_unreachable ();
 

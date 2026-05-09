@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---           Copyright (C) 2000-2023, Free Software Foundation, Inc.        --
+--           Copyright (C) 2000-2026, Free Software Foundation, Inc.        --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -24,7 +24,6 @@
 ------------------------------------------------------------------------------
 
 with Errout;      use Errout;
-with Sinfo;       use Sinfo;
 with Sinfo.Nodes; use Sinfo.Nodes;
 with Fname.UF;    use Fname.UF;
 with Lib;         use Lib;
@@ -250,6 +249,7 @@ package body Impunit is
     ("g-busorg", F),  -- GNAT.Bubble_Sort_G
     ("g-byorma", F),  -- GNAT.Byte_Order_Mark
     ("g-bytswa", F),  -- GNAT.Byte_Swapping
+    ("g-c_time", F),  -- GNAT.C_Time
     ("g-calend", F),  -- GNAT.Calendar
     ("g-catiio", F),  -- GNAT.Calendar.Time_IO
     ("g-casuti", F),  -- GNAT.Case_Util
@@ -360,7 +360,6 @@ package body Impunit is
     ("i-java  ", F),  -- Interfaces.Java
     ("i-javjni", F),  -- Interfaces.Java.JNI
     ("i-pacdec", F),  -- Interfaces.Packed_Decimal
-    ("i-vxinco", F),  -- Interfaces.VxWorks.Int_Connection
     ("i-vxwoio", F),  -- Interfaces.VxWorks.IO
     ("i-vxwork", F),  -- Interfaces.VxWorks
 
@@ -585,6 +584,7 @@ package body Impunit is
     ("a-cborma", T),  -- Ada.Containers.Bounded_Ordered_Maps
     ("a-cbhase", T),  -- Ada.Containers.Bounded_Hashed_Sets
     ("a-cbhama", T),  -- Ada.Containers.Bounded_Hashed_Maps
+    ("a-cbinho", T),  -- Ada.Containers.Bounded_Indefinite_Holders
     ("a-coinho", T),  -- Ada.Containers.Indefinite_Holders
     ("a-comutr", T),  -- Ada.Containers.Multiway_Trees
     ("a-cimutr", T),  -- Ada.Containers.Indefinite_Multiway_Trees
@@ -650,7 +650,7 @@ package body Impunit is
 
    type Aunit_Record is record
       Fname : String (1 .. 6);
-      Aname : String_Ptr_Const;
+      Aname : not null String_Ptr_Const;
    end record;
 
    --  Array of alternative unit names

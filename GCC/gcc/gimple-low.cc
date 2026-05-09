@@ -1,6 +1,6 @@
 /* GIMPLE lowering pass.  Converts High GIMPLE into Low GIMPLE.
 
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
 
 This file is part of GCC.
 
@@ -41,6 +41,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-inline.h"
 #include "gimple-walk.h"
 #include "attribs.h"
+#include "diagnostic-core.h"
 
 /* The differences between High GIMPLE and Low GIMPLE are the
    following:
@@ -78,6 +79,10 @@ struct lower_data
   bool cannot_fallthru;
 };
 
+/* Bitmap of LABEL_DECL uids for user labels moved into assume outlined
+   functions.  */
+static bitmap assume_labels;
+
 static void lower_stmt (gimple_stmt_iterator *, struct lower_data *);
 static void lower_gimple_bind (gimple_stmt_iterator *, struct lower_data *);
 static void lower_try_catch (gimple_stmt_iterator *, struct lower_data *);
@@ -85,6 +90,29 @@ static void lower_gimple_return (gimple_stmt_iterator *, struct lower_data *);
 static void lower_builtin_setjmp (gimple_stmt_iterator *);
 static void lower_builtin_posix_memalign (gimple_stmt_iterator *);
 static void lower_builtin_assume_aligned (gimple_stmt_iterator *);
+
+
+/* Helper function for lower_function_body, called via walk_gimple_seq.
+   Diagnose uses of user labels defined inside of assume attribute
+   expressions.  */
+
+static tree
+diagnose_assume_labels (tree *tp, int *, void *data)
+{
+  if (TREE_CODE (*tp) == LABEL_DECL
+      && !DECL_ARTIFICIAL (*tp)
+      && DECL_NAME (*tp)
+      && bitmap_bit_p (assume_labels, DECL_UID (*tp)))
+    {
+      struct walk_stmt_info *wi = (struct walk_stmt_info *) data;
+      auto_diagnostic_group d;
+      error_at (gimple_location (gsi_stmt (wi->gsi)),
+		"reference to label %qD defined inside of %<assume%> "
+		"attribute expression from outside of the attribute", *tp);
+      inform (DECL_SOURCE_LOCATION (*tp), "%qD defined here", *tp);
+    }
+  return NULL_TREE;
+}
 
 
 /* Lower the body of current_function_decl from High GIMPLE into Low
@@ -168,6 +196,15 @@ lower_function_body (void)
   /* Once the old body has been lowered, replace it with the new
      lowered sequence.  */
   gimple_set_body (current_function_decl, lowered_body);
+
+  if (assume_labels)
+    {
+      struct walk_stmt_info wi;
+
+      memset (&wi, 0, sizeof (wi));
+      walk_gimple_seq (lowered_body, NULL, diagnose_assume_labels, &wi);
+      BITMAP_FREE (assume_labels);
+    }
 
   gcc_assert (data.block == DECL_INITIAL (current_function_decl));
   BLOCK_SUBBLOCKS (data.block)
@@ -335,6 +372,12 @@ find_assumption_locals_r (gimple_stmt_iterator *gsi_p, bool *,
       {
 	tree label = gimple_label_label (as_a <glabel *> (stmt));
 	data->id.decl_map->put (label, label);
+	if (DECL_NAME (label) && !DECL_ARTIFICIAL (label))
+	  {
+	    if (assume_labels == NULL)
+	      assume_labels = BITMAP_ALLOC (NULL);
+	    bitmap_set_bit (assume_labels, DECL_UID (label));
+	  }
 	break;
       }
     case GIMPLE_RETURN:
@@ -374,15 +417,22 @@ assumption_copy_decl (tree decl, copy_body_data *id)
   gcc_assert (VAR_P (decl)
 	      || TREE_CODE (decl) == PARM_DECL
 	      || TREE_CODE (decl) == RESULT_DECL);
+  if (TREE_THIS_VOLATILE (decl))
+    type = build_pointer_type (type);
   tree copy = build_decl (DECL_SOURCE_LOCATION (decl),
 			  PARM_DECL, DECL_NAME (decl), type);
   if (DECL_PT_UID_SET_P (decl))
     SET_DECL_PT_UID (copy, DECL_PT_UID (decl));
-  TREE_ADDRESSABLE (copy) = TREE_ADDRESSABLE (decl);
-  TREE_READONLY (copy) = TREE_READONLY (decl);
-  TREE_THIS_VOLATILE (copy) = TREE_THIS_VOLATILE (decl);
-  DECL_NOT_GIMPLE_REG_P (copy) = DECL_NOT_GIMPLE_REG_P (decl);
-  DECL_BY_REFERENCE (copy) = DECL_BY_REFERENCE (decl);
+  TREE_THIS_VOLATILE (copy) = 0;
+  if (TREE_THIS_VOLATILE (decl))
+    TREE_READONLY (copy) = 1;
+  else
+    {
+      TREE_ADDRESSABLE (copy) = TREE_ADDRESSABLE (decl);
+      TREE_READONLY (copy) = TREE_READONLY (decl);
+      DECL_NOT_GIMPLE_REG_P (copy) = DECL_NOT_GIMPLE_REG_P (decl);
+      DECL_BY_REFERENCE (copy) = DECL_BY_REFERENCE (decl);
+    }
   DECL_ARG_TYPE (copy) = type;
   ((lower_assumption_data *) id)->decls.safe_push (decl);
   return copy_decl_for_dup_finish (id, decl, copy);
@@ -466,6 +516,11 @@ adjust_assumption_stmt_op (tree *tp, int *, void *datap)
     case PARM_DECL:
     case RESULT_DECL:
       *tp = remap_decl (t, &data->id);
+      if (TREE_THIS_VOLATILE (t) && *tp != t)
+	{
+	  *tp = build_simple_mem_ref (*tp);
+	  TREE_THIS_NOTRAP (*tp) = 1;
+	}
       break;
     default:
       break;
@@ -600,6 +655,11 @@ lower_assumption (gimple_stmt_iterator *gsi, struct lower_data *data)
       /* Remaining arguments will be the variables/parameters
 	 mentioned in the condition.  */
       vargs[i - sz] = lad.decls[i - 1];
+      if (TREE_THIS_VOLATILE (lad.decls[i - 1]))
+	{
+	  TREE_ADDRESSABLE (lad.decls[i - 1]) = 1;
+	  vargs[i - sz] = build_fold_addr_expr (lad.decls[i - 1]);
+	}
       /* If they have gimple types, we might need to regimplify
 	 them to make the IFN_ASSUME call valid.  */
       if (is_gimple_reg_type (TREE_TYPE (vargs[i - sz]))
@@ -717,6 +777,10 @@ lower_stmt (gimple_stmt_iterator *gsi, struct lower_data *data)
 	gsi_next (gsi);
       return;
 
+    case GIMPLE_OMP_STRUCTURED_BLOCK:
+      /* These are supposed to be removed already in OMP lowering.  */
+      gcc_unreachable ();
+
     case GIMPLE_NOP:
     case GIMPLE_ASM:
     case GIMPLE_ASSIGN:
@@ -725,6 +789,8 @@ lower_stmt (gimple_stmt_iterator *gsi, struct lower_data *data)
     case GIMPLE_EH_MUST_NOT_THROW:
     case GIMPLE_OMP_FOR:
     case GIMPLE_OMP_SCOPE:
+    case GIMPLE_OMP_DISPATCH:
+    case GIMPLE_OMP_INTEROP:
     case GIMPLE_OMP_SECTIONS:
     case GIMPLE_OMP_SECTIONS_SWITCH:
     case GIMPLE_OMP_SECTION:
@@ -784,6 +850,21 @@ lower_stmt (gimple_stmt_iterator *gsi, struct lower_data *data)
 	    data->cannot_fallthru = true;
 	    gsi_next (gsi);
 	    return;
+	  }
+
+	if (gimple_call_internal_p (stmt, IFN_ASAN_MARK))
+	  {
+	    tree base = gimple_call_arg (stmt, 1);
+	    gcc_checking_assert (TREE_CODE (base) == ADDR_EXPR);
+	    tree decl = TREE_OPERAND (base, 0);
+	    if (VAR_P (decl) && TREE_STATIC (decl))
+	      {
+		/* Don't poison a variable with static storage; it might have
+		   gotten marked before gimplify_init_constructor promoted it
+		   to static.  */
+		gsi_remove (gsi, true);
+		return;
+	      }
 	  }
 
 	/* We delay folding of built calls from gimplification to
@@ -1200,7 +1281,7 @@ lower_builtin_setjmp (gimple_stmt_iterator *gsi)
   /* __builtin_setjmp_{setup,receiver} aren't ECF_RETURNS_TWICE and for RTL
      these builtins are modelled as non-local label jumps to the label
      that is passed to these two builtins, so pretend we have a non-local
-     label during GIMPLE passes too.  See PR60003.  */ 
+     label during GIMPLE passes too.  See PR60003.  */
   cfun->has_nonlocal_label = 1;
 
   /* NEXT_LABEL is the label __builtin_longjmp will jump to.  Its address is

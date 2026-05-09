@@ -1,5 +1,5 @@
 /* Declarations for the parser for C and Objective-C.
-   Copyright (C) 1987-2023 Free Software Foundation, Inc.
+   Copyright (C) 1987-2026 Free Software Foundation, Inc.
 
    Parser actions based on the old Bison parser; structure somewhat
    influenced by and fragments based on the C++ parser.
@@ -80,6 +80,17 @@ struct GTY (()) c_token {
   }
 };
 
+/* This should have the same layout as c_tree_token_vec
+   in c-decl.cc, but for GTY reasons with ObjC can't be
+   GTY itself.  */
+struct c_tree_token_vec_struct {
+  struct tree_base base;
+  vec<c_token, va_gc> *tokens;
+};
+
+#define C_TOKEN_VEC_TOKENS(NODE) \
+  (((struct c_tree_token_vec_struct *) TREE_CHECK (NODE, C_TOKEN_VEC))->tokens)
+
 /* The parser.  */
 struct c_parser;
 
@@ -145,7 +156,8 @@ extern void c_parser_skip_until_found (c_parser *parser, enum cpp_ttype type,
 				       const char *msgid,
 				       location_t = UNKNOWN_LOCATION);
 extern bool c_parser_next_token_starts_declspecs (c_parser *parser);
-bool c_parser_next_tokens_start_declaration (c_parser *parser);
+bool c_parser_next_tokens_start_declaration (c_parser *parser,
+					     unsigned int n = 1);
 bool c_token_starts_typename (c_token *token);
 
 /* Abstraction to avoid defining c_parser here which messes up gengtype
@@ -193,5 +205,6 @@ extern void c_parser_declspecs (c_parser *, struct c_declspecs *, bool, bool,
 				bool, bool, bool, bool, bool,
 				enum c_lookahead_kind);
 extern struct c_type_name *c_parser_type_name (c_parser *, bool = false);
+extern bool c_maybe_parse_omp_decl (tree, tree);
 
 #endif

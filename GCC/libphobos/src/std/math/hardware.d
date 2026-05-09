@@ -33,6 +33,7 @@ version (SPARC64)   version = SPARC_Any;
 version (SystemZ)   version = IBMZ_Any;
 version (RISCV32)   version = RISCV_Any;
 version (RISCV64)   version = RISCV_Any;
+version (LoongArch64)   version = LoongArch_Any;
 
 version (D_InlineAsm_X86)    version = InlineAsm_X86_Any;
 version (D_InlineAsm_X86_64) version = InlineAsm_X86_Any;
@@ -60,7 +61,9 @@ else version (X86_Any)   version = IeeeFlagsSupport;
 else version (PPC_Any)   version = IeeeFlagsSupport;
 else version (RISCV_Any) version = IeeeFlagsSupport;
 else version (MIPS_Any)  version = IeeeFlagsSupport;
+else version (LoongArch_Any) version = IeeeFlagsSupport;
 else version (ARM_Any)   version = IeeeFlagsSupport;
+else version (SPARC_Any) version = IeeeFlagsSupport;
 
 // Struct FloatingPointControl is only available if hardware FP units are available.
 version (D_HardFloat)
@@ -88,8 +91,9 @@ private:
     // The x87 FPU status register is 16 bits.
     // The Pentium SSE2 status register is 32 bits.
     // The ARM and PowerPC FPSCR is a 32-bit register.
-    // The SPARC FSR is a 32bit register (64 bits for SPARC 7 & 8, but high bits are uninteresting).
+    // The SPARC FSR is a 32-bit register (64 bits for SPARC V9, but high bits are uninteresting).
     // The RISC-V (32 & 64 bit) fcsr is 32-bit register.
+    // THe LoongArch fcsr (fcsr0) is a 32-bit register.
     uint flags;
 
     version (CRuntime_Microsoft)
@@ -108,6 +112,36 @@ private:
         }
         // Don't bother about subnormals, they are not supported on most CPUs.
         //  SUBNORMAL_MASK = 0x02;
+    }
+    else version (Solaris)
+    {
+        // Solaris <fenv.h> uses hardware-incompatible floating-point status flags.
+        // Use the <sys/fsr.h> AEXC (Accrued EXCeption) bit field of fsr instead.
+        version (SPARC_Any)
+        {
+            enum : int
+            {
+                INEXACT_MASK    = 0x020,
+                UNDERFLOW_MASK  = 0x080,
+                OVERFLOW_MASK   = 0x100,
+                DIVBYZERO_MASK  = 0x040,
+                INVALID_MASK    = 0x200,
+                EXCEPTIONS_MASK = 0x3E0,
+            }
+        }
+        // Use the <sys/fp.h> masks for 80387 control word or SSE/SSE2 MXCSR instead.
+        else version (X86_Any)
+        {
+            enum : int
+            {
+                INEXACT_MASK    = 0x20,
+                UNDERFLOW_MASK  = 0x10,
+                OVERFLOW_MASK   = 0x08,
+                DIVBYZERO_MASK  = 0x04,
+                INVALID_MASK    = 0x01,
+                EXCEPTIONS_MASK = 0x3D,
+            }
+        }
     }
     else
     {
@@ -174,6 +208,20 @@ private:
                     return result;
                 }
             }
+            else version (SPARC_Any)
+            {
+                version (D_SoftFloat)
+                    return 0;
+                else
+                {
+                    uint result = void;
+                    asm pure nothrow @nogc
+                    {
+                        "st %%fsr, %0" : "=m" (result);
+                    }
+                    return result & EXCEPTIONS_MASK;
+                }
+            }
             else
                 assert(0, "Not yet supported");
         }
@@ -207,14 +255,21 @@ private:
         }
         else version (RISCV_Any)
         {
-            mixin(`
             uint result = void;
             asm pure nothrow @nogc
             {
                 "frflags %0" : "=r" (result);
             }
             return result;
-            `);
+        }
+        else version (LoongArch_Any)
+        {
+            uint result = void;
+            asm pure nothrow @nogc
+            {
+                "movfcsr2gr %0, $fcsr2" : "=r" (result);
+            }
+            return result & EXCEPTIONS_MASK;
         }
         else
             assert(0, "Not yet supported");
@@ -273,6 +328,24 @@ private:
                     }
                 }
             }
+            else version (SPARC_Any)
+            {
+                version (D_SoftFloat)
+                    return;
+                else
+                {
+                    uint fsr;
+                    asm pure nothrow @nogc
+                    {
+                        "st %%fsr, %0" : "=m" (fsr);
+                    }
+                    fsr &= ~EXCEPTIONS_MASK;
+                    asm pure nothrow @nogc
+                    {
+                        "ld %0, %%fsr" : : "m" (fsr);
+                    }
+                }
+            }
             else
                 assert(0, "Not yet supported");
         }
@@ -295,13 +368,18 @@ private:
         }
         else version (RISCV_Any)
         {
-            mixin(`
             uint newValues = 0x0;
             asm pure nothrow @nogc
             {
                 "fsflags %0" : : "r" (newValues);
             }
-            `);
+        }
+        else version (LoongArch_Any)
+        {
+            asm nothrow @nogc
+            {
+                "movgr2fcsr $fcsr2,$r0";
+            }
         }
         else
         {
@@ -601,6 +679,36 @@ nothrow @nogc:
                              | roundUp | roundToZero,
         }
     }
+    else version (Solaris)
+    {
+        // Solaris <fenv.h> uses hardware-incompatible floating-point status flags.
+        // Use the <sys/fsr.h> RD (Rounding Direction) field of fsr instead.
+        version (SPARC_Any)
+        {
+            enum : RoundingMode
+            {
+                roundToNearest = 0x00000000,
+                roundDown      = 0xC0000000,
+                roundUp        = 0x80000000,
+                roundToZero    = 0x40000000,
+                roundingMask   = roundToNearest | roundDown
+                                 | roundUp | roundToZero,
+            }
+        }
+        // Use the <sys/fp.h> rounding options in control word instead.
+        else version (X86_Any)
+        {
+            enum : RoundingMode
+            {
+                roundToNearest = 0x000,
+                roundDown      = 0x400,
+                roundUp        = 0x800,
+                roundToZero    = 0xc00,
+                roundingMask   = roundToNearest | roundDown
+                                 | roundUp | roundToZero,
+            }
+        }
+    }
     else
     {
         enum : RoundingMode
@@ -725,6 +833,21 @@ nothrow @nogc:
                                  | inexactException,
         }
     }
+    else version (LoongArch_Any)
+    {
+        enum : ExceptionMask
+        {
+            inexactException      = 0x00,
+            divByZeroException    = 0x01,
+            overflowException     = 0x02,
+            underflowException    = 0x04,
+            invalidException      = 0x08,
+            severeExceptions   = overflowException | divByZeroException
+                                 | invalidException,
+            allExceptions      = severeExceptions | underflowException
+                                 | inexactException,
+        }
+    }
     else version (MIPS_Any)
     {
         enum : ExceptionMask
@@ -812,6 +935,12 @@ nothrow @nogc:
             return true;
         else version (MIPS_Any)
             return true;
+        else version (LoongArch_Any)
+            return true;
+        else version (SPARC_Any)
+            return true;
+        else version (SPARC_Any)
+            return true;
         else version (ARM_Any)
         {
             // The hasExceptionTraps_impl function is basically pure,
@@ -885,13 +1014,17 @@ private:
     {
         alias ControlState = uint;
     }
+    else version (LoongArch_Any)
+    {
+        alias ControlState = uint;
+    }
     else version (MIPS_Any)
     {
         alias ControlState = uint;
     }
     else version (SPARC_Any)
     {
-        alias ControlState = ulong;
+        alias ControlState = uint;
     }
     else version (IBMZ_Any)
     {
@@ -973,6 +1106,20 @@ private:
                     return cont;
                 }
             }
+            else version (SPARC_Any)
+            {
+                version (D_SoftFloat)
+                    return 0;
+                else
+                {
+                    ControlState cont;
+                    asm pure nothrow @nogc
+                    {
+                        "st %%fsr, %0" : "=m" (cont);
+                    }
+                    return cont & allExceptions;
+                }
+            }
             else
                 assert(0, "Not yet supported");
         }
@@ -999,14 +1146,22 @@ private:
         }
         else version (RISCV_Any)
         {
-            mixin(`
             ControlState cont;
             asm pure nothrow @nogc
             {
                 "frcsr %0" : "=r" (cont);
             }
             return cont;
-            `);
+        }
+        else version (LoongArch_Any)
+        {
+            ControlState cont;
+            asm pure nothrow @nogc
+            {
+                "movfcsr2gr %0, $fcsr0" : "=r" (cont);
+            }
+            cont &= (roundingMask | allExceptions);
+            return cont;
         }
         else
             assert(0, "Not yet supported");
@@ -1080,6 +1235,29 @@ private:
                     }
                 }
             }
+            else version (SPARC_Any)
+            {
+                version (D_SoftFloat)
+                    return;
+                else
+                {
+                    ControlState cont;
+                    asm pure nothrow @nogc
+                    {
+                        "st %%fsr, %0" : "=m" (cont);
+                    }
+                    /* Replace rounding mask. */
+                    cont &= ~roundingMask;
+                    cont |= (newState & roundingMask);
+                    /* Replace exception mask. */
+                    cont &= ~allExceptions;
+                    cont |= (newState & allExceptions);
+                    asm nothrow @nogc
+                    {
+                        "ld %0, %%fsr" : : "m" (cont);
+                    }
+                }
+            }
             else
                 assert(0, "Not yet supported");
         }
@@ -1113,12 +1291,18 @@ private:
         }
         else version (RISCV_Any)
         {
-            mixin(`
             asm pure nothrow @nogc
             {
                 "fscsr %0" : : "r" (newState);
             }
-            `);
+        }
+        else version (LoongArch_Any)
+        {
+            asm nothrow @nogc
+            {
+                "movgr2fcsr $fcsr0,%0" :
+                : "r" (newState & (roundingMask | allExceptions));
+            }
         }
         else
             assert(0, "Not yet supported");

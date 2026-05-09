@@ -1,4 +1,4 @@
-/* Copyright (C) 2019-2023 Free Software Foundation, Inc.
+/* Copyright (C) 2019-2026 Free Software Foundation, Inc.
 
    This file is part of GCC.
 
@@ -28,18 +28,11 @@
 #ifndef _AVX512BF16INTRIN_H_INCLUDED
 #define _AVX512BF16INTRIN_H_INCLUDED
 
-#ifndef __AVX512BF16__
+#if !defined (__AVX512BF16__)
 #pragma GCC push_options
 #pragma GCC target("avx512bf16")
 #define __DISABLE_AVX512BF16__
 #endif /* __AVX512BF16__ */
-
-/* Internal data types for implementing the intrinsics.  */
-typedef __bf16 __v32bf __attribute__ ((__vector_size__ (64)));
-
-/* The Intel API is flexible enough that we must allow aliasing with other
-   vector types, and their scalar components.  */
-typedef __bf16 __m512bh __attribute__ ((__vector_size__ (64), __may_alias__));
 
 /* Convert One BF16 Data to One Single Float Data.  */
 extern __inline float
@@ -48,6 +41,13 @@ _mm_cvtsbh_ss (__bf16 __A)
 {
   return __builtin_ia32_cvtbf2sf (__A);
 }
+
+/* Internal data types for implementing the intrinsics.  */
+typedef __bf16 __v32bf __attribute__ ((__vector_size__ (64)));
+
+/* The Intel API is flexible enough that we must allow aliasing with other
+   vector types, and their scalar components.  */
+typedef __bf16 __m512bh __attribute__ ((__vector_size__ (64), __may_alias__));
 
 /* vcvtne2ps2bf16 */
 
@@ -147,6 +147,6 @@ _mm512_mask_cvtpbh_ps (__m512 __S, __mmask16 __U, __m256bh __A)
 #ifdef __DISABLE_AVX512BF16__
 #undef __DISABLE_AVX512BF16__
 #pragma GCC pop_options
-#endif /* __DISABLE_AVX512BF16__ */
+#endif /* __DISABLE_AVX512BF16_512__ */
 
 #endif /* _AVX512BF16INTRIN_H_INCLUDED */

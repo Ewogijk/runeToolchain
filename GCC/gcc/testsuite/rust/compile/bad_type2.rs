@@ -1,3 +1,6 @@
+#![feature(no_core)]
+#![no_core]
+
 fn test(x: i32) -> i32 {
     return x + 1;
 }
@@ -8,7 +11,7 @@ fn main() {
 
     let mut x;
     x = 1;
-    x = true; // { dg-error "expected .<integer>. got .bool." }
+    x = true; // { dg-error "mismatched types, expected .<integer>. but got .bool." }
 
     let call_test = test(1);
 }

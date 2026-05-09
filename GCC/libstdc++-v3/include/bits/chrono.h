@@ -1,6 +1,6 @@
 // chrono::duration and chrono::time_point -*- C++ -*-
 
-// Copyright (C) 2008-2023 Free Software Foundation, Inc.
+// Copyright (C) 2008-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -30,25 +30,31 @@
 #ifndef _GLIBCXX_CHRONO_H
 #define _GLIBCXX_CHRONO_H 1
 
+#ifdef _GLIBCXX_SYSHDR
 #pragma GCC system_header
+#endif
 
 #if __cplusplus >= 201103L
 
 #include <ratio>
 #include <type_traits>
 #include <limits>
-#include <ctime>
+#if _GLIBCXX_HOSTED
+# include <ctime>
+#endif
 #include <bits/parse_numbers.h> // for literals support.
 #if __cplusplus >= 202002L
 # include <concepts>
 # include <compare>
 #endif
 
+#include <bits/version.h>
+
 namespace std _GLIBCXX_VISIBILITY(default)
 {
 _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
-#if __cplusplus >= 201703L
+#if __cplusplus >= 201703L && _GLIBCXX_HOSTED
   namespace filesystem { struct __file_clock; };
 #endif
 
@@ -276,8 +282,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	if constexpr (is_same_v<_ToDur, duration<_Rep, _Period>>)
 	  return __d;
 	else
+	  {
 #endif
-	{
 	  using __to_period = typename _ToDur::period;
 	  using __to_rep = typename _ToDur::rep;
 	  using __cf = ratio_divide<_Period, __to_period>;
@@ -285,7 +291,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  using __dc = __duration_cast_impl<_ToDur, __cf, __cr,
 					    __cf::num == 1, __cf::den == 1>;
 	  return __dc::__cast(__d);
-	}
+#if __cpp_inline_variables && __cpp_if_constexpr
+	  }
+#endif
       }
 
     /** Trait indicating whether to treat a type as a floating-point type.
@@ -368,9 +376,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       { };
 #endif // C++20
 
-#if __cplusplus >= 201703L
-# define __cpp_lib_chrono 201611L
-
+#if __cplusplus >= 201703L // C++ >= 17
     /** Convert a `duration` to type `ToDur` and round down.
      *
      * If the duration cannot be represented exactly in the result type,
@@ -464,7 +470,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // Make chrono::ceil<D> also usable as chrono::__detail::ceil<D>.
     namespace __detail { using chrono::ceil; }
 
-#else // ! C++17
+#else // ! __glibcxx_chrono
 
     // We want to use ceil even when compiling for earlier standards versions.
     // C++11 only allows a single statement in a constexpr function, so we
@@ -486,7 +492,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	  return __detail::__ceil_impl(chrono::duration_cast<_ToDur>(__d), __d);
 	}
     }
-#endif // C++17
+#endif // __glibcxx_chrono
 
     /// duration_values
     template<typename _Rep>
@@ -505,26 +511,13 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	{ return numeric_limits<_Rep>::lowest(); }
       };
 
-    /// @cond undocumented
-
-    template<typename _Tp>
-      struct __is_ratio
-      : std::false_type
-      { };
-
-    template<intmax_t _Num, intmax_t _Den>
-      struct __is_ratio<ratio<_Num, _Den>>
-      : std::true_type
-      { };
-
-    /// @endcond
-
     template<typename _Rep, typename _Period>
       class duration
       {
-	static_assert(!__is_duration<_Rep>::value, "rep cannot be a duration");
+	static_assert(!__is_duration<_Rep>::value,
+		      "rep cannot be a std::chrono::duration");
 	static_assert(__is_ratio<_Period>::value,
-		      "period must be a specialization of ratio");
+		      "period must be a specialization of std::ratio");
 	static_assert(_Period::num > 0, "period must be positive");
 
 	template<typename _Rep2>
@@ -884,7 +877,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     /// @}
 
     /// @cond undocumented
-#ifdef _GLIBCXX_USE_C99_STDINT_TR1
+#ifdef _GLIBCXX_USE_C99_STDINT
 # define _GLIBCXX_CHRONO_INT64_T int64_t
 #elif defined __INT64_TYPE__
 # define _GLIBCXX_CHRONO_INT64_T __INT64_TYPE__
@@ -1042,8 +1035,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
      * returns the closest value that is less than the argument.
      *
      * @tparam _ToDur The `duration` type to use for the result.
-     * @param __t A time point.
-     * @return The value of `__d` converted to type `_ToDur`.
+     * @param __tp A time point.
+     * @return The value of `__tp` rounded down to the precision of `_ToDur`.
      * @since C++17
      */
     template<typename _ToDur, typename _Clock, typename _Dur>
@@ -1063,8 +1056,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
      * returns the closest value that is greater than the argument.
      *
      * @tparam _ToDur The `duration` type to use for the result.
-     * @param __t A time point.
-     * @return The value of `__d` converted to type `_ToDur`.
+     * @param __tp A time point.
+     * @return The value of `__tp` rounded up to the precision of `_ToDur`.
      * @since C++17
      */
     template<typename _ToDur, typename _Clock, typename _Dur>
@@ -1085,8 +1078,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
      *
      * @tparam _ToDur The `duration` type to use for the result,
      *                which must have a non-floating-point `rep` type.
-     * @param __t A time point.
-     * @return The value of `__d` converted to type `_ToDur`.
+     * @param __tp A time point.
+     * @return The value of `__tp` rounded to the precision `_ToDur`.
      * @since C++17
      */
     template<typename _ToDur, typename _Clock, typename _Dur>
@@ -1207,6 +1200,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     /// @}
     /// @} group chrono
 
+#if _GLIBCXX_HOSTED
     // Clocks.
 
     // Why nanosecond resolution as the default?
@@ -1250,6 +1244,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
       now() noexcept;
 
       // Map to C API
+      [[__gnu__::__always_inline__]]
       static std::time_t
       to_time_t(const time_point& __t) noexcept
       {
@@ -1257,6 +1252,7 @@ _GLIBCXX_BEGIN_INLINE_ABI_NAMESPACE(_V2)
 			   (__t.time_since_epoch()).count());
       }
 
+      [[__gnu__::__always_inline__]]
       static time_point
       from_time_t(std::time_t __t) noexcept
       {
@@ -1321,11 +1317,18 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
     template<> inline constexpr bool is_clock_v<file_clock> = true;
     /// @}
 #endif // C++20
+#elif __cplusplus >= 202002L
+    // Define a fake clock like chrono::local_t so that sys_time etc.
+    // can be used for freestanding.
+    struct __sys_t;
+    template<typename _Duration>
+      using sys_time = time_point<__sys_t, _Duration>;
+    using sys_seconds = sys_time<seconds>;
+    using sys_days = sys_time<days>;
+#endif // _GLIBCXX_HOSTED
   } // namespace chrono
 
-#if __cplusplus >= 201402L
-#define __cpp_lib_chrono_udls 201304L
-
+#ifdef __glibcxx_chrono_udls // C++ >= 14
   inline namespace literals
   {
   /** ISO C++ 2014  namespace for suffixes for duration literals.
@@ -1446,9 +1449,9 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
   {
     using namespace literals::chrono_literals;
   } // namespace chrono
-#endif // C++14
+#endif // __glibcxx_chrono_udls
 
-#if __cplusplus >= 201703L
+#if __cplusplus >= 201703L && _GLIBCXX_HOSTED
   namespace filesystem
   {
     struct __file_clock
@@ -1466,14 +1469,14 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
 #if __cplusplus > 201703L
       template<typename _Dur>
 	static
-	chrono::file_time<_Dur>
+	chrono::file_time<common_type_t<_Dur, chrono::seconds>>
 	from_sys(const chrono::sys_time<_Dur>& __t) noexcept
 	{ return _S_from_sys(__t); }
 
       // For internal use only
       template<typename _Dur>
 	static
-	chrono::sys_time<_Dur>
+	chrono::sys_time<common_type_t<_Dur, chrono::seconds>>
 	to_sys(const chrono::file_time<_Dur>& __t) noexcept
 	{ return _S_to_sys(__t); }
 #endif // C++20
@@ -1490,25 +1493,101 @@ _GLIBCXX_END_INLINE_ABI_NAMESPACE(_V2)
       // For internal use only
       template<typename _Dur>
 	static
-	chrono::time_point<__file_clock, _Dur>
+	chrono::time_point<__file_clock, common_type_t<_Dur, chrono::seconds>>
 	_S_from_sys(const chrono::time_point<__sys_clock, _Dur>& __t) noexcept
 	{
-	  using __file_time = chrono::time_point<__file_clock, _Dur>;
+	  using _CDur = common_type_t<_Dur, chrono::seconds>;
+	  using __file_time = chrono::time_point<__file_clock, _CDur>;
 	  return __file_time{__t.time_since_epoch()} - _S_epoch_diff;
 	}
 
       // For internal use only
       template<typename _Dur>
 	static
-	chrono::time_point<__sys_clock, _Dur>
+	chrono::time_point<__sys_clock, common_type_t<_Dur, chrono::seconds>>
 	_S_to_sys(const chrono::time_point<__file_clock, _Dur>& __t) noexcept
 	{
-	  using __sys_time = chrono::time_point<__sys_clock, _Dur>;
+	  using _CDur = common_type_t<_Dur, chrono::seconds>;
+	  using __sys_time = chrono::time_point<__sys_clock, _CDur>;
 	  return __sys_time{__t.time_since_epoch()} + _S_epoch_diff;
 	}
     };
   } // namespace filesystem
-#endif // C++17
+#endif // C++17 && HOSTED
+
+#if _GLIBCXX_HOSTED
+#if ! defined _GLIBCXX_NO_SLEEP || defined _GLIBCXX_HAS_GTHREADS \
+    || _GLIBCXX_HAVE_LINUX_FUTEX
+namespace chrono
+{
+/// @cond undocumented
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++17-extensions"
+  // Convert a chrono::duration to a relative time represented as timespec
+  // (e.g. for use with nanosleep).
+  template<typename _Rep, typename _Period>
+    [[__nodiscard__]] _GLIBCXX14_CONSTEXPR inline
+    struct ::timespec
+    __to_timeout_timespec(const duration<_Rep, _Period>& __d)
+    {
+      struct ::timespec __ts{};
+
+      if (__d < __d.zero()) // Negative timeouts don't make sense.
+	return __ts;
+
+      if constexpr (ratio_greater<_Period, ratio<1>>::value
+		      || treat_as_floating_point<_Rep>::value)
+	{
+	  // Converting from e.g. chrono::hours::max() to chrono::seconds
+	  // would evaluate LLONG_MAX * 3600 which would overflow.
+	  // Limit to chrono::seconds::max().
+	  chrono::duration<double> __fmax(chrono::seconds::max());
+	  if (__d > __fmax) [[__unlikely__]]
+	    return chrono::__to_timeout_timespec(chrono::seconds::max());
+	}
+
+      auto __s = chrono::duration_cast<chrono::seconds>(__d);
+
+      if constexpr (is_integral<time_t>::value) // POSIX.1-2001 allows floating
+	{
+	  // Also limit to time_t maximum (only relevant for 32-bit time_t).
+	  constexpr auto __tmax = numeric_limits<time_t>::max();
+	  if (__s.count() > __tmax) [[__unlikely__]]
+	    {
+	      __ts.tv_sec = __tmax;
+	      return __ts;
+	    }
+	}
+
+      auto __ns = chrono::duration_cast<chrono::nanoseconds>(__d - __s);
+
+      if constexpr (treat_as_floating_point<_Rep>::value)
+	if (__ns.count() > 999999999) [[__unlikely__]]
+	  __ns = chrono::nanoseconds(999999999);
+
+      __ts.tv_sec = static_cast<time_t>(__s.count());
+      __ts.tv_nsec = static_cast<long>(__ns.count());
+      return __ts;
+    }
+#pragma GCC diagnostic pop
+
+  // Convert a chrono::time_point to an absolute time represented as timespec.
+  // All times before the epoch get converted to the epoch, so this assumes
+  // that we only use it for clocks where that's true.
+  // It should be safe to use this for system_clock and steady_clock.
+  template<typename _Clock, typename _Dur>
+    [[__nodiscard__]] _GLIBCXX14_CONSTEXPR inline
+    struct ::timespec
+    __to_timeout_timespec(const time_point<_Clock, _Dur>& __t)
+    {
+      return chrono::__to_timeout_timespec(__t.time_since_epoch());
+    }
+
+/// @endcond
+} // namespace chrono
+#endif // !NO_SLEEP || HAS_GTHREADS || HAVE_LINUX_FUTEX
+#endif // HOSTED
 
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace std

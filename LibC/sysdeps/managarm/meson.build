@@ -69,10 +69,13 @@ elif host_machine.cpu_family() == 'x86_64'
 	libc_sources += files(
 		'x86_64/signals.S',
 		'x86_64/thread_entry.S',
-		'x86_64/thread.cpp'
+		'x86_64/thread.cpp',
+		'x86_64/assembly-asserts.cpp',
 	)
 elif host_machine.cpu_family() == 'riscv64'
 	libc_sources += files(
+		'riscv64/signals.S',
+		'riscv64/thread_entry.S',
 		'riscv64/thread.cpp',
 	)
 else
@@ -131,9 +134,19 @@ if not no_headers
 		'include/abi-bits/rlim_t.h',
 		'include/abi-bits/sigval.h',
 		'include/abi-bits/sigevent.h',
+		'include/abi-bits/utmpx.h',
+		'include/abi-bits/utmp-defines.h',
 		subdir: 'abi-bits',
 		follow_symlinks: true
 	)
+
+	if host_machine.cpu_family() == 'riscv64'
+		install_headers(
+			'include/abi-bits/riscv-hwprobe.h',
+			subdir: 'abi-bits',
+			follow_symlinks: true
+		)
+	endif
 endif
 
 if not headers_only

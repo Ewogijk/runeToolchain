@@ -1,5 +1,13 @@
 // { dg-additional-options "-w" }
+#![feature(no_core)]
+#![no_core]
+
 #![feature(intrinsics)]
+
+#![feature(lang_items)]
+#[lang = "sized"]
+pub trait Sized {}
+
 mod intrinsics {
     extern "rust-intrinsic" {
         #[rustc_const_stable(feature = "const_int_wrapping", since = "1.40.0")]
@@ -44,7 +52,6 @@ macro_rules! impl_uint {
                 }
 
                 pub fn to_le(self) -> Self {
-                    #[cfg(target_endian = "little")]
                     {
                         self
                     }

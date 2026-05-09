@@ -32,6 +32,8 @@ int sys_ioctl(int fd, unsigned long request, void *arg, int *result);
 [[gnu::weak]] int sys_epoll_ctl(int epfd, int mode, int fd, struct epoll_event *ev);
 [[gnu::weak]] int sys_epoll_pwait(int epfd, struct epoll_event *ev, int n,
 		int timeout, const sigset_t *sigmask, int *raised);
+[[gnu::weak]] int sys_ppoll(struct pollfd *fds, nfds_t count, const struct timespec *ts,
+		const sigset_t *mask, int *num_events);
 [[gnu::weak]] int sys_mount(const char *source, const char *target,
 		const char *fstype, unsigned long flags, const void *data);
 [[gnu::weak]] int sys_umount2(const char *target, int flags);
@@ -93,6 +95,15 @@ int sys_ioctl(int fd, unsigned long request, void *arg, int *result);
 [[gnu::weak]] int sys_pidfd_open(pid_t pid, unsigned int flags, int *outfd);
 [[gnu::weak]] int sys_pidfd_getpid(int fd, pid_t *outpid);
 [[gnu::weak]] int sys_pidfd_send_signal(int pidfd, int sig, siginfo_t *info, unsigned int flags);
+
+[[gnu::weak]] int sys_process_vm_readv(pid_t pid,
+		const struct iovec *local_iov, unsigned long liovcnt,
+		const struct iovec *remote_iov, unsigned long riovcnt,
+		unsigned long flags, ssize_t *out);
+[[gnu::weak]] int sys_process_vm_writev(pid_t pid,
+		const struct iovec *local_iov, unsigned long liovcnt,
+		const struct iovec *remote_iov, unsigned long riovcnt,
+		unsigned long flags, ssize_t *out);
 
 } // namespace mlibc
 

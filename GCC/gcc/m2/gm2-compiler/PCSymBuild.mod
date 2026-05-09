@@ -1,6 +1,6 @@
 (* PCSymBuild.mod pass C symbol creation.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -39,7 +39,7 @@ FROM M2Quads IMPORT PushT, PopT, OperandT, PopN, PopTF, PushTF, IsAutoPushOn,
 
 FROM M2Options IMPORT Iso ;
 FROM StdIO IMPORT Write ;
-FROM M2System IMPORT IsPseudoSystemFunctionConstExpression ;
+FROM M2System IMPORT Cast, IsPseudoSystemFunctionConstExpression ;
 
 FROM M2Base IMPORT MixTypes,
                    ZType, RType, Char, Boolean, Val, Max, Min, Convert,
@@ -52,7 +52,7 @@ FROM M2Reserved IMPORT PlusTok, MinusTok, TimesTok, DivTok, ModTok,
                        LessTok, GreaterTok, HashTok, LessGreaterTok,
                        InTok, NotTok ;
 
-FROM SymbolTable IMPORT NulSym, ModeOfAddr,
+FROM SymbolTable IMPORT NulSym, ModeOfAddr, ProcedureKind,
                         StartScope, EndScope, GetScope, GetCurrentScope,
                         GetModuleScope,
                         SetCurrentModule, GetCurrentModule, SetFileModule,
@@ -64,7 +64,7 @@ FROM SymbolTable IMPORT NulSym, ModeOfAddr,
                         GetFromOuterModule,
                         CheckForEnumerationInCurrentModule,
                         GetMode, PutVariableAtAddress, ModeOfAddr, SkipType,
-                        IsSet, PutConstSet,
+                        IsSet, PutConstSet, IsType,
                         IsConst, IsConstructor, PutConst, PutConstructor,
                         PopValue, PushValue,
                         MakeTemporary, PutVar,
@@ -73,12 +73,12 @@ FROM SymbolTable IMPORT NulSym, ModeOfAddr,
                         CheckAnonymous,
                         IsProcedureBuiltin,
                         MakeProcType,
-                        NoOfParam,
+                        NoOfParamAny,
                         GetParam,
                         IsParameterVar, PutProcTypeParam,
                         PutProcTypeVarParam, IsParameterUnbounded,
                         PutFunction, PutProcTypeParam,
-                        GetType,
+                        GetType, IsVar,
                         IsAModula2Type, GetDeclaredMod ;
 
 FROM M2Batch IMPORT MakeDefinitionSource,
@@ -193,6 +193,22 @@ END GetSkippedType ;
 
 
 (*
+   CheckNotVar - checks to see that the top of stack is not a variable.
+*)
+
+PROCEDURE CheckNotVar (tok: CARDINAL) ;
+VAR
+   const: CARDINAL ;
+BEGIN
+   const := OperandT (1) ;
+   IF (const # NulSym) AND IsVar (const)
+   THEN
+      MetaErrorT1 (tok, 'not expecting a variable {%Aad} as a term in a constant expression', const)
+   END
+END CheckNotVar ;
+
+
+(*
    StartBuildDefinitionModule - Creates a definition module and starts
                                 a new scope.
 
@@ -241,19 +257,19 @@ END PCStartBuildDefModule ;
                               |------------|        |-----------|
 *)
 
-PROCEDURE PCEndBuildDefModule ;
+PROCEDURE PCEndBuildDefModule (tokno: CARDINAL) ;
 VAR
    NameStart,
    NameEnd  : CARDINAL ;
 BEGIN
    Assert(CompilingDefinitionModule()) ;
-   CheckForUnknownInModule ;
+   CheckForUnknownInModule (tokno) ;
    EndScope ;
    PopT(NameEnd) ;
    PopT(NameStart) ;
    IF NameStart#NameEnd
    THEN
-      WriteFormat2('inconsistant definition module was named (%a) and concluded as (%a)',
+      WriteFormat2('inconsistent definition module was named (%a) and concluded as (%a)',
                    NameStart, NameEnd)
    END ;
    M2Error.LeaveErrorScope
@@ -309,13 +325,13 @@ END PCStartBuildImpModule ;
                                   |------------|        |-----------|
 *)
 
-PROCEDURE PCEndBuildImpModule ;
+PROCEDURE PCEndBuildImpModule (tokno: CARDINAL) ;
 VAR
    NameStart,
    NameEnd  : Name ;
 BEGIN
    Assert(CompilingImplementationModule()) ;
-   CheckForUnknownInModule ;
+   CheckForUnknownInModule (tokno) ;
    EndScope ;
    PopT(NameEnd) ;
    PopT(NameStart) ;
@@ -382,13 +398,13 @@ END PCStartBuildProgModule ;
                            |------------|        |-----------|
 *)
 
-PROCEDURE PCEndBuildProgModule ;
+PROCEDURE PCEndBuildProgModule (tokno: CARDINAL) ;
 VAR
    NameStart,
    NameEnd  : Name ;
 BEGIN
    Assert(CompilingProgramModule()) ;
-   CheckForUnknownInModule ;
+   CheckForUnknownInModule (tokno) ;
    EndScope ;
    PopT(NameEnd) ;
    PopT(NameStart) ;
@@ -452,12 +468,12 @@ END PCStartBuildInnerModule ;
                          |------------|        |-----------|
 *)
 
-PROCEDURE PCEndBuildInnerModule ;
+PROCEDURE PCEndBuildInnerModule (tokno: CARDINAL) ;
 VAR
    NameStart,
    NameEnd  : Name ;
 BEGIN
-   CheckForUnknownInModule ;
+   CheckForUnknownInModule (tokno) ;
    EndScope ;
    PopT(NameEnd) ;
    PopT(NameStart) ;
@@ -661,6 +677,28 @@ END PCEndBuildProcedure ;
 
 
 (*
+   EndBuildForward - Ends building a forward declaration.
+
+                     The Stack:
+
+                     Entry                 Exit
+
+              Ptr ->
+                     +------------+
+                     | ProcSym    |
+                     |------------|
+                     | NameStart  |
+                     |------------|
+                                           Empty
+*)
+
+PROCEDURE PCEndBuildForward ;
+BEGIN
+   PopN (2)
+END PCEndBuildForward ;
+
+
+(*
    BuildProcedureHeading - Builds a procedure heading for the definition
                            module procedures.
 
@@ -806,7 +844,7 @@ PROCEDURE InitDesExpr (des: CARDINAL) ;
 VAR
    e: exprNode ;
 BEGIN
-   NEW(e) ;
+   NEW (e) ;
    WITH e^ DO
       tag := designator ;
       CASE tag OF
@@ -819,6 +857,8 @@ BEGIN
                       left := NIL
                    END
 
+      ELSE
+         InternalError ('expecting designator')
       END
    END ;
    PushAddress (exprStack, e)
@@ -1123,20 +1163,20 @@ BEGIN
       tok := GetTokenNo () ;
       t := MakeProcType (tok, CheckAnonymous (NulName)) ;
       i := 1 ;
-      n := NoOfParam(p) ;
+      n := NoOfParamAny (p) ;
       WHILE i<=n DO
          par := GetParam (p, i) ;
          IF IsParameterVar (par)
          THEN
-            PutProcTypeVarParam (t, GetType (par), IsParameterUnbounded (par))
+            PutProcTypeVarParam (tok, t, GetType (par), IsParameterUnbounded (par))
          ELSE
-            PutProcTypeParam (t, GetType (par), IsParameterUnbounded (par))
+            PutProcTypeParam (tok, t, GetType (par), IsParameterUnbounded (par))
          END ;
          INC(i)
       END ;
       IF GetType (p) # NulSym
       THEN
-         PutFunction (t, GetType (p))
+         PutFunction (tok, t, ProperProcedure, GetType (p))
       END ;
       RETURN( t )
    ELSE
@@ -1168,6 +1208,8 @@ BEGIN
                     third := more
                  END
 
+      ELSE
+         InternalError ('expecting function')
       END
    END ;
    PushAddress (exprStack, n)
@@ -1194,6 +1236,8 @@ BEGIN
                    expr := e
                  END
 
+      ELSE
+         InternalError ('expecting convert')
       END
    END ;
    PushAddress(exprStack, n)
@@ -1208,7 +1252,7 @@ PROCEDURE InitLeaf (m: constType; s, t: CARDINAL) ;
 VAR
    l: exprNode ;
 BEGIN
-   NEW(l) ;
+   NEW (l) ;
    WITH l^ DO
       tag := leaf ;
       CASE tag OF
@@ -1219,9 +1263,11 @@ BEGIN
                 sym := s
              END
 
+      ELSE
+         InternalError ('expecting leaf')
       END
    END ;
-   PushAddress(exprStack, l)
+   PushAddress (exprStack, l)
 END InitLeaf ;
 
 
@@ -1362,9 +1408,10 @@ END TypeToMeta ;
 
 
 (*
-   buildConstFunction - we are only concerned about resolving the return type o
+   buildConstFunction - we are only concerned about resolving the return type of
                         a function, so we can ignore all parameters - except
-                        the first one in the case of VAL(type, foo).
+                        the first one in the case of VAL(type, foo)
+                        and the type of bar in MIN (bar) and MAX (bar).
                         buildConstFunction uses a unary exprNode to represent
                         a function.
 *)
@@ -1391,7 +1438,7 @@ BEGIN
       second := PopAddress (exprStack) ;
       first := PopAddress (exprStack)
    END ;
-   IF func=Val
+   IF (func=Val) OR (func=Cast)
    THEN
       InitConvert (cast, NulSym, first, second)
    ELSIF (func=Max) OR (func=Min)
@@ -1402,6 +1449,38 @@ BEGIN
                     first, second, n>2)
    END
 END buildConstFunction ;
+
+
+(*
+   ErrorConstFunction - generate an error message at functok using func in the
+                        error message providing it is not NulSym.
+*)
+
+PROCEDURE ErrorConstFunction (func: CARDINAL; functok: CARDINAL) ;
+BEGIN
+   IF func = NulSym
+   THEN
+      IF Iso
+      THEN
+         ErrorFormat0 (NewError (functok),
+                       'the only functions permissible in a constant expression are: CAP, CAST, CHR, CMPLX, FLOAT, HIGH, IM, LENGTH, MAX, MIN, ODD, ORD, RE, SIZE, TSIZE, TRUNC, VAL and gcc builtins')
+      ELSE
+         ErrorFormat0 (NewError (functok),
+                       'the only functions permissible in a constant expression are: CAP, CHR, FLOAT, HIGH, MAX, MIN, ODD, ORD, SIZE, TSIZE, TRUNC, VAL and gcc builtins')
+      END
+   ELSE
+      IF Iso
+      THEN
+         MetaErrorT1 (functok,
+                      'the only functions permissible in a constant expression are: CAP, CAST, CHR, CMPLX, FLOAT, HIGH, IM, LENGTH, MAX, MIN, ODD, ORD, RE, SIZE, TSIZE, TRUNC, VAL and gcc builtins, but not {%1Ead}',
+                      func)
+      ELSE
+         MetaErrorT1 (functok,
+                      'the only functions permissible in a constant expression are: CAP, CHR, FLOAT, HIGH, MAX, MIN, ODD, ORD, SIZE, TSIZE, TRUNC, VAL and gcc builtins, but not {%1Ead}',
+                      func)
+      END
+   END
+END ErrorConstFunction ;
 
 
 (*
@@ -1418,7 +1497,10 @@ BEGIN
    PopTtok (func, functok) ;
    IF inDesignator
    THEN
-      IF (func#Convert) AND
+      IF func = NulSym
+      THEN
+         ErrorConstFunction (func, functok)
+      ELSIF (func#Convert) AND
          (IsPseudoBaseFunction(func) OR
           IsPseudoSystemFunctionConstExpression(func) OR
           (IsProcedure(func) AND IsProcedureBuiltin(func)))
@@ -1434,16 +1516,7 @@ BEGIN
             WriteFormat0('a constant type conversion can only have one argument')
          END
       ELSE
-         IF Iso
-         THEN
-            MetaErrorT1 (functok,
-                         'the only functions permissible in a constant expression are: CAP, CHR, CMPLX, FLOAT, HIGH, IM, LENGTH, MAX, MIN, ODD, ORD, RE, SIZE, TSIZE, TRUNC, VAL and gcc builtins, but not {%1Ead}',
-                        func)
-         ELSE
-            MetaErrorT1 (functok,
-                         'the only functions permissible in a constant expression are: CAP, CHR, FLOAT, HIGH, MAX, MIN, ODD, ORD, SIZE, TSIZE, TRUNC, VAL and gcc builtins, but not {%1Ead}',
-                        func)
-         END
+         ErrorConstFunction (func, functok)
       END
    END ;
    PushTtok (func, functok)
@@ -1513,9 +1586,9 @@ PROCEDURE InitBinary (m: constType; t: CARDINAL; o: Name) ;
 VAR
    l, r, b: exprNode ;
 BEGIN
-   r := PopAddress(exprStack) ;
-   l := PopAddress(exprStack) ;
-   NEW(b) ;
+   r := PopAddress (exprStack) ;
+   l := PopAddress (exprStack) ;
+   NEW (b) ;
    WITH b^ DO
       tag := binary ;
       CASE tag OF
@@ -1527,9 +1600,11 @@ BEGIN
                   right := r ;
                   op := o
                END
+      ELSE
+         InternalError ('expecting binary')
       END
    END ;
-   PushAddress(exprStack, b)
+   PushAddress (exprStack, b)
 END InitBinary ;
 
 
@@ -1541,10 +1616,10 @@ PROCEDURE BuildRelationConst ;
 VAR
    op: Name ;
 BEGIN
-   PopT(op) ;
+   PopT (op) ;
    IF inDesignator
    THEN
-      InitBinary(boolean, Boolean, op)
+      InitBinary (boolean, Boolean, op)
    END
 END BuildRelationConst ;
 
@@ -1557,10 +1632,10 @@ PROCEDURE BuildBinaryConst ;
 VAR
    op: Name ;
 BEGIN
-   PopT(op) ;
+   PopT (op) ;
    IF inDesignator
    THEN
-      InitBinary(unknown, NulSym, op)
+      InitBinary (unknown, NulSym, op)
    END
 END BuildBinaryConst ;
 
@@ -1586,6 +1661,8 @@ BEGIN
                  op := o
               END
 
+      ELSE
+         InternalError ('expecting unary')
       END
    END ;
    PushAddress(exprStack, b)
@@ -1790,11 +1867,11 @@ BEGIN
             THEN
                IF (func=Min) OR (func=Max)
                THEN
-                  IF IsSet (sym)
+                  IF IsSet (sym) OR (IsType (sym) AND IsSet (SkipType (sym)))
                   THEN
-                     type := SkipType(GetType(sym))
+                     type := GetType (SkipType (sym))
                   ELSE
-                     (* sym is the type required for MAX, MIN and VAL *)
+                     (* sym is the type required for MAX, MIN and VAL.  *)
                      type := sym
                   END
                ELSE
@@ -1838,7 +1915,8 @@ BEGIN
          ELSE
             MetaError1('not expecting this function inside a constant expression {%1Dad}', func)
          END
-      END
+      END ;
+      RETURN( TRUE )
    END
 END WalkFunction ;
 

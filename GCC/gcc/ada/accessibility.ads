@@ -6,7 +6,7 @@
 --                                                                          --
 --                                 S p e c                                  --
 --                                                                          --
---          Copyright (C) 2022-2023, Free Software Foundation, Inc.         --
+--          Copyright (C) 2022-2026, Free Software Foundation, Inc.         --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -182,26 +182,12 @@ package Accessibility is
    --  Determine if N is used as an actual for a call whose corresponding
    --  formal is of an anonymous access type.
 
-   function Is_Special_Aliased_Formal_Access
-     (Exp               : Node_Id;
-      In_Return_Context : Boolean := False) return Boolean;
-   --  Determines whether a dynamic check must be generated for explicitly
-   --  aliased formals within a function Scop for the expression Exp.
-
-   --  In_Return_Context forces Is_Special_Aliased_Formal_Access to assume
-   --  that Exp is within a return value which is useful for checking
-   --  expressions within discriminant associations of return objects.
-
-   --  More specially, Is_Special_Aliased_Formal_Access checks that Exp is a
-   --  'Access attribute reference within a return statement where the ultimate
-   --  prefix is an aliased formal of Scop and that Scop returns an anonymous
-   --  access type. See RM 3.10.2 for more details.
-
    function Needs_Result_Accessibility_Level
      (Func_Id : Entity_Id) return Boolean;
    --  Ada 2012 (AI05-0234): Return True if the function needs an implicit
    --  parameter to identify the accessibility level of the function result
-   --  "determined by the point of call".
+   --  "determined by the point of call". Return False if the type of the
+   --  function result is a private type and its completion is unavailable.
 
    function Subprogram_Access_Level (Subp : Entity_Id) return Uint;
    --  Return the accessibility level of the view denoted by Subp

@@ -1,4 +1,9 @@
 // { dg-output "1\r*\n" }
+#![feature(no_core)]
+#![no_core]
+
+#![feature(rustc_attrs)]
+
 #[rustc_builtin_macro]
 macro_rules! concat {
     () => {{}};

@@ -1,5 +1,5 @@
 /* Classes for analyzer diagnostics.
-   Copyright (C) 2019-2023 Free Software Foundation, Inc.
+   Copyright (C) 2019-2026 Free Software Foundation, Inc.
    Contributed by David Malcolm <dmalcolm@redhat.com>.
 
 This file is part of GCC.
@@ -18,18 +18,19 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
-#include "config.h"
-#define INCLUDE_MEMORY
-#include "system.h"
-#include "coretypes.h"
-#include "tree.h"
-#include "intl.h"
-#include "diagnostic.h"
-#include "analyzer/analyzer.h"
-#include "diagnostic-event-id.h"
+#include "analyzer/common.h"
+
+#include "diagnostics/event-id.h"
+#include "diagnostics/logging.h"
+#include "cpplib.h"
+#include "digraph.h"
+#include "ordered-hash-map.h"
+#include "cfg.h"
+#include "gimple-iterator.h"
+#include "cgraph.h"
+
 #include "analyzer/analyzer-logging.h"
 #include "analyzer/sm.h"
-#include "diagnostic-event-id.h"
 #include "analyzer/sm.h"
 #include "analyzer/pending-diagnostic.h"
 #include "analyzer/diagnostic-manager.h"
@@ -37,20 +38,10 @@ along with GCC; see the file COPYING3.  If not see
 #include "analyzer/program-point.h"
 #include "analyzer/store.h"
 #include "analyzer/region-model.h"
-#include "cpplib.h"
-#include "digraph.h"
-#include "ordered-hash-map.h"
-#include "cfg.h"
-#include "basic-block.h"
-#include "gimple.h"
-#include "gimple-iterator.h"
-#include "cgraph.h"
 #include "analyzer/supergraph.h"
 #include "analyzer/program-state.h"
 #include "analyzer/exploded-graph.h"
-#include "diagnostic-path.h"
 #include "analyzer/checker-path.h"
-#include "make-unique.h"
 
 #if ENABLE_ANALYZER
 
@@ -82,36 +73,66 @@ interesting_t::dump_to_pp (pretty_printer *pp, bool simple) const
   pp_string (pp, "]}");
 }
 
-/* Generate a label_text by printing FMT.
+/* class diagnostic_emission_context.  */
 
-   Use a clone of the global_dc for formatting callbacks.
+/* Get the pending_diagnostic being emitted.  */
 
-   Use this evdesc::event_desc's m_colorize flag to control colorization
-   (so that e.g. we can disable it for JSON output).  */
-
-label_text
-evdesc::event_desc::formatted_print (const char *fmt, ...) const
+const pending_diagnostic &
+diagnostic_emission_context::get_pending_diagnostic () const
 {
-  pretty_printer *pp = global_dc->printer->clone ();
+  return *m_sd.m_d.get ();
+}
 
-  pp_show_color (pp) = m_colorize;
+/* Emit a warning, using the rich_location, metadata, and the
+   pending_diagnostic's option.  */
 
-  text_info ti;
-  rich_location rich_loc (line_table, UNKNOWN_LOCATION);
+bool
+diagnostic_emission_context::warn (const char *gmsgid, ...)
+{
+  auto dc_logger = global_dc->get_logger ();
+  diagnostics::logging::log_function_params
+    (dc_logger, "ana::diagnostic_emission_context::warn")
+    .log_param_string ("gmsgid", gmsgid);
+  diagnostics::logging::auto_inc_depth depth_sentinel (dc_logger);
+
+  const pending_diagnostic &pd = get_pending_diagnostic ();
+  auto_diagnostic_group d;
   va_list ap;
-  va_start (ap, fmt);
-  ti.format_spec = _(fmt);
-  ti.args_ptr = &ap;
-  ti.err_no = 0;
-  ti.x_data = NULL;
-  ti.m_richloc = &rich_loc;
-  pp_format (pp, &ti);
-  pp_output_formatted_text (pp);
+  va_start (ap, gmsgid);
+  const bool result = emit_diagnostic_valist_meta (diagnostics::kind::warning,
+						   &m_rich_loc, &m_metadata,
+						   pd.get_controlling_option (),
+						   gmsgid, &ap);
   va_end (ap);
 
-  label_text result = label_text::take (xstrdup (pp_formatted_text (pp)));
-  delete pp;
+  if (dc_logger)
+    dc_logger->log_bool_return ("ana::diagnostic_emission_context::warn",
+				result);
+
   return result;
+}
+
+/* Emit a note, using the rich_location and metadata (and the
+   pending_diagnostic's option).  */
+
+void
+diagnostic_emission_context::inform (const char *gmsgid, ...)
+{
+  auto dc_logger = global_dc->get_logger ();
+  diagnostics::logging::log_function_params
+    (dc_logger, "ana::diagnostic_emission_context::inform")
+    .log_param_string ("gmsgid", gmsgid);
+  diagnostics::logging::auto_inc_depth depth_sentinel (dc_logger);
+
+  const pending_diagnostic &pd = get_pending_diagnostic ();
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  emit_diagnostic_valist_meta (diagnostics::kind::note,
+			       &m_rich_loc, &m_metadata,
+			       pd.get_controlling_option (),
+			       gmsgid, &ap);
+  va_end (ap);
 }
 
 /* Return true if T1 and T2 are "the same" for the purposes of
@@ -168,7 +189,7 @@ pending_diagnostic::fixup_location (location_t loc, bool) const
       const line_map_macro *macro_map = linemap_check_macro (map);
       if (fixup_location_in_macro_p (macro_map->macro))
 	loc = linemap_resolve_location (line_table, loc,
-					LRK_MACRO_EXPANSION_POINT, NULL);
+					LRK_MACRO_EXPANSION_POINT, nullptr);
     }
   return loc;
 }
@@ -182,7 +203,10 @@ pending_diagnostic::add_function_entry_event (const exploded_edge &eedge,
 {
   const exploded_node *dst_node = eedge.m_dest;
   const program_point &dst_point = dst_node->get_point ();
-  emission_path->add_event (make_unique<function_entry_event> (dst_point));
+  const program_state &dst_state = dst_node->get_state ();
+  emission_path->add_event
+    (std::make_unique<function_entry_event> (dst_point,
+					     dst_state));
 }
 
 /* Base implementation of pending_diagnostic::add_call_event.
@@ -190,19 +214,12 @@ pending_diagnostic::add_function_entry_event (const exploded_edge &eedge,
 
 void
 pending_diagnostic::add_call_event (const exploded_edge &eedge,
-				    checker_path *emission_path)
+				    const gcall &,
+				    checker_path &emission_path)
 {
-  const exploded_node *src_node = eedge.m_src;
-  const program_point &src_point = src_node->get_point ();
-  const int src_stack_depth = src_point.get_stack_depth ();
-  const gimple *last_stmt = src_point.get_supernode ()->get_last_stmt ();
-  emission_path->add_event
-    (make_unique<call_event> (eedge,
-			      event_loc_info (last_stmt
-					      ? last_stmt->location
-					      : UNKNOWN_LOCATION,
-					      src_point.get_fndecl (),
-					      src_stack_depth)));
+  emission_path.add_event
+    (std::make_unique<call_event> (eedge,
+				   event_loc_info (eedge.m_src)));
 }
 
 /* Base implementation of pending_diagnostic::add_region_creation_events.
@@ -215,12 +232,13 @@ pending_diagnostic::add_region_creation_events (const region *reg,
 						checker_path &emission_path)
 {
   emission_path.add_event
-    (make_unique<region_creation_event_memory_space> (reg->get_memory_space (),
-						      loc_info));
+    (std::make_unique<region_creation_event_memory_space>
+       (reg->get_memory_space (),
+	loc_info));
 
   if (capacity)
     emission_path.add_event
-      (make_unique<region_creation_event_capacity> (capacity, loc_info));
+      (std::make_unique<region_creation_event_capacity> (capacity, loc_info));
 }
 
 /* Base implementation of pending_diagnostic::add_final_event.
@@ -229,17 +247,16 @@ pending_diagnostic::add_region_creation_events (const region *reg,
 void
 pending_diagnostic::add_final_event (const state_machine *sm,
 				     const exploded_node *enode,
-				     const gimple *stmt,
+				     const event_loc_info &loc_info,
 				     tree var, state_machine::state_t state,
 				     checker_path *emission_path)
 {
   emission_path->add_event
-    (make_unique<warning_event>
-     (event_loc_info (get_stmt_location (stmt, enode->get_function ()),
-		      enode->get_function ()->decl,
-		      enode->get_stack_depth ()),
+    (std::make_unique<warning_event>
+     (loc_info,
       enode,
-      sm, var, state));
+      sm, var, state,
+      get_final_state ()));
 }
 
 } // namespace ana

@@ -1,6 +1,6 @@
 // Allocators -*- C++ -*-
 
-// Copyright (C) 2001-2023 Free Software Foundation, Inc.
+// Copyright (C) 2001-2026 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -49,7 +49,8 @@
 #include <type_traits>
 #endif
 
-#define __cpp_lib_incomplete_container_elements 201505L
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wc++11-extensions"
 
 namespace std _GLIBCXX_VISIBILITY(default)
 {
@@ -94,9 +95,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // 2103. std::allocator propagate_on_container_move_assignment
       using propagate_on_container_move_assignment = true_type;
 
+#if __cplusplus <= 202302L
       using is_always_equal
 	_GLIBCXX20_DEPRECATED_SUGGEST("std::allocator_traits::is_always_equal")
 	= true_type;
+#endif
 
 #if __cplusplus >= 202002L
       // As noted above, these members are present for C++20 to provide the
@@ -151,9 +154,11 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       // 2103. std::allocator propagate_on_container_move_assignment
       using propagate_on_container_move_assignment = true_type;
 
+#if __cplusplus <= 202302L
       using is_always_equal
 	_GLIBCXX20_DEPRECATED_SUGGEST("std::allocator_traits::is_always_equal")
 	= true_type;
+#endif
 #endif
 
       // _GLIBCXX_RESOLVE_LIB_DEFECTS
@@ -183,11 +188,14 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #endif
       ~allocator() _GLIBCXX_NOTHROW { }
 
-#if __cplusplus > 201703L
+#if __cpp_constexpr_dynamic_alloc // >= C++20
       [[nodiscard,__gnu__::__always_inline__]]
       constexpr _Tp*
       allocate(size_t __n)
       {
+#if __cpp_concepts
+	if constexpr (requires { sizeof(_Tp); })
+#endif
 	if (std::__is_constant_evaluated())
 	  {
 	    if (__builtin_mul_overflow(__n, sizeof(_Tp), &__n))
@@ -210,6 +218,12 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	__allocator_base<_Tp>::deallocate(__p, __n);
       }
 #endif // C++20
+
+#ifdef __glibcxx_allocate_at_least  // C++23
+      [[nodiscard]] constexpr allocation_result<_Tp*, size_t>
+      allocate_at_least(size_t __n)
+      { return { this->allocate(__n), __n }; }
+#endif
 
       friend __attribute__((__always_inline__)) _GLIBCXX20_CONSTEXPR
       bool
@@ -256,6 +270,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
     public:
       typedef _Tp value_type;
+      allocator() { }
       template<typename _Up> allocator(const allocator<_Up>&) { }
     };
 
@@ -264,6 +279,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
     public:
       typedef _Tp value_type;
+      allocator() { }
       template<typename _Up> allocator(const allocator<_Up>&) { }
     };
 
@@ -272,6 +288,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     {
     public:
       typedef _Tp value_type;
+      allocator() { }
       template<typename _Up> allocator(const allocator<_Up>&) { }
     };
   /// @endcond
@@ -291,4 +308,5 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace std
 
+#pragma GCC diagnostic pop
 #endif

@@ -1,5 +1,5 @@
 /* Analysis used by inlining decision heuristics.
-   Copyright (C) 2003-2023 Free Software Foundation, Inc.
+   Copyright (C) 2003-2026 Free Software Foundation, Inc.
    Contributed by Jan Hubicka
 
 This file is part of GCC.
@@ -40,6 +40,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-ssa-loop-niter.h"
 #include "tree-ssa-loop.h"
 #include "symbol-summary.h"
+#include "sreal.h"
+#include "ipa-cp.h"
 #include "ipa-prop.h"
 #include "ipa-fnsummary.h"
 #include "ipa-inline.h"
@@ -414,6 +416,11 @@ do_estimate_growth_1 (struct cgraph_node *node, void *data)
   for (e = node->callers; e; e = e->next_caller)
     {
       gcc_checking_assert (e->inline_failed);
+
+      /* Don't count callback edges into growth, since they are never inlined
+	 anyway.  */
+      if (e->callback)
+	continue;
 
       if (cgraph_inline_failed_type (e->inline_failed) == CIF_FINAL_ERROR
 	  || !opt_for_fn (e->caller->decl, optimize))

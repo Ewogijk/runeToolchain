@@ -1,7 +1,10 @@
+#![feature(no_core)]
+#![no_core]
+
 #[deprecated(since="1.0")]
 fn test1() {}
 
-// { dg-excess-errors "unknown meta item ...." }
+// { dg-excess-errors "unknown meta item .invalid." }
 #[deprecated(invalid="invalid")]
 fn test2() {}
 

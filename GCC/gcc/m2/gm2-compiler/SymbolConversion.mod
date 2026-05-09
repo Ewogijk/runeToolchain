@@ -1,6 +1,6 @@
 (* SymbolConversion.mod mapping between m2 symbols and gcc symbols.
 
-Copyright (C) 2001-2023 Free Software Foundation, Inc.
+Copyright (C) 2001-2026 Free Software Foundation, Inc.
 Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>.
 
 This file is part of GNU Modula-2.
@@ -24,22 +24,22 @@ IMPLEMENTATION MODULE SymbolConversion ;
 FROM NameKey IMPORT Name ;
 
 FROM Indexing IMPORT Index, InitIndex, PutIndice, GetIndice, InBounds,
-                     DebugIndex ;
+                     DebugIndex, InitIndexTuned, HighIndice ;
 
 FROM SymbolTable IMPORT IsConst, PopValue, IsValueSolved, GetSymName,
-                        GetType, SkipType ;
+                        GetType, SkipType, NulSym ;
 
 FROM M2Error IMPORT InternalError ;
 FROM M2ALU IMPORT PushTypeOfTree ;
 FROM m2block IMPORT GetErrorNode, RememberConstant ;
-FROM m2tree IMPORT Tree ;
+FROM gcctypes IMPORT tree ;
 FROM M2Printf IMPORT printf1 ;
 FROM Storage IMPORT ALLOCATE ;
 FROM SYSTEM IMPORT ADDRESS ;
 
 CONST
    USEPOISON = TRUE ;
-   GGCPOISON = 0A5A5A5A5H ;   (* poisoned memory contains this code *)
+   GGCPOISON = 0A5A5A5A5H ;   (* Poisoned memory contains this code.  *)
 
 TYPE
    PtrToCardinal = POINTER TO CARDINAL ;
@@ -47,17 +47,49 @@ TYPE
 VAR
    mod2gcc       : Index ;
    PoisonedSymbol: ADDRESS ;
+   BookSym       : CARDINAL ;     (* Allows interactive debugging.    *)
+
+
+(*
+   gdbhook - a debugger convenience hook.
+*)
+
+PROCEDURE gdbhook ;
+END gdbhook ;
+
+
+(*
+   BreakWhenSymBooked - to be called interactively by gdb.
+*)
+
+PROCEDURE BreakWhenSymBooked (sym: CARDINAL) ;
+BEGIN
+   BookSym := sym
+END BreakWhenSymBooked ;
+
+
+(*
+   CheckBook - if sym = BookSym then call gdbhook.
+*)
+
+PROCEDURE CheckBook (sym: CARDINAL) ;
+BEGIN
+   IF sym = BookSym
+   THEN
+      gdbhook
+   END
+END CheckBook ;
 
 
 (*
    Mod2Gcc - given a modula-2 symbol, sym, return the gcc equivalent.
 *)
 
-PROCEDURE Mod2Gcc (sym: CARDINAL) : Tree ;
+PROCEDURE Mod2Gcc (sym: CARDINAL) : tree ;
 VAR
    n : Name ;
    t : PtrToCardinal ;
-   tr: Tree ;
+   tr: tree ;
 BEGIN
    IF USEPOISON
    THEN
@@ -72,7 +104,7 @@ BEGIN
    END ;
    IF InBounds(mod2gcc, sym)
    THEN
-      tr := Tree(GetIndice(mod2gcc, sym)) ;
+      tr := tree(GetIndice(mod2gcc, sym)) ;
       IF tr=PoisonedSymbol
       THEN
          n := GetSymName(sym) ;
@@ -88,14 +120,36 @@ END Mod2Gcc ;
 
 
 (*
+   Gcc2Mod - given a gcc tree return the modula-2 symbol.
+*)
+
+PROCEDURE Gcc2Mod (tree: tree) : CARDINAL ;
+VAR
+   high, i: CARDINAL ;
+BEGIN
+   i := 1 ;
+   high := HighIndice (mod2gcc) ;
+   WHILE i <= high DO
+      IF GetIndice (mod2gcc, i) = tree
+      THEN
+         RETURN i
+      END ;
+      INC (i)
+   END ;
+   RETURN NulSym
+END Gcc2Mod ;
+
+
+(*
    AddModGcc - adds the tuple [ sym, gcc ] into the database.
 *)
 
-PROCEDURE AddModGcc (sym: CARDINAL; gcc: Tree) ;
+PROCEDURE AddModGcc (sym: CARDINAL; gcc: tree) ;
 VAR
-   old: Tree ;
+   old: tree ;
    t  : PtrToCardinal ;
 BEGIN
+   CheckBook (sym) ;
    IF gcc=GetErrorNode()
    THEN
       InternalError ('error node generated during symbol conversion')
@@ -104,14 +158,14 @@ BEGIN
    IF USEPOISON
    THEN
       t := PtrToCardinal(gcc) ;
-      IF (gcc#Tree(NIL)) AND (t^=GGCPOISON)
+      IF (gcc#tree(NIL)) AND (t^=GGCPOISON)
       THEN
          InternalError ('gcc symbol has been poisoned')
       END
    END ;
 
    old := Mod2Gcc(sym) ;
-   IF old=Tree(NIL)
+   IF old=tree(NIL)
    THEN
       (* absent - add it *)
       PutIndice(mod2gcc, sym, gcc) ;
@@ -190,14 +244,14 @@ END RemoveTemporaryKnown ;
                              whether the gcc symbol has been poisoned.
 *)
 
-PROCEDURE Mod2GccWithoutGCCPoison (sym: CARDINAL) : Tree ;
+PROCEDURE Mod2GccWithoutGCCPoison (sym: CARDINAL) : tree ;
 VAR
    n : Name ;
-   tr: Tree ;
+   tr: tree ;
 BEGIN
    IF InBounds(mod2gcc, sym)
    THEN
-      tr := Tree(GetIndice(mod2gcc, sym)) ;
+      tr := tree(GetIndice(mod2gcc, sym)) ;
       IF tr=PoisonedSymbol
       THEN
          n := GetSymName(sym) ;
@@ -237,8 +291,20 @@ END Poison ;
 
 PROCEDURE Init ;
 BEGIN
-   mod2gcc := InitIndex(1) ;
-   ALLOCATE(PoisonedSymbol, 1)
+   BreakWhenSymBooked (NulSym) ;  (* Disable the intereactive sym watch.  *)
+   (* To examine when a symbol is double booked run cc1gm2 from gdb
+      and set a break point on gdbhook.
+      (gdb) break gdbhook
+      (gdb) run
+      Now below interactively call BreakWhenSymBooked with the symbol
+      under investigation.  *)
+   gdbhook ;
+   (* Now is the time to interactively call gdb, for example:
+      (gdb) print BreakWhenSymBooked (1234)
+      (gdb) cont
+      and you will arrive at gdbhook when this symbol is booked.  *)
+   mod2gcc := InitIndexTuned (1, 1024*1024 DIV 16, 16) ;
+   ALLOCATE (PoisonedSymbol, 1)
 END Init ;
 
 

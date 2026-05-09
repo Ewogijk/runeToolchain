@@ -17,6 +17,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "rust-parse.h"
 #include "rust-linemap.h"
 #include "rust-diagnostics.h"
+#include "rust-token.h"
+#include "rust-attribute-values.h"
 
 namespace Rust {
 
@@ -27,7 +29,7 @@ extract_module_path (const AST::AttrVec &inner_attrs,
   AST::Attribute path_attr = AST::Attribute::create_empty ();
   for (const auto &attr : inner_attrs)
     {
-      if (attr.get_path ().as_string () == "path")
+      if (attr.get_path ().as_string () == Values::Attributes::PATH)
 	{
 	  path_attr = attr;
 	  break;
@@ -40,14 +42,13 @@ extract_module_path (const AST::AttrVec &inner_attrs,
     {
       rust_error_at (
 	path_attr.get_locus (),
-	// Split the format string so that -Wformat-diag does not complain...
-	"path attributes must contain a filename: '%s'", "#![path = \"file\"]");
+	"path attributes must contain a filename: %<#[path = \"file\"]%>");
       return name;
     }
 
   for (const auto &attr : outer_attrs)
     {
-      if (attr.get_path ().as_string () == "path")
+      if (attr.get_path ().as_string () == Values::Attributes::PATH)
 	{
 	  path_attr = attr;
 	  break;
@@ -65,8 +66,7 @@ extract_module_path (const AST::AttrVec &inner_attrs,
     {
       rust_error_at (
 	path_attr.get_locus (),
-	// Split the format string so that -Wformat-diag does not complain...
-	"path attributes must contain a filename: '%s'", "#[path = \"file\"]");
+	"path attributes must contain a filename: %<#[path = \"file\"]%>");
       return name;
     }
 
@@ -78,6 +78,15 @@ extract_module_path (const AST::AttrVec &inner_attrs,
   // a character that is not an equal sign or whitespace
   auto filename_begin = path_value.find_first_not_of ("=\t ");
 
+  // If the path consists of only whitespace, then we have an error
+  if (filename_begin == std::string::npos)
+    {
+      rust_error_at (
+	path_attr.get_locus (),
+	"path attributes must contain a filename: %<#[path = \"file\"]%>");
+      return name;
+    }
+
   auto path = path_value.substr (filename_begin);
 
   // On windows, the path might mix '/' and '\' separators. Replace the
@@ -87,7 +96,7 @@ extract_module_path (const AST::AttrVec &inner_attrs,
   // Source: rustc compiler
   // (https://github.com/rust-lang/rust/blob/9863bf51a52b8e61bcad312f81b5193d53099f9f/compiler/rustc_expand/src/module.rs#L174)
 #if defined(HAVE_DOS_BASED_FILE_SYSTEM)
-  path.replace ('/', '\\');
+  std::replace (path.begin (), path.end (), '/', '\\');
 #endif /* HAVE_DOS_BASED_FILE_SYSTEM */
 
   return path;
@@ -127,7 +136,7 @@ get_front_ptr (const std::vector<std::unique_ptr<T>> &values)
 static bool
 peculiar_fragment_match_compatible_fragment (
   const AST::MacroFragSpec &last_spec, const AST::MacroFragSpec &spec,
-  Location match_locus)
+  location_t match_locus)
 {
   static std::unordered_map<AST::MacroFragSpec::Kind,
 			    std::vector<AST::MacroFragSpec::Kind>>
@@ -142,10 +151,9 @@ peculiar_fragment_match_compatible_fragment (
     = contains (fragment_follow_set[last_spec.get_kind ()], spec.get_kind ());
 
   if (!is_valid)
-    rust_error_at (
-      match_locus,
-      "fragment specifier %<%s%> is not allowed after %<%s%> fragments",
-      spec.as_string ().c_str (), last_spec.as_string ().c_str ());
+    rust_error_at (match_locus,
+		   "fragment specifier %qs is not allowed after %qs fragments",
+		   spec.as_string ().c_str (), last_spec.as_string ().c_str ());
 
   return is_valid;
 }
@@ -166,36 +174,71 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
 	{MATCH_ARROW, COMMA, EQUAL, PIPE, SEMICOLON, COLON, RIGHT_ANGLE,
 	 RIGHT_SHIFT, LEFT_SQUARE, LEFT_CURLY, AS, WHERE}},
        {AST::MacroFragSpec::VIS,
-	{
-	  COMMA,
-	  IDENTIFIER /* FIXME: Other than `priv` */,
-	  LEFT_PAREN,
-	  LEFT_SQUARE,
-	  EXCLAM,
-	  ASTERISK,
-	  AMP,
-	  LOGICAL_AND,
-	  QUESTION_MARK,
-	  LIFETIME,
-	  LEFT_ANGLE,
-	  LEFT_SHIFT,
-	  SUPER,
-	  SELF,
-	  SELF_ALIAS,
-	  EXTERN_TOK,
-	  CRATE,
-	  UNDERSCORE,
-	  FOR,
-	  IMPL,
-	  FN_TOK,
-	  UNSAFE,
-	  TYPEOF,
-	  DYN
-	  // FIXME: Add Non kw identifiers
-	  // FIXME: Add $crate as valid
-	}}};
+	{COMMA,
+	 IDENTIFIER,
+	 LEFT_PAREN,
+	 LEFT_SQUARE,
+	 EXCLAM,
+	 ASTERISK,
+	 AMP,
+	 LOGICAL_AND,
+	 QUESTION_MARK,
+	 LIFETIME,
+	 LEFT_ANGLE,
+	 LEFT_SHIFT,
+	 UNDERSCORE,
+	 ABSTRACT,
+	 AS,
+	 ASYNC,
+	 AUTO,
+	 BECOME,
+	 BOX,
+	 BREAK,
+	 CONST,
+	 CONTINUE,
+	 CRATE,
+	 DO,
+	 DYN,
+	 ELSE,
+	 ENUM_KW,
+	 EXTERN_KW,
+	 FALSE_LITERAL,
+	 FINAL_KW,
+	 FN_KW,
+	 FOR,
+	 IF,
+	 IMPL,
+	 IN,
+	 LET,
+	 LOOP,
+	 MACRO,
+	 MATCH_KW,
+	 MOD,
+	 MOVE,
+	 MUT,
+	 OVERRIDE_KW,
+	 PUB,
+	 REF,
+	 RETURN_KW,
+	 SELF_ALIAS,
+	 SELF,
+	 STATIC_KW,
+	 STRUCT_KW,
+	 SUPER,
+	 TRAIT,
+	 TRUE_LITERAL,
+	 TRY,
+	 TYPE,
+	 TYPEOF,
+	 UNSAFE,
+	 UNSIZED,
+	 USE,
+	 VIRTUAL,
+	 WHERE,
+	 WHILE,
+	 YIELD}}};
 
-  Location error_locus = match.get_match_locus ();
+  location_t error_locus = match.get_match_locus ();
   std::string kind_str = "fragment";
   auto &allowed_toks = follow_set[last_match.get_frag_spec ().get_kind ()];
 
@@ -207,7 +250,8 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
   // the error.
   switch (match.get_macro_match_type ())
     {
-      case AST::MacroMatch::Tok: {
+    case AST::MacroMatch::Tok:
+      {
 	auto tok = static_cast<const AST::Token *> (&match);
 	if (contains (allowed_toks, tok->get_id ()))
 	  return true;
@@ -217,7 +261,8 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
 	break;
       }
       break;
-      case AST::MacroMatch::Repetition: {
+    case AST::MacroMatch::Repetition:
+      {
 	auto repetition
 	  = static_cast<const AST::MacroMatchRepetition *> (&match);
 	auto &matches = repetition->get_matches ();
@@ -226,7 +271,8 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
 	  return peculiar_fragment_match_compatible (last_match, *first_frag);
 	break;
       }
-      case AST::MacroMatch::Matcher: {
+    case AST::MacroMatch::Matcher:
+      {
 	auto matcher = static_cast<const AST::MacroMatcher *> (&match);
 	auto first_token = matcher->get_delim_type ();
 	TokenId delim_id;
@@ -242,7 +288,7 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
 	    delim_id = LEFT_CURLY;
 	    break;
 	  default:
-	    gcc_unreachable ();
+	    rust_unreachable ();
 	    break;
 	  }
 	if (contains (allowed_toks, delim_id))
@@ -252,7 +298,8 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
 	error_locus = matcher->get_match_locus ();
 	break;
       }
-      case AST::MacroMatch::Fragment: {
+    case AST::MacroMatch::Fragment:
+      {
 	auto last_spec = last_match.get_frag_spec ();
 	auto fragment = static_cast<const AST::MacroMatchFragment *> (&match);
 	if (last_spec.has_follow_set_fragment_restrictions ())
@@ -262,7 +309,7 @@ peculiar_fragment_match_compatible (const AST::MacroMatchFragment &last_match,
       break;
     }
 
-  rust_error_at (error_locus, "%s is not allowed after %<%s%> fragment",
+  rust_error_at (error_locus, "%s is not allowed after %qs fragment",
 		 kind_str.c_str (),
 		 last_match.get_frag_spec ().as_string ().c_str ());
   auto allowed_toks_str
@@ -291,10 +338,11 @@ is_match_compatible (const AST::MacroMatch &last_match,
 
   switch (last_match.get_macro_match_type ())
     {
-      // This is our main stop condition: When we are finally looking at the
-      // last match (or its actual last component), and it is a fragment, it
-      // may contain some follow up restrictions.
-      case AST::MacroMatch::Fragment: {
+    // This is our main stop condition: When we are finally looking at the
+    // last match (or its actual last component), and it is a fragment, it
+    // may contain some follow up restrictions.
+    case AST::MacroMatch::Fragment:
+      {
 	auto fragment
 	  = static_cast<const AST::MacroMatchFragment *> (&last_match);
 	if (fragment->get_frag_spec ().has_follow_set_restrictions ())
@@ -302,7 +350,8 @@ is_match_compatible (const AST::MacroMatch &last_match,
 	else
 	  return true;
       }
-      case AST::MacroMatch::Repetition: {
+    case AST::MacroMatch::Repetition:
+      {
 	// A repetition on the left hand side means we want to make sure the
 	// last match of the repetition is compatible with the new match
 	auto repetition

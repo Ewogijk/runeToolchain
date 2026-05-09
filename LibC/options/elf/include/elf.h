@@ -231,6 +231,7 @@ enum {
 	STT_OBJECT = 1,
 	STT_FUNC = 2,
 	STT_TLS = 6,
+	STT_GNU_IFUNC = 10,
 	STT_LOPROC = 13,
 	STT_HIPROC = 15
 };
@@ -482,7 +483,9 @@ enum {
 	DT_VERDEF = 0x6ffffffc,
 	DT_VERDEFNUM = 0x6ffffffd,
 	DT_VERNEED = 0x6ffffffe,
-	DT_VERNEEDNUM = 0x6fffffff
+	DT_VERNEEDNUM = 0x6fffffff,
+	DT_LOPROC = 0x70000000,
+	DT_HIPROC = 0x7fffffff
 };
 
 enum {

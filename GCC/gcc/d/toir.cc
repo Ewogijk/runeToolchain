@@ -1,5 +1,5 @@
 /* toir.cc -- Lower D frontend statements to GCC trees.
-   Copyright (C) 2006-2023 Free Software Foundation, Inc.
+   Copyright (C) 2006-2026 Free Software Foundation, Inc.
 
 GCC is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -214,6 +214,38 @@ add_stmt (tree t)
      so if there's no side-effects, then don't add it.  */
   if (!TREE_SIDE_EFFECTS (t))
     return;
+
+  /* If a call expression has no side effects, and there's no explicit
+     `cast(void)', then issue a warning about the unused return value.  */
+  if (TREE_CODE (t) == INDIRECT_REF)
+    {
+      t = TREE_OPERAND (t, 0);
+
+      if (TREE_CODE (TREE_TYPE (t)) != REFERENCE_TYPE)
+	warning (OPT_Wunused_value, "value computed is not used");
+    }
+
+  if (TREE_CODE (t) == CALL_EXPR && CALL_EXPR_FN (t) != NULL_TREE
+      && CALL_EXPR_WARN_IF_UNUSED (t))
+    {
+      tree callee =  CALL_EXPR_FN (t);
+
+      /* It's a call to a function or function pointer.  */
+      if (TREE_CODE (callee) == ADDR_EXPR
+	  && VAR_OR_FUNCTION_DECL_P (TREE_OPERAND (callee, 0)))
+	callee = TREE_OPERAND (callee, 0);
+
+      /* It's a call to a delegate object.  */
+      if (TREE_CODE (callee) == COMPONENT_REF
+	  && TREE_CODE (TREE_TYPE (TREE_OPERAND (callee, 0))) == RECORD_TYPE
+	  && TYPE_DELEGATE (TREE_TYPE (TREE_OPERAND (callee, 0))))
+	callee = TREE_OPERAND (callee, 0);
+
+      warning (OPT_Wunused_value,
+	       "calling %qE without side effects discards return value "
+	       "of type %qT; prepend a %<cast(void)%> if intentional",
+	       callee, TREE_TYPE (t));
+    }
 
   if (TREE_CODE (t) == COMPOUND_EXPR)
     {
@@ -780,8 +812,8 @@ public:
 
     this->do_label (label);
 
-    if (this->is_return_label (s->ident) && this->func_->fensure != NULL)
-      this->build_stmt (this->func_->fensure);
+    if (this->is_return_label (s->ident) && this->func_->fensure () != NULL)
+      this->build_stmt (this->func_->fensure ());
     else if (s->statement)
       this->build_stmt (s->statement);
   }
@@ -799,7 +831,7 @@ public:
 
     /* A switch statement on a string gets turned into a library call.
        It is not lowered during codegen.  */
-    if (!condtype->isscalar ())
+    if (!dmd::isScalar (condtype))
       {
 	error ("cannot handle switch condition of type %s",
 	       condtype->toChars ());
@@ -888,7 +920,7 @@ public:
     else
       {
 	tree casevalue;
-	if (s->exp->type->isscalar ())
+	if (dmd::isScalar (s->exp->type))
 	  casevalue = build_expr (s->exp);
 	else
 	  casevalue = build_integer_cst (s->index, build_ctype (Type::tint32));
@@ -976,7 +1008,7 @@ public:
 	/* Returning by hidden reference, store the result into the retval decl.
 	   The result returned then becomes the retval reference itself.  */
 	tree decl = DECL_RESULT (get_symbol_decl (this->func_));
-	gcc_assert (!tf->isref ());
+	gcc_assert (!tf->isRef ());
 
 	/* If returning via NRVO, just refer to the DECL_RESULT; this differs
 	   from using NULL_TREE in that it indicates that we care about the
@@ -990,49 +1022,67 @@ public:
 	/* Detect a call to a constructor function, or if returning a struct
 	   literal, write result directly into the return value.  */
 	StructLiteralExp *sle = NULL;
+	DeclarationExp *de = NULL;
+	VarExp *ve = NULL;
 	bool using_rvo_p = false;
 
 	if (DotVarExp *dve = (s->exp->isCallExp ()
 			      ? s->exp->isCallExp ()->e1->isDotVarExp ()
 			      : NULL))
 	  {
+	    /* Look for `var.__ctor(copytmp = {}, &copytmp)'  */
 	    if (dve->var->isCtorDeclaration ())
 	      {
 		if (CommaExp *ce = dve->e1->isCommaExp ())
 		  {
-		    /* Temporary initialized inside a return expression, and
-		       used as the return value.  Replace it with the hidden
-			reference to allow RVO return.  */
-		    DeclarationExp *de = ce->e1->isDeclarationExp ();
-		    VarExp *ve = ce->e2->isVarExp ();
-		    if (de != NULL && ve != NULL
-			&& ve->var == de->declaration
-			&& ve->var->storage_class & STCtemp)
-		      {
-			tree var = get_symbol_decl (ve->var);
-			TREE_ADDRESSABLE (var) = 1;
-			SET_DECL_VALUE_EXPR (var, decl);
-			DECL_HAS_VALUE_EXPR_P (var) = 1;
-			SET_DECL_LANG_NRVO (var, this->func_->shidden);
-			using_rvo_p = true;
-		      }
+		    de = ce->e1->isDeclarationExp ();
+		    ve = ce->e2->isVarExp ();
 		  }
 		else
 		  sle = dve->e1->isStructLiteralExp ();
 	      }
 	  }
+	else if (CommaExp *ce1 = s->exp->isCommaExp ())
+	  {
+	    /* Look for `copytmp = {}, copytmp.__ctor(), copytmp'  */
+	    if (CommaExp *ce2 = ce1->e2->isCommaExp ())
+	      {
+		DotVarExp *dve = ce2->e1->isCallExp ()
+		  ? ce2->e1->isCallExp ()->e1->isDotVarExp () : NULL;
+
+		if (dve && dve->var->isCtorDeclaration ())
+		  {
+		    de = ce1->e1->isDeclarationExp ();
+		    ve = ce2->e2->isVarExp ();
+		  }
+	      }
+	    else
+	      {
+		de = ce1->e1->isDeclarationExp ();
+		ve = ce1->e2->isVarExp ();
+	      }
+	  }
 	else
 	  sle = s->exp->isStructLiteralExp ();
 
-	if (sle != NULL)
+	if (de != NULL && ve != NULL
+	    && ve->var == de->declaration
+	    && ve->var->storage_class & STCtemp)
 	  {
-	    StructDeclaration *sd = type->baseElemOf ()->isTypeStruct ()->sym;
+	    /* Temporary initialized inside a return expression, and
+	       used as the return value.  Replace it with the hidden
+	       reference to allow RVO return.  */
+	    tree var = get_symbol_decl (ve->var);
+	    TREE_ADDRESSABLE (var) = 1;
+	    SET_DECL_VALUE_EXPR (var, decl);
+	    DECL_HAS_VALUE_EXPR_P (var) = 1;
+	    SET_DECL_LANG_NRVO (var, this->func_->shidden);
+	    using_rvo_p = true;
+	  }
+	else if (sle != NULL)
+	  {
 	    sle->sym = build_address (this->func_->shidden);
 	    using_rvo_p = true;
-
-	    /* Fill any alignment holes in the return slot using memset.  */
-	    if (!identity_compare_p (sd) || sd->isUnionDeclaration ())
-	      add_stmt (build_memset_call (this->func_->shidden));
 	  }
 
 	if (using_rvo_p == true)
@@ -1191,7 +1241,7 @@ public:
     else
       arg = build_nop (build_ctype (get_object_type ()), arg);
 
-    add_stmt (build_libcall (LIBCALL_THROW, Type::tvoid, 1, arg));
+    add_stmt (build_libcall (LIBCALL_THROW, 1, arg));
   }
 
   /* Build a try-catch statement, one of the building blocks for exception
@@ -1257,8 +1307,7 @@ public:
 	       the end catch callback.  */
 	    if (cd->isCPPclass ())
 	      {
-		tree endcatch = build_libcall (LIBCALL_CXA_END_CATCH,
-					       Type::tvoid, 0);
+		tree endcatch = build_libcall (LIBCALL_CXA_END_CATCH, 0);
 		catchbody = build2 (TRY_FINALLY_EXPR, void_type_node,
 				    catchbody, endcatch);
 	      }
@@ -1328,7 +1377,7 @@ public:
 
   void visit (GccAsmStatement *s) final override
   {
-    StringExp *insn = s->insn->toStringExp ();
+    StringExp *insn = dmd::toStringExp (s->insn);
     tree outputs = NULL_TREE;
     tree inputs = NULL_TREE;
     tree clobbers = NULL_TREE;
@@ -1343,7 +1392,7 @@ public:
 	    const char *sname = name ? name->toChars () : NULL;
 	    tree id = name ? build_string (strlen (sname), sname) : NULL_TREE;
 
-	    StringExp *constr = (*s->constraints)[i]->toStringExp ();
+	    StringExp *constr = dmd::toStringExp ((*s->constraints)[i]);
 	    const char *cstring = (const char *)(constr->len
 						 ? constr->string : "");
 	    tree str = build_string (constr->len, cstring);
@@ -1369,7 +1418,7 @@ public:
       {
 	for (size_t i = 0; i < s->clobbers->length; i++)
 	  {
-	    StringExp *clobber = (*s->clobbers)[i]->toStringExp ();
+	    StringExp *clobber = dmd::toStringExp ((*s->clobbers)[i]);
 	    const char *cstring = (const char *)(clobber->len
 						 ? clobber->string : "");
 
@@ -1423,7 +1472,8 @@ public:
 	    oconstraints[i] = constraint;
 
 	    if (parse_output_constraint (&constraint, i, ninputs, noutputs,
-					 &allows_mem, &allows_reg, &is_inout))
+					 &allows_mem, &allows_reg, &is_inout,
+					 nullptr))
 	      {
 		/* If the output argument is going to end up in memory.  */
 		if (!allows_reg)
@@ -1442,7 +1492,8 @@ public:
 	      = TREE_STRING_POINTER (TREE_VALUE (TREE_PURPOSE (t)));
 
 	    if (parse_input_constraint (&constraint, i, ninputs, noutputs, 0,
-					oconstraints, &allows_mem, &allows_reg))
+					oconstraints, &allows_mem, &allows_reg,
+					nullptr))
 	      {
 		/* If the input argument is going to end up in memory.  */
 		if (!allows_reg && allows_mem)
@@ -1459,10 +1510,9 @@ public:
 		       outputs, inputs, clobbers, labels);
     SET_EXPR_LOCATION (exp, make_location_t (s->loc));
 
-    /* If the extended syntax was not used, mark the ASM_EXPR as being an
-       ASM_INPUT expression instead of an ASM_OPERAND with no operands.  */
+    /* Record whether the basic rather than extended syntax was used.  */
     if (s->args == NULL && s->clobbers == NULL)
-      ASM_INPUT_P (exp) = 1;
+      ASM_BASIC_P (exp) = 1;
 
     /* All asm statements are assumed to have a side effect.  As a future
        optimization, this could be unset when building in release mode.  */

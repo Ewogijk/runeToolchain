@@ -1,4 +1,4 @@
-/* Copyright (C) 1997-2023 Free Software Foundation, Inc.
+/* Copyright (C) 1997-2026 Free Software Foundation, Inc.
    Contributed by Red Hat, Inc.
 
 This file is part of GCC.
@@ -261,7 +261,8 @@ static frv_stack_t *frv_stack_cache = (frv_stack_t *)0;
 /* Forward references */
 
 static void frv_option_override			(void);
-static bool frv_legitimate_address_p		(machine_mode, rtx, bool);
+static bool frv_legitimate_address_p (machine_mode, rtx, bool,
+				      code_helper = ERROR_MARK);
 static int frv_default_flags_for_cpu		(void);
 static FRV_INLINE bool frv_small_data_reloc_p	(rtx, int);
 static void frv_print_operand			(FILE *, rtx, int);
@@ -2483,7 +2484,7 @@ frv_print_operand_address (FILE * stream, machine_mode /* mode */, rtx x)
 	 See gcc/testsuite/gcc.dg/asm-4.c for an example.  */
       frv_print_operand_memory_reference (stream, x, 0);
       return;
-      
+
     default:
       break;
     }
@@ -3396,7 +3397,7 @@ frv_legitimate_address_p_1 (machine_mode mode,
 }
 
 bool
-frv_legitimate_address_p (machine_mode mode, rtx x, bool strict_p)
+frv_legitimate_address_p (machine_mode mode, rtx x, bool strict_p, code_helper)
 {
   return frv_legitimate_address_p_1 (mode, x, strict_p, FALSE, FALSE);
 }
@@ -4061,7 +4062,7 @@ frv_emit_movsi (rtx dest, rtx src)
 			   || !DECL_COMMON (SYMBOL_REF_DECL (sym))))
 		{
 		  tree decl = SYMBOL_REF_DECL (sym);
-		  tree init = TREE_CODE (decl) == VAR_DECL
+		  tree init = VAR_P (decl)
 		    ? DECL_INITIAL (decl)
 		    : TREE_CODE (decl) == CONSTRUCTOR
 		    ? decl : 0;
@@ -4071,7 +4072,7 @@ frv_emit_movsi (rtx dest, rtx src)
 		  if (init && init != error_mark_node)
 		    reloc = compute_reloc_for_constant (init);
 
-		  named_section = TREE_CODE (decl) == VAR_DECL
+		  named_section = VAR_P (decl)
 		    && lookup_attribute ("section", DECL_ATTRIBUTES (decl));
 		  readonly = decl_readonly_section (decl, reloc);
 
@@ -4758,8 +4759,7 @@ frv_split_scc (rtx dest, rtx test, rtx cc_reg, rtx cr_reg, HOST_WIDE_INT value)
 				gen_rtx_SET (dest, const0_rtx)));
 
   /* Finish up, return sequence.  */
-  ret = get_insns ();
-  end_sequence ();
+  ret = end_sequence ();
   return ret;
 }
 
@@ -4930,8 +4930,7 @@ frv_split_cond_move (rtx operands[])
     }
 
   /* Finish up, return sequence.  */
-  ret = get_insns ();
-  end_sequence ();
+  ret = end_sequence ();
   return ret;
 }
 
@@ -5061,8 +5060,7 @@ frv_split_minmax (rtx operands[])
     }
 
   /* Finish up, return sequence.  */
-  ret = get_insns ();
-  end_sequence ();
+  ret = end_sequence ();
   return ret;
 }
 
@@ -5100,8 +5098,7 @@ frv_split_abs (rtx operands[])
 				  gen_rtx_SET (dest, src)));
 
   /* Finish up, return sequence.  */
-  ret = get_insns ();
-  end_sequence ();
+  ret = end_sequence ();
   return ret;
 }
 
@@ -6310,7 +6307,7 @@ frv_secondary_reload_class (enum reg_class rclass,
 /* This hook exists to catch the case where secondary_reload_class() is
    called from init_reg_autoinc() in regclass.c - before the reload optabs
    have been initialised.  */
-   
+
 static reg_class_t
 frv_secondary_reload (bool in_p, rtx x, reg_class_t reload_class_i,
 		      machine_mode reload_mode,
@@ -6681,7 +6678,7 @@ frv_register_move_cost (machine_mode mode ATTRIBUTE_UNUSED,
 	default:
 	  break;
 
-	case QUAD_REGS:	
+	case QUAD_REGS:
 	case GPR_REGS:
 	case GR8_REGS:
 	case GR9_REGS:
