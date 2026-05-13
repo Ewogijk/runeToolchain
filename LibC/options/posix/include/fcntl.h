@@ -49,6 +49,10 @@ int posix_fallocate(int __fd, off_t __offset, off_t __size);
 #endif /* !__MLIBC_ABI_ONLY */
 
 /* This is a linux extension */
+
+// Required to compile mlibc
+#define _GNU_SOURCE
+
 #ifdef _GNU_SOURCE
 struct file_handle {
         unsigned int handle_bytes;

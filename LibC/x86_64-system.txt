@@ -1,0 +1,10 @@
+[binaries]
+c = 'gcc'
+cpp = 'g++'
+strip = 'strip'
+
+[host_machine]
+system = 'rune'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
