@@ -60,6 +60,7 @@ echo
 
 # Build LibC with system compiler
 # This needs to be done because GCC expects a libc during compilation
+echo "========================= mlibc ========================="
 mkdir -p build-x86_64-rune/LibC
 cd LibC
 meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-x86_64-rune/LibC
@@ -68,12 +69,14 @@ meson compile
 meson install
 
 # Build Binutils
+echo "========================= binutils ========================="
 cd .. && mkdir Binutils && cd Binutils
 ../../Binutils/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --disable-werror
 make -j$JOBS
 make install
 
 # Build GCC
+echo "========================= GCC ========================="
 cd .. && mkdir GCC && cd GCC
 ../../GCC/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --enable-languages=c,c++
 make all-gcc all-target-libgcc -j$JOBS
@@ -81,6 +84,7 @@ make install-gcc install-target-libgcc
 PATH=${SYSROOT}/bin:$PATH # Needed for LibC compilation with cross compiler
 
 # Build LibC with the cross compiler
+echo "========================= mlibc ========================="
 cd ..
 rm -r LibC
 mkdir -p LibC
@@ -91,6 +95,7 @@ meson compile
 meson install
 
 # Build libstdc++-v3
+echo "========================= libstdc++-v3 ========================="
 cd ../GCC
 make all-target-libstdc++-v3
 make install-target-libstdc++-v3

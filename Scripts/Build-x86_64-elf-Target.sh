@@ -66,6 +66,7 @@ cd build-x86_64-elf
 
 # --- Build Binutils ---
 # Add the installation directory so our binutils is recognized after installation
+echo "========================= binutils ========================="
 export PATH="${SYSROOT}/bin:$PATH"
 
 mkdir -p Binutils && cd Binutils
@@ -76,7 +77,7 @@ make install
 # --- Build GCC ---
 # -mcmodel=large: Compile libgcc with a bigger memory model, because of the higher half kernel. This is needed because
 #                 we will link crtbegin.o and crtend.o against the kernel.
-
+echo "========================= GCC ========================="
 cd ..
 mkdir -p GCC && cd GCC
 ../../GCC/configure --target=$TARGET --prefix="${SYSROOT}" --disable-nls --enable-languages=c,c++ --without-headers
