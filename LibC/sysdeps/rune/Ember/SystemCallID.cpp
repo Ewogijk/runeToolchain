@@ -1,0 +1,12 @@
+#include <Ember/SystemCallID.h>
+
+
+namespace Ember {
+    DEFINE_TYPED_ENUM(Memory, U16, MEMORY_SYSCALLS, 0x0)
+
+    DEFINE_TYPED_ENUM(Threading, U16, THREADING_SYSCALLS, 0x0)
+
+    DEFINE_TYPED_ENUM(VFS, U16, VFS_SYSCALLS, 0x0)
+
+    DEFINE_TYPED_ENUM(App, U16, APP_SYSCALLS, 0x0)
+}

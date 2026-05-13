@@ -34,6 +34,9 @@ void *dlvsym(void *__restrict __handle, const char *__restrict __name, const cha
 
 #endif /* !__MLIBC_ABI_ONLY */
 
+// Required to compile mlibc
+#define _GNU_SOURCE
+
 #if defined(_GNU_SOURCE) && __MLIBC_GLIBC_OPTION
 
 /*gnu extension */
