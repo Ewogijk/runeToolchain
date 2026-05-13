@@ -70,12 +70,19 @@ Once your PR gets accepted, we will merge it. That's it!
 
 ### Getting the Dependencies
 
-Building GCC and Binutils requires the following dependencies:
+First you need to install the **system dependencies**.
+
+On Ubuntu:
 ```shell
 sudo apt install build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo
 ```
 
-mlibc uses meson for building, so you will need to get it:
+On Arch Linux:
+```shell
+sudo pacman -S base-devel gmp libmpc mpfr 
+```
+
+Next, the following **python libraries** are required:
 
 ```shell
 pip install scons click meson
@@ -84,22 +91,21 @@ pip install scons click meson
 
 ### Building the Toolchain
 
-The runeToolchain consists two GCC builds one for the x86_64-elf target, the other for the 
-x86_64-rune target. First build GCC for `x86_64-elf`:
+The runeToolchain consists of two GCC builds for the targets `x86_64-elf` and `x86_64-rune`.
+
+The `x86_64-elf` GCC build is used to compile the kernel sources. To build GCC run:
 
 ```shell
 ./Scripts/Build-x86_64-elf-Target.sh /path/to/your/systemroot num-make-jobs
 ```
 
-This helper script will compile Binutils and GCC for you and install the binaries in your specified
-system root. Similarly, build GCC for `x86_64-rune`:
+The `x86_64-rune` GCC build compiles userspace applications. Similarly build it running:
 
 ```shell
 ./Scripts/Build-x86_64-rune-Target.sh /path/to/your/systemroot num-make-jobs
 ```
 
-This script will, additionally to Binutils and GCC, compile mlibc and libstdc++-v3. Ember and 
-Forge are shipped as part of mlibc.
+This will additionally compile mlibc and libstdc++-v3. Ember and Forge are shipped as part of mlibc.
 
 Now grab a coffee or two while you are waiting for everything to be built.
 
