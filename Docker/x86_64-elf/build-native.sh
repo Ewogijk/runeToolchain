@@ -21,7 +21,7 @@ set -euo pipefail
 TARGET=x86_64-elf
 
 help() {
-  echo Usage "./Build-x86_64-elf-Target.sh [-h] <system-root> <jobs>"
+  echo Usage "./build-native.sh [-h] <system-root> <jobs>"
   echo
   echo Build Binutils and GCC with "x86_64-elf" target.
   echo Everthing will be installed in the given system root.
@@ -61,8 +61,8 @@ echo
 
 
 # Create the temp directory for sources and build files
-mkdir -p build-x86_64-elf
-cd build-x86_64-elf
+mkdir -p build/x86_64-elf
+cd build/x86_64-elf
 
 # --- Build Binutils ---
 # Add the installation directory so our binutils is recognized after installation
@@ -70,7 +70,7 @@ echo "========================= binutils ========================="
 export PATH="${SYSROOT}/bin:$PATH"
 
 mkdir -p Binutils && cd Binutils
-../../Binutils/configure --target=$TARGET --prefix="${SYSROOT}" --with-sysroot --disable-nls --disable-werror
+../../../Binutils/configure --target=$TARGET --prefix="${SYSROOT}" --with-sysroot --disable-nls --disable-werror
 make -j$JOBS
 make install
 
@@ -80,12 +80,8 @@ make install
 echo "========================= GCC ========================="
 cd ..
 mkdir -p GCC && cd GCC
-../../GCC/configure --target=$TARGET --prefix="${SYSROOT}" --disable-nls --enable-languages=c,c++ --without-headers
+../../../GCC/configure --target=$TARGET --prefix="${SYSROOT}" --disable-nls --enable-languages=c,c++ --without-headers
 make -j$JOBS all-gcc
 make -j$JOBS all-target-libgcc CFLAGS_FOR_TARGET='-g -O2 -mcmodel=large -mno-red-zone'
 make install-gcc
 make install-target-libgcc
-
-# Clean up
-cd ../..
-rm -r build-x86_64-elf
