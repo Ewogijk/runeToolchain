@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-05-23
+
+### ✨ Features
+
+- :sparkles: Update to GCC 16.1.0, Binutils 2.46, mlibc 6.3.1
+- :sparkles: Add Docker-based build scripts for x86_64-elf and x86_64-rune targets
+- :sparkles: Add git-cliff config file
+
+### ♻️ Refactor
+
+- :recycle: Improve logging
+
+### 📝 Documentation
+
+- :memo: Update CONTRIBUTING.md with arch linux instructions
+- :memo: Update CONTRIBUTING.md with native and Docker-based build instructions
+
 ## [0.3.0] - 2025-12-15
 
 ### Added
