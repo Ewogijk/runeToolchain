@@ -74,18 +74,18 @@ First you need to install the **system dependencies**.
 
 On Ubuntu:
 ```shell
-sudo apt install build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo
+sudo apt install build-essential bison flex libgmp3-dev libmpc-dev libmpfr-dev texinfo ninja-build
 ```
 
 On Arch Linux:
 ```shell
-sudo pacman -S base-devel gmp libmpc mpfr 
+sudo pacman -S base-devel gmp libmpc mpfr ninja
 ```
 
 Next, the following **python libraries** are required:
 
 ```shell
-pip install scons click meson
+pip install click meson
 ```
 
 
@@ -93,22 +93,41 @@ pip install scons click meson
 
 The runeToolchain consists of two GCC builds for the targets `x86_64-elf` and `x86_64-rune`.
 
+You can either build the toolchain natively on your machine or build with docker in an Ubuntu-based container.
+
+#### Build Natively
+
 The `x86_64-elf` GCC build is used to compile the kernel sources. To build GCC run:
 
 ```shell
-./Scripts/Build-x86_64-elf-Target.sh /path/to/your/systemroot num-make-jobs
+./Docker/x86_64-elf/build-native.sh /path/to/your/systemroot num-make-jobs
 ```
 
 The `x86_64-rune` GCC build compiles userspace applications. Similarly build it running:
 
 ```shell
-./Scripts/Build-x86_64-rune-Target.sh /path/to/your/systemroot num-make-jobs
+./Docker/x86_64-rune/build-native.sh /path/to/your/systemroot num-make-jobs
 ```
 
 This will additionally compile mlibc and libstdc++-v3. Ember and Forge are shipped as part of mlibc.
 
 Now grab a coffee or two while you are waiting for everything to be built.
 
+#### Build with Docker
+
+Similarly, for the `x86_64-elf` target run:
+
+```shell
+./Docker/x86_64-elf/build-docker.sh /path/to/your/systemroot num-make-jobs /local/path/on/your/machine
+```
+
+And then for the `x86_64-rune` target:
+
+```shell
+./Docker/x86_64-rune/build-docker.sh /path/to/your/systemroot num-make-jobs /local/path/on/your/machine
+```
+
+runeToolchain releases are built with Docker because the [runeOS](https://github.com/Ewogijk/runeOS) CI Workflow runs on Ubuntu.
 
 ### Navigating the Project
 
