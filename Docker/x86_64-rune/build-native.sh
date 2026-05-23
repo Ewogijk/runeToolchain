@@ -21,7 +21,7 @@ set -euo pipefail
 TARGET=x86_64-rune
 
 help() {
-  echo Usage "./Build-x86_64-rune-Target.sh [-h] <system-root> <jobs>"
+  echo Usage "./build-native.sh [-h] <system-root> <jobs>"
   echo
   echo Build Binutils and GCC with "x86_64-rune" target and then mlibc and libstdc++-v3.
   echo Everthing will be installed in the given system root.
@@ -61,24 +61,24 @@ echo
 # Build LibC with system compiler
 # This needs to be done because GCC expects a libc during compilation
 echo "========================= mlibc ========================="
-mkdir -p build-x86_64-rune/LibC
+mkdir -p build/x86_64-rune/LibC
 cd LibC
-meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-x86_64-rune/LibC
-cd ../build-x86_64-rune/LibC
+meson setup --cross-file=x86_64-system.txt --prefix="$SYSROOT"/usr -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build/x86_64-rune/LibC
+cd ../build/x86_64-rune/LibC
 meson compile
 meson install
 
 # Build Binutils
 echo "========================= binutils ========================="
 cd .. && mkdir Binutils && cd Binutils
-../../Binutils/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --disable-werror
+../../../Binutils/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --disable-werror
 make -j$JOBS
 make install
 
 # Build GCC
 echo "========================= GCC ========================="
 cd .. && mkdir GCC && cd GCC
-../../GCC/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --enable-languages=c,c++
+../../../GCC/configure --target=$TARGET --prefix="$SYSROOT" --with-sysroot="$SYSROOT" --enable-languages=c,c++
 make all-gcc all-target-libgcc -j$JOBS
 make install-gcc install-target-libgcc
 PATH=${SYSROOT}/bin:$PATH # Needed for LibC compilation with cross compiler
@@ -88,9 +88,9 @@ echo "========================= mlibc ========================="
 cd ..
 rm -r LibC
 mkdir -p LibC
-cd ../LibC
-meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-x86_64-rune/LibC
-cd ../build-x86_64-rune/LibC
+cd ../../LibC
+meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build/x86_64-rune/LibC
+cd ../build/x86_64-rune/LibC
 meson compile
 meson install
 
@@ -99,7 +99,3 @@ echo "========================= libstdc++-v3 ========================="
 cd ../GCC
 make all-target-libstdc++-v3
 make install-target-libstdc++-v3
-
-# Clean up
-cd ../..
-rm -r build-x86_64-rune
