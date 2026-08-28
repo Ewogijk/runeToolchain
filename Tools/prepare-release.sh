@@ -19,10 +19,14 @@
 help() {
   echo Usage "./prepare-release.sh [-h] <version> <jobs>"
   echo
-  echo Build x86_64-elf GCC and x86_64-rune GCC with their sysroots being in /opt/runeToolchain/x86_64-elf and
-  echo /opt/runeToolchain/x86_64-rune respectively. The binaries will be zipped in runeToolchain.tar.gz.
-  echo Finally the changelog will be updated with git-cliff: Unreleased git commits are prepended to CHANGELOG.md under
-  echo a section with the release version.
+  echo A utility to automate the preparation of a runeToolchain release for Github.
+  echo
+  echo Release preparation includes the following steps:
+  echo     1. Build x86_64-elf GCC with /opt/runeToolchain/x86_64-elf sysroot
+  echo     2. Build x86_64-rune GCC with /opt/runeToolchain/x86_64-rune sysroot
+  echo     3. Create runeToolchain.tar.gz with the GCC binaries
+  echo     4. Update CHANGELOG.md with unreleased commits prepended to CHANGELOG.md using git-cliff
+  echo     5. Commit CHANGELOG.md and tag the commit with the release version
   echo
   echo The build and release files will be put in the "release-<version>" directory in the project root directory.
   echo
@@ -50,6 +54,13 @@ VERSION=$1
 JOBS=$2
 RELEASE_DIRECTORY="release-$VERSION"
 RUNETOOLCHAIN_DIR="$RELEASE_DIRECTORY/runeToolchain"
+CHANGELOG="CHANGELOG.md"
+
+if [ $(git tag -l v$VERSION) ]; then
+  echo
+  "Tag v$VERSION already exists"
+  exit
+fi
 
 mkdir -p "$RUNETOOLCHAIN_DIR"
 
@@ -59,8 +70,15 @@ Tools/x86_64-elf/build-docker.sh /opt/runeToolchain/x86_64-elf "$JOBS" "$RUNETOO
 echo "Building x86_64-rune GCC..."
 Tools/x86_64-rune/build-docker.sh /opt/runeToolchain/x86_64-rune "$JOBS" "$RUNETOOLCHAIN_DIR/x86_64-rune"
 
-echo "Creating runeToolchain.tar.gz..."
+echo "Packing GCC binaries to runeToolchain.tar.gz..."
 tar -czf "$RELEASE_DIRECTORY/runeToolchain.tar.gz" "$RUNETOOLCHAIN_DIR/"
 
-echo "Updating CHANGELOG.md..."
-git-cliff --unreleased --prepend CHANGELOG.md --tag "$VERSION"
+echo "Updating $CHANGELOG with unreleased changes..."
+git-cliff --unreleased --prepend $CHANGELOG --tag "$VERSION"
+
+echo "Committing $CHANGELOG..."
+git add $CHANGELOG
+git commit -m ":bookmark: Prepare v$VERSION release"
+
+echo "Tagging latest commit as v$VERSION..."
+git tag "v$VERSION"
