@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-28
+
+### ✨ Features
+
+- :sparkles: Integrate Ember KeyEvent API into Forge
+- :sparkles: Add release preparation automation script
+- :sparkles: Add commit of changelog and release tagging to release preparation script
+
+### ♻️ Refactor
+
+- :recycle: Upgrade to Docker Buildx
+
+### 📝 Documentation
+
+- :memo: Update changelog
+- :memo: Update Issue templates
+
 ## [0.4.0] - 2026-05-23
 
 ### ✨ Features
