@@ -12,14 +12,13 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-#include <Ember/SystemCallID.h>
+#include <Ember/MachineBits.h>
 
 namespace Ember {
-    DEFINE_TYPED_ENUM(Memory, Ember::Handle, MEMORY_SYSCALLS, 0x0)
+    // ====================================================================================== //
+    // Log Level
+    // ====================================================================================== //
 
-    DEFINE_TYPED_ENUM(Threading, Ember::Handle, THREADING_SYSCALLS, 0x0)
+    DEFINE_TYPED_ENUM(LogLevel, U8, LOG_LEVELS, 0x0)
 
-    DEFINE_TYPED_ENUM(VFS, Ember::Handle, VFS_SYSCALLS, 0x0)
-
-    DEFINE_TYPED_ENUM(App, Ember::Handle, APP_SYSCALLS, 0x0)
 } // namespace Ember

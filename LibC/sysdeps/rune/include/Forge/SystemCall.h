@@ -8,28 +8,28 @@
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++//
 
 namespace Forge {
-    Ember::StatusCode system_call0(Ember::ResourceID ID);
+    Ember::StatusCode system_call0(Ember::Handle handle);
 
 
-    Ember::StatusCode system_call1(Ember::ResourceID ID,
+    Ember::StatusCode system_call1(Ember::Handle handle,
     	Ember::SystemCallArgument arg1
     	);
 
 
-    Ember::StatusCode system_call2(Ember::ResourceID ID,
+    Ember::StatusCode system_call2(Ember::Handle handle,
     	Ember::SystemCallArgument arg1,
     	Ember::SystemCallArgument arg2
     	);
 
 
-    Ember::StatusCode system_call3(Ember::ResourceID ID,
+    Ember::StatusCode system_call3(Ember::Handle handle,
     	Ember::SystemCallArgument arg1,
     	Ember::SystemCallArgument arg2,
     	Ember::SystemCallArgument arg3
     	);
 
 
-    Ember::StatusCode system_call4(Ember::ResourceID ID,
+    Ember::StatusCode system_call4(Ember::Handle handle,
     	Ember::SystemCallArgument arg1,
     	Ember::SystemCallArgument arg2,
     	Ember::SystemCallArgument arg3,
@@ -37,7 +37,7 @@ namespace Forge {
     	);
 
 
-    Ember::StatusCode system_call5(Ember::ResourceID ID,
+    Ember::StatusCode system_call5(Ember::Handle handle,
     	Ember::SystemCallArgument arg1,
     	Ember::SystemCallArgument arg2,
     	Ember::SystemCallArgument arg3,
@@ -47,7 +47,7 @@ namespace Forge {
 
 
     Ember::StatusCode system_call6(
-    	Ember::ResourceID ID,
+    	Ember::Handle handle,
     	Ember::SystemCallArgument arg1,
     	Ember::SystemCallArgument arg2,
     	Ember::SystemCallArgument arg3,

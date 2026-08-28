@@ -4,12 +4,12 @@
 #include <stddef.h>
 
 namespace Forge {
-	/**
-	 *
-	 * @param str C string.
-	 * @return The length of the c string.
-	 */
-	size_t strlen(const char* str);
-}
+    /**
+     *
+     * @param str C string.
+     * @return The length of the c string.
+     */
+    size_t strlen(const char* str);
+} // namespace Forge
 
-#endif //FORGE_UTILITY_H
+#endif // FORGE_UTILITY_H
