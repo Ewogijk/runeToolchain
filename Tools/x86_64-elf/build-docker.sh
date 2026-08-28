@@ -49,7 +49,7 @@ SYSROOT=$1
 JOBS=$2
 OUTPUT_DIRECTORY=$3
 
-sudo docker build -t ewogijk/runetoolchain-build-x86_64-elf -f Tools/x86_64-elf/Dockerfile .
+sudo docker buildx build -t ewogijk/runetoolchain-build-x86_64-elf -f Tools/x86_64-elf/Dockerfile .
 sudo docker run --name angry_gnome ewogijk/runetoolchain-build-x86_64-elf:latest "$SYSROOT" "$JOBS"
 sudo docker cp angry_gnome:"$SYSROOT" "$OUTPUT_DIRECTORY"
 sudo docker container prune -f

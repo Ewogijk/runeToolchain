@@ -49,7 +49,7 @@ SYSROOT=$1
 JOBS=$2
 OUTPUT_DIRECTORY=$3
 
-sudo docker build -t ewogijk/runetoolchain-build-x86_64-rune -f Tools/x86_64-rune/Dockerfile .
+sudo docker buildx build -t ewogijk/runetoolchain-build-x86_64-rune -f Tools/x86_64-rune/Dockerfile .
 sudo docker run --name grumpy_fenrir ewogijk/runetoolchain-build-x86_64-rune:latest "$SYSROOT" "$JOBS"
 sudo docker cp grumpy_fenrir:"$SYSROOT" "$OUTPUT_DIRECTORY"
 sudo docker container prune -f
