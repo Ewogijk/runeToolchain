@@ -1,3 +1,5 @@
+#!/bin/bash
+
 #
 #  Copyright 2025 Ewogijk
 #
@@ -14,15 +16,18 @@
 #  limitations under the License.
 #
 
-TARGET=x86_64-rune
+set -euo pipefail
 
 help() {
-  echo Usage "./Update-LibC.sh [-h] <system-root>"
+  echo Usage "./build-docker.sh [-h] <system-root> <jobs> <output-directory>"
   echo
-  echo Build mlibc and install it to the given system root.
+  echo Build Binutils and GCC with "x86_64-elf" target and a docker container.
+  echo Then copy the GCC installation from the image to the local output directory.
   echo
   echo Arguments:
-  echo "    system-root - The GCC installation directory."
+  echo "    system-root      - GCC system root."
+  echo "    jobs             - Number of parallel make jobs."
+  echo "    output-directory - Local directory where the GCC installation will be copied."
   echo Options:
   echo "    -h - Print this help text"
 }
@@ -34,7 +39,7 @@ while getopts "h" option; do
    esac
 done
 
-ARG_COUNT=1
+ARG_COUNT=3
 if [ $# -ne $ARG_COUNT ]; then
     echo "ERROR: Insufficient number of arguments, Expected: ${ARG_COUNT}, Got: $#"
     exit 1
@@ -42,23 +47,9 @@ fi
 
 SYSROOT=$1
 JOBS=$2
+OUTPUT_DIRECTORY=$3
 
-echo
-echo Update mlibc:
-echo -------------
-echo
-echo "Commandline Arguments:"
-echo "    System Root: $SYSROOT"
-echo
-
-# Build LibC with x86_64-rune cross compiler
-mkdir -p build-userspace/LibC
-cd LibC
-meson setup --cross-file=x86_64-rune.txt --prefix="$SYSROOT"/usr  -Ddefault_library=static -Dposix_option=enabled -Dlinux_option=disabled -Dglibc_option=enabled -Dbsd_option=enabled ../build-userspace/LibC
-cd ../build-userspace/LibC
-meson compile
-meson install
-
-# Clean up
-cd ../..
-rm -r build-userspace
+sudo docker build -t ewogijk/runetoolchain-build-x86_64-elf -f Tools/x86_64-elf/Dockerfile .
+sudo docker run --name angry_gnome ewogijk/runetoolchain-build-x86_64-elf:latest "$SYSROOT" "$JOBS"
+sudo docker cp angry_gnome:"$SYSROOT" "$OUTPUT_DIRECTORY"
+sudo docker container prune -f

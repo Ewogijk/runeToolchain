@@ -21,7 +21,7 @@ set -euo pipefail
 help() {
   echo Usage "./build-docker.sh [-h] <system-root> <jobs> <output-directory>"
   echo
-  echo Build Binutils and GCC with "x86_64-elf" target and a docker container.
+  echo Build Binutils and GCC with "x86_64-rune" target and a docker container.
   echo Then copy the GCC installation from the image to the local output directory.
   echo
   echo Arguments:
@@ -49,7 +49,7 @@ SYSROOT=$1
 JOBS=$2
 OUTPUT_DIRECTORY=$3
 
-sudo docker build -t ewogijk/runetoolchain-build-x86_64-elf -f Docker/x86_64-elf/Dockerfile .
-sudo docker run --name angry_gnome ewogijk/runetoolchain-build-x86_64-elf:latest "$SYSROOT" "$JOBS"
-sudo docker cp angry_gnome:"$SYSROOT" "$OUTPUT_DIRECTORY"
+sudo docker build -t ewogijk/runetoolchain-build-x86_64-rune -f Tools/x86_64-rune/Dockerfile .
+sudo docker run --name grumpy_fenrir ewogijk/runetoolchain-build-x86_64-rune:latest "$SYSROOT" "$JOBS"
+sudo docker cp grumpy_fenrir:"$SYSROOT" "$OUTPUT_DIRECTORY"
 sudo docker container prune -f
