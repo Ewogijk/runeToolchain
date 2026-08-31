@@ -52,13 +52,14 @@ fi
 
 VERSION=$1
 JOBS=$2
+
 RELEASE_DIRECTORY="release-$VERSION"
 RUNETOOLCHAIN_DIR="$RELEASE_DIRECTORY/runeToolchain"
+
 CHANGELOG="CHANGELOG.md"
 
 if [ $(git tag -l v$VERSION) ]; then
-  echo
-  "Tag v$VERSION already exists"
+  echo "Tag v$VERSION already exists"
   exit
 fi
 
@@ -71,7 +72,7 @@ echo "Building x86_64-rune GCC..."
 Tools/x86_64-rune/build-docker.sh /opt/runeToolchain/x86_64-rune "$JOBS" "$RUNETOOLCHAIN_DIR/x86_64-rune"
 
 echo "Packing GCC binaries to runeToolchain.tar.gz..."
-tar -czf "$RELEASE_DIRECTORY/runeToolchain.tar.gz" "$RUNETOOLCHAIN_DIR/"
+tar -czf "$RELEASE_DIRECTORY/runeToolchain.tar.gz" -C "$RELEASE_DIRECTORY" runeToolchain
 
 echo "Updating $CHANGELOG with unreleased changes..."
 git-cliff --unreleased --prepend $CHANGELOG --tag "$VERSION"
