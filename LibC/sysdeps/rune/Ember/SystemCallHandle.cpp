@@ -1,4 +1,4 @@
-//  Copyright 2025 Ewogijk
+//  Copyright 2026 Ewogijk
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -12,13 +12,14 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-#include <Ember/MachineBits.h>
+#include <Ember/SystemCallHandle.h>
 
 namespace Ember {
-    // ====================================================================================== //
-    // Log Level
-    // ====================================================================================== //
+    DEFINE_TYPED_ENUM(Memory, Ember::Handle, MEMORY_SYSCALLS, 0x0)
 
-    DEFINE_TYPED_ENUM(LogLevel, U8, LOG_LEVELS, 0x0)
+    DEFINE_TYPED_ENUM(Threading, Ember::Handle, THREADING_SYSCALLS, 0x0)
 
+    DEFINE_TYPED_ENUM(VFS, Ember::Handle, VFS_SYSCALLS, 0x0)
+
+    DEFINE_TYPED_ENUM(App, Ember::Handle, APP_SYSCALLS, 0x0)
 } // namespace Ember

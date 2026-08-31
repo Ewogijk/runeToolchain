@@ -12,8 +12,13 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-#include <Ember/MemoryBits.h>
+#include <Ember/SystemBits.h>
 
 namespace Ember {
-    DEFINE_ENUM(PageProtection, PAGE_PROTECTIONS, 0x0)
-}
+    // ====================================================================================== //
+    // Log Level
+    // ====================================================================================== //
+
+    DEFINE_TYPED_ENUM(LogLevel, U8, LOG_LEVELS, 0x0)
+
+} // namespace Ember
