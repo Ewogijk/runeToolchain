@@ -1,6 +1,6 @@
 #include <Forge/Memory.h>
 
-#include <Ember/SystemCallID.h>
+#include <Ember/SystemCallHandle.h>
 
 #include <Forge/SystemCall.h>
 
