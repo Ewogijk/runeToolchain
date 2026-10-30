@@ -10,11 +10,6 @@ add_project_arguments('-mincoming-stack-boundary=3', language : 'cpp')
 
 rtld_sources += files(
     'Ember/AppBits.cpp',
-    'Ember/Ember.cpp',
-    'Ember/Enum.cpp',
-    'Ember/MemoryBits.cpp',
-    'Ember/SystemBits.cpp',
-    'Ember/SystemCallHandle.cpp',
     'Ember/ThreadingBits.cpp',
     'Ember/VFSBits.cpp',
     'Forge/App.cpp',
@@ -29,11 +24,6 @@ rtld_sources += files(
 
 libc_sources += files(
     'Ember/AppBits.cpp',
-    'Ember/Ember.cpp',
-    'Ember/Enum.cpp',
-    'Ember/MemoryBits.cpp',
-    'Ember/SystemBits.cpp',
-    'Ember/SystemCallHandle.cpp',
     'Ember/ThreadingBits.cpp',
     'Ember/VFSBits.cpp',
     'Forge/App.cpp',
